@@ -12,6 +12,7 @@ import {
   fmtTime,
   fmtTodayDate,
   greetingFor,
+  istDayKey,
   istMondayCol,
   toShow,
   weekdayNameMonFirst,
@@ -457,16 +458,20 @@ export default function App() {
     .sort((a, b) => a.nextAiringAt! - b.nextAiringAt!)[0]
   const nextDropLabel = nextUp ? `${fmtDay(nextUp.nextAiringAt!, now)} ${fmtTime(nextUp.nextAiringAt!)}` : null
 
-  // Schedule — 7 columns Mon..Sun, by IST air time
+  // Schedule — this week's 7 columns (Mon..Sun), matching each show to the ACTUAL
+  // calendar day its next episode airs (not just the weekday), so far-future episodes
+  // don't masquerade as airing this week.
   const todayCol = istMondayCol(now)
   const scheduleDays = Array.from({ length: 7 }, (_, c) => {
+    const colDate = now + (c - todayCol) * D
+    const colKey = istDayKey(colDate)
     const ds = airing
-      .filter((s) => s.nextAiringAt != null && istMondayCol(s.nextAiringAt) === c)
+      .filter((s) => s.nextAiringAt != null && istDayKey(s.nextAiringAt) === colKey)
       .sort((a, b) => a.nextAiringAt! - b.nextAiringAt!)
     return {
       label: weekdayNameMonFirst(c),
       isToday: c === todayCol,
-      dateLabel: fmtMonthDay(now + (c - todayCol) * D),
+      dateLabel: fmtMonthDay(colDate),
       shows: ds.map((s) => cardVM(s, 'none', justCaught, now)),
     }
   })

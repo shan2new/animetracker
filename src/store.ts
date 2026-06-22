@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LibraryEntry, WatchStatus } from './types'
 
-const LIB_KEY = 'anitrack.library.v1'
+// v2: abandons any seeded library persisted by an earlier build.
+const LIB_KEY = 'anitrack.library.v2'
 const OPENED_KEY = 'anitrack.lastOpenedAt.v1'
 const VALID_STATUS: WatchStatus[] = ['watching', 'completed', 'planned']
 

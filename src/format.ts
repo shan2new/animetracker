@@ -53,8 +53,8 @@ export function istParts(ts: number): IstParts {
   }
 }
 
-/** A UTC instant marking midnight of the IST calendar day containing ts — for day-diff math. */
-function istDayKey(ts: number): number {
+/** A UTC instant marking midnight of the IST calendar day containing ts — for day-diff / same-day math. */
+export function istDayKey(ts: number): number {
   const p = istParts(ts)
   return Date.UTC(p.y, p.mo - 1, p.d)
 }
