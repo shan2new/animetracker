@@ -522,7 +522,7 @@ export default function App() {
     <div className="at-shell">
       <div className="at-app">
         {/* ===== SCROLL CONTENT ===== */}
-        <div className="at-scroll" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch' }}>
+        <div className="at-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch' }}>
           {/* ========== HOME ========== */}
           {screen === 'home' && (
             <div style={{ padding: '34px 20px 28px', animation: 'at-fadein .4s ease' }}>
