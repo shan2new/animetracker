@@ -4,7 +4,6 @@ import { db } from '../db/index.js'
 import { franchiseMember, media, subscriptions } from '../db/schema.js'
 import { env } from '../env.js'
 import { groupFromSeed } from '../grouping/service.js'
-import { makeGrouper } from '../grouping/llm.js'
 import { upsertMedia } from '../services/mediaStore.js'
 
 /**
@@ -42,12 +41,13 @@ export async function seedTrending(count = env.TRENDING_SEED_COUNT): Promise<{ f
     ),
   )
 
-  const grouper = makeGrouper(env.OPENROUTER_MODEL_BULK)
   let grouped = 0
   for (const m of trending) {
     if (alreadyGrouped.has(m.id)) continue
     try {
-      const outcome = await groupFromSeed(m.id, { grouper })
+      // Pass the bulk model (not a pre-built grouper) so the per-component gate still applies:
+      // most trending shows are simple sequel chains and never reach the LLM at all.
+      const outcome = await groupFromSeed(m.id, { model: env.OPENROUTER_MODEL_BULK })
       grouped++
       // Mark every member of the resulting component as grouped so we skip them this run.
       const members = await db

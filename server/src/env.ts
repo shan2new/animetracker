@@ -19,8 +19,13 @@ const schema = z.object({
   DEV_AUTH_BYPASS: envBool(false),
 
   OPENROUTER_API_KEY: z.string().optional(),
-  OPENROUTER_MODEL: z.string().default('anthropic/claude-opus-4.8'),
-  OPENROUTER_MODEL_BULK: z.string().default('anthropic/claude-sonnet-4.5'),
+  // Franchise grouping is schema-constrained classification at temperature 0 — a "flash"-tier
+  // model handles it as well as a frontier model at a fraction of the price. Flash Lite is the
+  // default for the interactive search path and the daily bulk cron; the pricier escalate tier
+  // is reserved for the genuinely ambiguous side-story splits (see groupingTier()).
+  OPENROUTER_MODEL: z.string().default('google/gemini-3.1-flash-lite'),
+  OPENROUTER_MODEL_BULK: z.string().default('google/gemini-3.1-flash-lite'),
+  OPENROUTER_MODEL_ESCALATE: z.string().default('anthropic/claude-haiku-4.5'),
   GROUPING_LLM_DISABLED: envBool(false),
 
   TRENDING_SEED_COUNT: z.coerce.number().default(300),

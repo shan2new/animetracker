@@ -2,10 +2,11 @@ import { inArray } from 'drizzle-orm'
 import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media } from '../db/schema.js'
+import { env } from '../env.js'
 import { makeAniListFetcher, upsertMedia } from '../services/mediaStore.js'
 import { stripHtml } from '../util/text.js'
 import { expandComponent, type MediaFetcher } from './graph.js'
-import { makeGrouper, type GroupingInput, type LlmGrouper } from './llm.js'
+import { DeterministicGrouper, groupingTier, makeGrouper, type GroupingInput, type LlmGrouper } from './llm.js'
 import { partKindForFormat } from './partKind.js'
 
 export interface GroupOptions {
@@ -55,8 +56,8 @@ export async function groupKnownComponent(
 
   // Fresh grouping. The grouper (LLM/deterministic) can take seconds, so it runs OUTSIDE the
   // transaction — we must not pin a DB connection for its duration.
-  const grouper = opts.grouper ?? makeGrouper(opts.model)
   const input = buildInput(component)
+  const grouper = opts.grouper ?? pickGrouper(input, opts.model)
   const result = await grouper.group(input)
 
   try {
@@ -160,6 +161,19 @@ async function attachNewMembers(
   await exec.insert(franchiseMember).values(values).onConflictDoNothing()
   await exec.update(franchise).set({ updatedAt: new Date() }).where(inArray(franchise.id, [franchiseId]))
   return values.length
+}
+
+/**
+ * Choose the grouper for a freshly-expanded component based on how much it actually needs the
+ * model (see groupingTier). Components with no split decision skip the LLM entirely; the rest use
+ * the cheap default model, escalating only the genuinely ambiguous multi-side-story cases.
+ * An explicit `modelOverride` (e.g. the bulk cron model) is honored for the non-escalate tiers.
+ */
+function pickGrouper(input: GroupingInput, modelOverride?: string): LlmGrouper {
+  const tier = groupingTier(input)
+  if (tier === 'deterministic') return new DeterministicGrouper()
+  if (tier === 'escalate') return makeGrouper(env.OPENROUTER_MODEL_ESCALATE || modelOverride || env.OPENROUTER_MODEL)
+  return makeGrouper(modelOverride ?? env.OPENROUTER_MODEL)
 }
 
 function buildInput(component: Map<number, AniListMedia>): GroupingInput {

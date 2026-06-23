@@ -47,6 +47,26 @@ export interface LlmGrouper {
 
 const PART_KINDS: PartKind[] = ['season', 'movie', 'ova', 'ona', 'special', 'music']
 
+export type GroupingTier = 'deterministic' | 'standard' | 'escalate'
+
+/**
+ * Decide how much model muscle a component deserves — the cost lever.
+ *
+ * The relation graph (graph.ts) only follows intra-franchise edges, so by construction almost
+ * every component is a single franchise. The LLM's ONLY real value-add over deterministic
+ * grouping is splitting a SIDE_STORY that's actually a separate work. A component with no
+ * side-story (or a single member) has nothing to decide — deterministic yields the same grouping
+ * for free, so we never spend a token on it. A component with two or more distinct side-story
+ * targets is the genuinely ambiguous case worth the stronger (escalate) model; a single
+ * side-story goes to the cheap standard model.
+ */
+export function groupingTier(input: GroupingInput): GroupingTier {
+  if (input.candidates.length <= 1) return 'deterministic'
+  const sideStoryTargets = new Set(input.edges.filter((e) => e.type === 'SIDE_STORY').map((e) => e.to))
+  if (sideStoryTargets.size === 0) return 'deterministic'
+  return sideStoryTargets.size >= 2 ? 'escalate' : 'standard'
+}
+
 // Strict JSON schema OpenRouter enforces on the response.
 const RESPONSE_SCHEMA = {
   name: 'franchise_grouping',
@@ -134,6 +154,12 @@ export class OpenRouterGrouper implements LlmGrouper {
         ],
         response_format: { type: 'json_schema', json_schema: RESPONSE_SCHEMA },
         temperature: 0,
+        // Hard ceiling against a runaway/looping response. Output is one small object per
+        // candidate (~25 tokens); this leaves generous headroom and caps the worst case.
+        max_tokens: Math.min(8192, 1024 + input.candidates.length * 96),
+        // Only route to providers that actually honor the strict JSON schema, so a fallback
+        // provider can't silently return loosely-shaped JSON.
+        provider: { require_parameters: true },
       }),
     })
     if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${await res.text().catch(() => '')}`)
