@@ -57,11 +57,10 @@ targets:
         # permission string (iOS shows a one-time "find devices on your network" prompt;
         # without the key the connection to a 192.168.x.x address fails silently).
         NSLocalNetworkUsageDescription: "AniTrack connects to your AniTrack server running on your local network."
-        # Dev: allow cleartext HTTP to the local backend. The self-hosted server is plain
-        # http on the LAN, which ATS blocks by default. Tighten/remove for a production
-        # HTTPS backend (or scope to NSExceptionDomains).
+        # Production backend is HTTPS (anime.cognipin.com), so ATS needs no cleartext
+        # exception for it. NSAllowsLocalNetworking is kept so pointing API_BASE_URL back
+        # at a local/LAN dev server (plain http) still works without re-enabling arbitrary loads.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
         # === FILL THESE IN ===
         # Your Clerk publishable key (pk_test_… / pk_live_…). Leave the placeholder
@@ -79,11 +78,10 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         # Placeholders read by Info.plist above. Override per-config or in an xcconfig.
         CLERK_PUBLISHABLE_KEY: "pk_test_bGVnaWJsZS1nb2JibGVyLTU3LmNsZXJrLmFjY291bnRzLmRldiQ"
-        # Use the Mac's stable mDNS hostname instead of a hardcoded LAN IP. The IP
-        # changes with DHCP / when joining a different Wi-Fi, which silently breaks
-        # the installed app; the .local name resolves on the same Wi-Fi regardless.
-        # (Run `scutil --get LocalHostName` and append `.local` if your machine differs.)
-        API_BASE_URL: "http://Shantanus-MacBook-Air.local:8787"
+        # Public HTTPS backend (self-hosted on the Mac mini, fronted at this domain).
+        # For local development, override with a LAN URL such as
+        # "http://Shantanus-MacBook-Air.local:8787" (NSAllowsLocalNetworking permits it).
+        API_BASE_URL: "https://anime.cognipin.com"
         # === SIGNING ===
         DEVELOPMENT_TEAM: YLPZXZS2F4
         CODE_SIGN_STYLE: Automatic

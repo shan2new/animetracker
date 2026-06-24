@@ -26,8 +26,6 @@
 	<string>$(CLERK_PUBLISHABLE_KEY)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
