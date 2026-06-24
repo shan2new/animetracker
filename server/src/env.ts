@@ -28,6 +28,14 @@ const schema = z.object({
   OPENROUTER_MODEL_ESCALATE: z.string().default('anthropic/claude-haiku-4.5'),
   GROUPING_LLM_DISABLED: envBool(false),
 
+  // Cerebras hosts very-fast OpenAI-compatible inference (gpt-oss-120b) at a fraction of
+  // frontier-model cost. When set it's the default for BOTH franchise grouping (preferred over
+  // OpenRouter) and spell-correcting a search that returned nothing from AniList (AniList ANDs
+  // query tokens with no typo tolerance, so one misspelled word zeroes the whole search).
+  CEREBRAS_API_KEY: z.string().optional(),
+  CEREBRAS_MODEL: z.string().default('gpt-oss-120b'),
+  SEARCH_CORRECT_DISABLED: envBool(false),
+
   TRENDING_SEED_COUNT: z.coerce.number().default(300),
 })
 

@@ -1,4 +1,5 @@
 import { env } from '../env.js'
+import { cerebrasChat } from '../util/cerebras.js'
 import type { PartKind } from './partKind.js'
 
 // What we feed the model about each candidate media in a component.
@@ -131,7 +132,55 @@ function buildPrompt(input: GroupingInput): string {
   ].join('\n')
 }
 
-/** OpenRouter-backed grouper using strict JSON schema output. */
+const SYSTEM_PROMPT = 'Return only data conforming to the schema. Be precise and conservative about splitting.'
+
+// Parse the schema-constrained JSON the model returns into our domain shape. Shared by every
+// OpenAI-compatible provider (OpenRouter, Cerebras) since they all return choices[].message.content.
+function parseGroupingResponse(content: string, model: string | null): GroupingResult {
+  const parsed = JSON.parse(content) as {
+    franchises: { canonical_name: string; parts: { anilist_id: number; part_kind: PartKind; sequence: number; label: string }[] }[]
+  }
+  return {
+    model,
+    confidence: 0.9,
+    franchises: parsed.franchises.map((f) => ({
+      canonicalName: f.canonical_name,
+      parts: f.parts.map((p) => ({ id: p.anilist_id, partKind: p.part_kind, sequence: p.sequence, label: p.label })),
+    })),
+  }
+}
+
+/**
+ * Cerebras-hosted grouper (gpt-oss-120b). Cerebras serves very-fast OpenAI-compatible inference at
+ * a fraction of frontier-model cost, and natively honors strict JSON-schema output — so it's the
+ * default grouper. `reasoning_effort: 'low'` keeps the (billed) reasoning tokens small for what is
+ * a constrained classification task; max_tokens leaves headroom for that reasoning plus the JSON.
+ */
+export class CerebrasGrouper implements LlmGrouper {
+  constructor(
+    private apiKey: string,
+    private model: string,
+  ) {}
+
+  async group(input: GroupingInput): Promise<GroupingResult> {
+    const res = await cerebrasChat(this.apiKey, {
+      model: this.model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: buildPrompt(input) },
+      ],
+      response_format: { type: 'json_schema', json_schema: RESPONSE_SCHEMA },
+      temperature: 0,
+      reasoning_effort: 'low',
+      max_tokens: Math.min(16384, 2048 + input.candidates.length * 160),
+    })
+    if (!res.ok) throw new Error(`Cerebras ${res.status}: ${await res.text().catch(() => '')}`)
+    const json = (await res.json()) as { choices: { message: { content: string } }[] }
+    return parseGroupingResponse(json.choices?.[0]?.message?.content ?? '{"franchises":[]}', this.model)
+  }
+}
+
+/** OpenRouter-backed grouper using strict JSON schema output. Fallback when no Cerebras key is set. */
 export class OpenRouterGrouper implements LlmGrouper {
   constructor(
     private apiKey: string,
@@ -149,7 +198,7 @@ export class OpenRouterGrouper implements LlmGrouper {
       body: JSON.stringify({
         model: this.model,
         messages: [
-          { role: 'system', content: 'Return only data conforming to the schema. Be precise and conservative about splitting.' },
+          { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: buildPrompt(input) },
         ],
         response_format: { type: 'json_schema', json_schema: RESPONSE_SCHEMA },
@@ -164,18 +213,7 @@ export class OpenRouterGrouper implements LlmGrouper {
     })
     if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${await res.text().catch(() => '')}`)
     const json = (await res.json()) as { choices: { message: { content: string } }[] }
-    const content = json.choices?.[0]?.message?.content ?? '{"franchises":[]}'
-    const parsed = JSON.parse(content) as {
-      franchises: { canonical_name: string; parts: { anilist_id: number; part_kind: PartKind; sequence: number; label: string }[] }[]
-    }
-    return {
-      model: this.model,
-      confidence: 0.9,
-      franchises: parsed.franchises.map((f) => ({
-        canonicalName: f.canonical_name,
-        parts: f.parts.map((p) => ({ id: p.anilist_id, partKind: p.part_kind, sequence: p.sequence, label: p.label })),
-      })),
-    }
+    return parseGroupingResponse(json.choices?.[0]?.message?.content ?? '{"franchises":[]}', this.model)
   }
 }
 
@@ -190,8 +228,14 @@ export class DeterministicGrouper implements LlmGrouper {
   }
 }
 
-/** Pick the grouper based on env. */
+/**
+ * Pick the grouper based on env. Cerebras (gpt-oss-120b) is preferred when its key is set — it's
+ * the cheap, fast default. OpenRouter is the fallback (the `model` arg only applies to it). With no
+ * LLM key, or when grouping is disabled, fall back to deterministic relation-graph grouping.
+ */
 export function makeGrouper(model = env.OPENROUTER_MODEL): LlmGrouper {
-  if (env.GROUPING_LLM_DISABLED || !env.OPENROUTER_API_KEY) return new DeterministicGrouper()
-  return new OpenRouterGrouper(env.OPENROUTER_API_KEY, model)
+  if (env.GROUPING_LLM_DISABLED) return new DeterministicGrouper()
+  if (env.CEREBRAS_API_KEY) return new CerebrasGrouper(env.CEREBRAS_API_KEY, env.CEREBRAS_MODEL)
+  if (env.OPENROUTER_API_KEY) return new OpenRouterGrouper(env.OPENROUTER_API_KEY, model)
+  return new DeterministicGrouper()
 }

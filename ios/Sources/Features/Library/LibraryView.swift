@@ -12,25 +12,28 @@ struct LibraryView: View {
     var body: some View {
         @Bindable var model = appModel
 
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if !appModel.libraryEmpty {
-                        filterChips
-                    }
-                    content.padding(.top, 6)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                PageHeader(title: "Library")
+                    .padding(.horizontal, 20)
+
+                SearchField(text: $model.libQuery, prompt: "Search your library")
+                    .padding(.horizontal, 20)
+                    .padding(.top, 18)
+
+                if !appModel.libraryEmpty {
+                    filterChips.padding(.top, 16)
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 120)
+                content.padding(.top, 6)
             }
-            .scrollContentBackground(.hidden)
-            .background(Theme.background)
-            .navigationTitle("Library")
-            .navigationBarTitleDisplayMode(.large)
-            .searchable(text: $model.libQuery, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Search your library")
+            .padding(.top, 34)
+            .padding(.bottom, 120)
         }
-        .tint(Theme.accent)
+        .scrollContentBackground(.hidden)
+        .background(Theme.background)
+        .refreshable { await appModel.reload() }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private var filterChips: some View {
@@ -42,9 +45,13 @@ struct LibraryView: View {
                         chip(label: g.chipLabel, filter: .group(g))
                     }
                 }
+                // Explicit trailing pad so the last chip clears the screen edge when scrolled.
+                .padding(.trailing, 4)
             }
-            .padding(.horizontal, 20)
         }
+        .contentMargins(.leading, 20, for: .scrollContent)
+        .contentMargins(.trailing, 20, for: .scrollContent)
+        .scrollClipDisabled()
     }
 
     private func chip(label: String, filter: LibFilter) -> some View {
@@ -53,7 +60,7 @@ struct LibraryView: View {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { appModel.libFilter = filter }
         } label: {
             Text(label)
-                .font(.system(size: 12.5, weight: .medium))
+                .scaledFont(12.5, weight: .medium)
                 .foregroundStyle(on ? Theme.background : Theme.text70)
                 .padding(.horizontal, 14).padding(.vertical, 7)
         }
@@ -97,13 +104,13 @@ struct LibraryView: View {
             )
         } else if !appModel.libQuery.trimmingCharacters(in: .whitespaces).isEmpty {
             Text("No shows match \u{201C}\(appModel.libQuery.trimmingCharacters(in: .whitespaces))\u{201D}.")
-                .font(.system(size: 14))
+                .scaledFont(14)
                 .foregroundStyle(Theme.text40)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 60)
         } else {
             Text("Nothing in this filter yet.")
-                .font(.system(size: 14))
+                .scaledFont(14)
                 .foregroundStyle(Theme.text40)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 60)
@@ -114,12 +121,12 @@ struct LibraryView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(section.label)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .scaledFont(12.5, weight: .semibold)
                     .tracking(0.8)
                     .textCase(.uppercase)
                     .foregroundStyle(Theme.text70)
                 Text("\(section.count)")
-                    .font(Theme.mono(12))
+                    .scaledFont(12, monospacedDigit: true)
                     .foregroundStyle(Theme.text36)
             }
             .padding(.bottom, 13)
@@ -131,6 +138,7 @@ struct LibraryView: View {
                                justCaughtUp: appModel.justCaught.contains(f.id),
                                onOpen: { onOpenDetail(f.id) },
                                onPrimary: { appModel.markCaughtUp(f.id) })
+                        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
                 }
             }
         }

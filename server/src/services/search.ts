@@ -9,6 +9,7 @@ import type { FranchiseSummary } from '../types/api.js'
 import { mapWithConcurrency } from '../util/concurrency.js'
 import { getSummaries, getTrendingFranchises } from './franchiseView.js'
 import { makeAniListFetcher, upsertMedia } from './mediaStore.js'
+import { correctSearchQuery } from './queryCorrect.js'
 
 // Cap how many cache-miss components we group synchronously per search, to bound LLM cost/latency.
 const LAZY_GROUP_CAP = 8
@@ -25,7 +26,14 @@ const GROUP_CONCURRENCY = 4
 export async function searchFranchises(query: string, limit = 30): Promise<FranchiseSummary[]> {
   if (!query.trim()) return getTrendingFranchises(limit)
 
-  const hits = await searchMedia(query)
+  let hits = await searchMedia(query)
+  // AniList ANDs the query's whitespace tokens with no typo tolerance, so one misspelled word
+  // ("Mushuko" for "Mushoku") returns nothing at all. When that happens, spell-correct the query
+  // via Cerebras and search once more with the fixed query before giving up.
+  if (hits.length === 0) {
+    const corrected = await correctSearchQuery(query)
+    if (corrected) hits = await searchMedia(corrected)
+  }
   await upsertMedia(hits)
 
   const hitIds = hits.map((h) => h.id)

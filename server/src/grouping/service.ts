@@ -6,7 +6,7 @@ import { env } from '../env.js'
 import { makeAniListFetcher, upsertMedia } from '../services/mediaStore.js'
 import { stripHtml } from '../util/text.js'
 import { expandComponent, type MediaFetcher } from './graph.js'
-import { DeterministicGrouper, groupingTier, makeGrouper, type GroupingInput, type LlmGrouper } from './llm.js'
+import { DeterministicGrouper, groupingTier, makeGrouper, type GroupingInput, type GroupingResult, type LlmGrouper } from './llm.js'
 import { partKindForFormat } from './partKind.js'
 
 export interface GroupOptions {
@@ -58,7 +58,18 @@ export async function groupKnownComponent(
   // transaction — we must not pin a DB connection for its duration.
   const input = buildInput(component)
   const grouper = opts.grouper ?? pickGrouper(input, opts.model)
-  const result = await grouper.group(input)
+  // The LLM grouper can fail (provider down, rate limit, malformed response). When it does, fall
+  // back to deterministic relation-graph grouping rather than letting the whole component go
+  // ungrouped — an ungrouped component has no franchiseMember rows, which makes its media vanish
+  // from search results entirely. A degraded (single-franchise) grouping is far better than that.
+  let result: GroupingResult
+  try {
+    result = await grouper.group(input)
+  } catch (err) {
+    if (grouper instanceof DeterministicGrouper) throw err // nothing left to fall back to
+    console.warn(`grouping LLM failed for seed ${seedId}; using deterministic fallback:`, err)
+    result = await new DeterministicGrouper().group(input)
+  }
 
   try {
     return await db.transaction(async (tx) => {

@@ -1,58 +1,68 @@
 # AniTrack
 
-A calm, **airing-first** anime tracker. Built from the `AniTrack.dc.html` Claude Design, powered by live [AniList](https://anilist.co) data, with a fully local (private) library.
+An airing-first anime tracker built around **canonical franchises**, not fragmented seasons.
 
-> The whole app exists to answer one question well: **what's airing, and what do I need to watch right now?**
+AniList (like MyAnimeList) models every season, movie, OVA and special as a *separate*
+entry. AniTrack groups those back into one canonical anime — using AniList's relation graph
+plus an LLM refinement step — so you subscribe **once** and every new season and episode
+surfaces under the show you already follow.
 
-## Features
+## Architecture
 
-- **Today** — a quiet briefing of what aired since you were last here ("Out now"), plus the next episodes dropping in the next 48h. Three home layouts: Briefing, Spotlight, Grid.
-- **Mark caught up** — the signature one-tap action. Bumps a show to the latest aired episode instantly, with a satisfying confirmation animation and an Undo toast.
-- **Schedule** — your week of airings, today highlighted, with live countdowns and "behind" badges.
-- **Library** — organized airing-first: **Behind · Caught up · Finished airing · Plan to watch**, with fast search and filter chips.
-- **Add** — search AniList (or browse what's trending) and add to your library in one tap.
-- **Detail sheet** — synopsis, genres, next-episode countdown, precise episode +/− control, status, and Mark caught up.
-
-No accounts, no social, no ads. Your library lives in `localStorage`.
-
-## Stack
-
-- React 18 + TypeScript + Vite
-- AniList GraphQL API (`https://graphql.anilist.co`) — no API key required
-- Dark, minimal design system (Geist / Geist Mono), accent `#F0A24E`
-
-## Run
-
-```bash
-npm install
-npm run dev      # http://localhost:5173
-npm run build    # type-check + production build to dist/
-npm run preview  # preview the production build
+```
+┌────────────────────────┐      Bearer (Clerk JWT)      ┌─────────────────────────────┐
+│  iOS app (SwiftUI,      │  ─────────────────────────▶  │  Node backend (Fastify)     │
+│  Liquid Glass, iOS 26)  │                              │  • franchise grouping       │
+│  ios/                   │  ◀─────────────────────────  │  • AniList cache + sync     │
+└────────────────────────┘        JSON view-models       │  • Clerk auth               │
+                                                          │  server/                    │
+                                                          └──────────────┬──────────────┘
+                                                                         │
+                                            ┌────────────────────────────┼───────────────┐
+                                            ▼                            ▼               ▼
+                                   local Postgres            AniList GraphQL     OpenRouter LLM
+                                                             (cached/proxied)   (franchise refine)
 ```
 
-## How it works
+- **`server/`** — Node + TypeScript (Fastify + Drizzle + Postgres), self-hosted (Mac mini).
+  Proxies/caches AniList, groups franchises (relation-graph BFS → LLM refine via OpenRouter),
+  runs scheduled sync (node-cron), authenticates users with Clerk, stores each user's library.
+- **`ios/`** — pure SwiftUI app on iOS 26 Liquid Glass, generated with XcodeGen. Auth via the
+  Clerk iOS SDK. Talks only to the backend.
+- **`icon/`** — app icon: layered SVGs + Icon Composer handoff for the iOS 26 layered glass
+  icon, plus a rendered `icon-1024.png` fallback already wired into the app.
+- **`docs/api-contract.md`** — the REST contract both sides build against.
+- **`legacy-web/`** — the original React/Vite web app, kept for reference.
 
-**No show data is hardcoded, and there is no seed data.** The library starts empty — add shows from the Add tab. Only your own data is persisted (`src/store.ts`): each library entry is `{ anilistId, status, progress }`. Everything shown — titles, covers, episode counts, genres, synopses, and airing times — is fetched live from AniList on load (`src/anilist.ts`) and merged into a view model (`src/format.ts`). The UI (`src/App.tsx`) is a faithful port of the design's screens and logic.
+## Run the backend (local)
 
-### Resilience
+```bash
+cd server
+cp .env.example .env          # set DATABASE_URL, Clerk + OpenRouter keys
+npm install
+createdb anitrack
+npm run db:migrate
+npm run dev                   # http://localhost:8787
+# seed some trending franchises (optional):
+npm run seed -- 60
+# group one franchise by AniList media id:
+npm run group -- 16498        # Attack on Titan
+```
 
-- **Safe storage:** every `localStorage` touch is guarded (private mode / disabled storage / quota never crashes the app), persisted entries are sanitized on load, and a top-level error boundary catches any render failure.
-- **Network:** requests retry with backoff and honor AniList's `429 Retry-After`; chunked queries use `Promise.allSettled` so a partial failure still yields data; total failure shows an inline **Retry** banner while keeping saved data visible.
-- **Freshness:** live airing data refetches when the tab regains focus and on a slow background interval, so countdowns don't rot while the tab stays open.
+Auth: set `CLERK_JWT_KEY` (PEM) for networkless verification. For local testing without a
+real Clerk session, leave `DEV_AUTH_BYPASS=1` and send `Authorization: Bearer dev:<anyId>`.
 
-### Exact airing times, in IST
+Grouping: with no `OPENROUTER_API_KEY` (or `GROUPING_LLM_DISABLED=1`) the server uses the
+deterministic relation-graph grouping. Add the key to enable LLM-refined grouping.
 
-- **Next episode** times come from AniList's `nextAiringEpisode`.
-- **Last aired / "Out now"** times come from AniList's `airingSchedules` (queried `TIME_DESC`, batched via aliased `Page` queries) — exact past air times, no heuristic. (A weekly fallback is used only for the brief moment before that data loads.)
-- **All dates and times are rendered in IST (Asia/Kolkata)** via `Intl.DateTimeFormat`, independent of the viewer's local timezone — the weekly schedule columns, "Today/Tomorrow", countdowns, and clock labels (e.g. `6:30 PM IST`). Change `TZ` in `src/format.ts` to use a different zone.
+## Run the iOS app
 
-## Layout
+```bash
+cd ios
+brew install xcodegen
+xcodegen generate            # produces AniTrack.xcodeproj
+open AniTrack.xcodeproj       # build in Xcode 26 (iOS 26 SDK)
+```
 
-| File | Responsibility |
-| --- | --- |
-| `src/App.tsx` | All screens, components, and view-model derivation |
-| `src/anilist.ts` | AniList GraphQL client (search + batch fetch by id) |
-| `src/store.ts` | Local library persistence + first-run seed |
-| `src/format.ts` | Date/countdown formatters + AniList→Show mapper |
-| `src/types.ts` | Shared types |
-| `src/styles.css` | Tokens, animations, responsive shell |
+Set your signing team in Xcode. The Clerk publishable key and `API_BASE_URL` are configured
+in `project.yml`. Without a Clerk key the app runs in dev-bypass mode against the local backend.

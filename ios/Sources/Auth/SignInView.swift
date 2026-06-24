@@ -19,15 +19,15 @@ struct SignInView: View {
             VStack(spacing: 0) {
                 Spacer()
                 Text("✦")
-                    .font(.system(size: 44))
+                    .scaledFont(44)
                     .foregroundStyle(Theme.accent)
                     .shadow(color: Theme.accent.opacity(0.55), radius: 20)
                 Text("AniTrack")
-                    .font(.system(size: 34, weight: .semibold))
+                    .scaledFont(34, weight: .semibold)
                     .tracking(-1)
                     .padding(.top, 14)
                 Text("Your airing-first anime tracker.")
-                    .font(.system(size: 15))
+                    .scaledFont(15)
                     .foregroundStyle(Theme.text52)
                     .padding(.top, 8)
 
@@ -39,7 +39,7 @@ struct SignInView: View {
                             showClerkAuth = true
                         } label: {
                             Text("Sign in")
-                                .font(.system(size: 16, weight: .semibold))
+                                .scaledFont(16, weight: .semibold)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 15)
                                 .foregroundStyle(Theme.background)
@@ -54,7 +54,7 @@ struct SignInView: View {
 
                     if let error = auth.lastError {
                         Text(error)
-                            .font(.system(size: 12.5))
+                            .scaledFont(12.5)
                             .foregroundStyle(Theme.accent)
                             .multilineTextAlignment(.center)
                     }
@@ -86,18 +86,18 @@ private struct DevSignInCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("DEVELOPER SIGN-IN")
-                .font(.system(size: 11, weight: .semibold))
+                .scaledFont(11, weight: .semibold)
                 .tracking(1)
                 .foregroundStyle(Theme.text40)
             Text("No Clerk key configured. Sign in with a dev user id (requires DEV_AUTH_BYPASS=1 on the backend).")
-                .font(.system(size: 12.5))
+                .scaledFont(12.5)
                 .foregroundStyle(Theme.text52)
                 .lineSpacing(2)
 
             TextField("dev user id", text: $devId)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 15))
+                .scaledFont(15)
                 .foregroundStyle(Theme.textPrimary)
                 .padding(.horizontal, 14).padding(.vertical, 12)
                 .background(Theme.fillSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -105,7 +105,7 @@ private struct DevSignInCard: View {
 
             Button(action: onContinue) {
                 Text("Continue")
-                    .font(.system(size: 15, weight: .semibold))
+                    .scaledFont(15, weight: .semibold)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 13)
                     .foregroundStyle(Theme.background)

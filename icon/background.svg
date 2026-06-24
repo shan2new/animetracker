@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AniTrack icon — BACKGROUND layer. 1024x1024, full-bleed. No pre-baked rounded corners; the system mask handles rounding. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Near-black base with a subtle vertical lift for depth -->
+    <linearGradient id="bgBase" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#16161B"/>
+      <stop offset="0.55" stop-color="#0E0E12"/>
+      <stop offset="1" stop-color="#0B0B0E"/>
+    </linearGradient>
+    <!-- Warm radial glow behind the mark, anchored slightly above center -->
+    <radialGradient id="bgGlow" cx="512" cy="430" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F0A24E" stop-opacity="0.30"/>
+      <stop offset="0.45" stop-color="#F0A24E" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#F0A24E" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Full-bleed base fill -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bgBase)"/>
+  <!-- Warm ambient glow -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bgGlow)"/>
+</svg>

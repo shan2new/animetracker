@@ -15,18 +15,18 @@ struct SectionHeader: View {
             }
             if let systemIcon {
                 Image(systemName: systemIcon)
-                    .font(.system(size: 13, weight: .medium))
+                    .scaledFont(13, weight: .medium)
                     .foregroundStyle(Theme.text50)
             }
             Text(label)
-                .font(.system(size: 12.5, weight: .semibold))
+                .scaledFont(12.5, weight: .semibold)
                 .tracking(0.9)
                 .textCase(.uppercase)
                 .foregroundStyle(Theme.text72)
             if let trailing {
                 Spacer(minLength: 8)
                 Text(trailing)
-                    .font(.system(size: 11.5))
+                    .scaledFont(11.5)
                     .foregroundStyle(Theme.text40)
             }
         }
@@ -64,15 +64,15 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 0) {
             Text("✦")
-                .font(.system(size: 30))
+                .scaledFont(30)
                 .foregroundStyle(Theme.accent)
                 .shadow(color: Theme.accent.opacity(0.55), radius: 15)
             Text(title)
-                .font(.system(size: 21, weight: .semibold))
+                .scaledFont(21, weight: .semibold)
                 .padding(.top, 16)
                 .multilineTextAlignment(.center)
             Text(message)
-                .font(.system(size: 14))
+                .scaledFont(14)
                 .foregroundStyle(Theme.text50)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
@@ -81,8 +81,8 @@ struct EmptyStateView: View {
             if let ctaLabel, let onCta {
                 Button(action: onCta) {
                     HStack(spacing: 8) {
-                        Image(systemName: "plus").font(.system(size: 14, weight: .bold))
-                        Text(ctaLabel).font(.system(size: 14.5, weight: .semibold))
+                        Image(systemName: "plus").scaledFont(14, weight: .bold)
+                        Text(ctaLabel).scaledFont(14.5, weight: .semibold)
                     }
                     .padding(.horizontal, 22)
                     .padding(.vertical, 12)
@@ -124,11 +124,11 @@ struct RetryBanner: View {
     var body: some View {
         HStack(spacing: 12) {
             Text("Couldn't reach the server. Showing what's saved.")
-                .font(.system(size: 13))
+                .scaledFont(13)
                 .foregroundStyle(Theme.text72)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button("Retry", action: onRetry)
-                .font(.system(size: 13, weight: .semibold))
+                .scaledFont(13, weight: .semibold)
                 .foregroundStyle(Theme.background)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)

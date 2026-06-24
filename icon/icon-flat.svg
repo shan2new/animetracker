@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AniTrack icon — FLAT COMPOSITE preview (background + midground + foreground merged).
+     1024x1024, full-bleed. Use this for rasterizing the fallback PNG.
+     No pre-baked rounded corners — iOS applies the mask. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgBase" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#16161B"/>
+      <stop offset="0.55" stop-color="#0E0E12"/>
+      <stop offset="1" stop-color="#0B0B0E"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="512" cy="430" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F0A24E" stop-opacity="0.30"/>
+      <stop offset="0.45" stop-color="#F0A24E" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#F0A24E" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="discFill" x1="512" y1="232" x2="512" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20202A"/>
+      <stop offset="1" stop-color="#131318"/>
+    </linearGradient>
+    <radialGradient id="discInner" cx="512" cy="512" r="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F0A24E" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F0A24E" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="discRim" x1="512" y1="232" x2="512" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.20"/>
+    </linearGradient>
+    <linearGradient id="playFill" x1="512" y1="392" x2="512" y2="632" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC07A"/>
+      <stop offset="0.5" stop-color="#F0A24E"/>
+      <stop offset="1" stop-color="#E08A38"/>
+    </linearGradient>
+    <linearGradient id="playSheen" x1="512" y1="392" x2="512" y2="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="dotGlow" cx="690" cy="358" r="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD9A0"/>
+      <stop offset="1" stop-color="#F0A24E"/>
+    </radialGradient>
+  </defs>
+
+  <!-- BACKGROUND -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bgBase)"/>
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bgGlow)"/>
+
+  <!-- MIDGROUND -->
+  <circle cx="512" cy="512" r="372" fill="none" stroke="#F0A24E" stroke-opacity="0.10" stroke-width="14"/>
+  <circle cx="512" cy="512" r="330" fill="none" stroke="#F0A24E" stroke-opacity="0.18" stroke-width="16"/>
+  <circle cx="512" cy="512" r="280" fill="url(#discFill)"/>
+  <circle cx="512" cy="512" r="280" fill="url(#discInner)"/>
+  <circle cx="512" cy="512" r="272" fill="none" stroke="url(#discRim)" stroke-width="6"/>
+
+  <!-- FOREGROUND -->
+  <path d="M 432 372 L 648 494 Q 690 518 648 542 L 432 664 Q 392 686 392 640 L 392 396 Q 392 350 432 372 Z" fill="url(#playFill)"/>
+  <path d="M 432 372 L 648 494 Q 690 518 648 542 L 432 664 Q 392 686 392 640 L 392 396 Q 392 350 432 372 Z" fill="url(#playSheen)"/>
+  <circle cx="690" cy="358" r="58" fill="#0B0B0E"/>
+  <circle cx="690" cy="358" r="44" fill="url(#dotGlow)"/>
+  <circle cx="704" cy="344" r="14" fill="#FFFFFF" fill-opacity="0.6"/>
+</svg>

@@ -1,0 +1,1 @@
+ALTER TABLE "franchise" ADD COLUMN "upcoming" jsonb;

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AniTrack icon — FOREGROUND layer. 1024x1024. The bold play triangle + "new episode" pulse dot. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Warm orange fill for the play mark, top-lit -->
+    <linearGradient id="playFill" x1="512" y1="392" x2="512" y2="632" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC07A"/>
+      <stop offset="0.5" stop-color="#F0A24E"/>
+      <stop offset="1" stop-color="#E08A38"/>
+    </linearGradient>
+    <!-- Specular sheen across the top of the play mark -->
+    <linearGradient id="playSheen" x1="512" y1="392" x2="512" y2="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="dotGlow" cx="690" cy="358" r="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFD9A0"/>
+      <stop offset="1" stop-color="#F0A24E"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Bold rounded-corner play triangle (chunky, reads at small sizes) -->
+  <path d="M 432 372
+           L 648 494
+           Q 690 518 648 542
+           L 432 664
+           Q 392 686 392 640
+           L 392 396
+           Q 392 350 432 372 Z"
+        fill="url(#playFill)"/>
+  <!-- Top sheen clipped roughly to the upper play body -->
+  <path d="M 432 372
+           L 648 494
+           Q 690 518 648 542
+           L 432 664
+           Q 392 686 392 640
+           L 392 396
+           Q 392 350 432 372 Z"
+        fill="url(#playSheen)"/>
+
+  <!-- "New episode" pulse dot, top-right, sitting proud of the disc -->
+  <circle cx="690" cy="358" r="58" fill="#0B0B0E"/>
+  <circle cx="690" cy="358" r="44" fill="url(#dotGlow)"/>
+  <circle cx="704" cy="344" r="14" fill="#FFFFFF" fill-opacity="0.6"/>
+</svg>

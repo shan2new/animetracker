@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AniTrack icon — MIDGROUND layer. 1024x1024. The glass disc / broadcast orb that the play mark sits on. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Card-surface disc with a soft top-lit gradient -->
+    <linearGradient id="discFill" x1="512" y1="232" x2="512" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#20202A"/>
+      <stop offset="1" stop-color="#131318"/>
+    </linearGradient>
+    <!-- Inner glow that hints at the play mark below -->
+    <radialGradient id="discInner" cx="512" cy="512" r="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F0A24E" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F0A24E" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Rim stroke gradient: brighter at the top (specular) -->
+    <linearGradient id="discRim" x1="512" y1="232" x2="512" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.20"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer broadcast pulse ring 1 (faint, far) -->
+  <circle cx="512" cy="512" r="372" fill="none" stroke="#F0A24E" stroke-opacity="0.10" stroke-width="14"/>
+  <!-- Broadcast pulse ring 2 (mid) -->
+  <circle cx="512" cy="512" r="330" fill="none" stroke="#F0A24E" stroke-opacity="0.18" stroke-width="16"/>
+
+  <!-- Main glass disc -->
+  <circle cx="512" cy="512" r="280" fill="url(#discFill)"/>
+  <circle cx="512" cy="512" r="280" fill="url(#discInner)"/>
+  <!-- Rim highlight -->
+  <circle cx="512" cy="512" r="272" fill="none" stroke="url(#discRim)" stroke-width="6"/>
+</svg>

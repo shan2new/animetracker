@@ -103,6 +103,7 @@ function buildFranchise(
     partCounts,
     parts,
     subscription: sub,
+    upcoming: f.upcoming ?? null,
   }
 }
 
@@ -167,6 +168,7 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
         isReleasing: releasing,
         partCount: mems.length,
         nextAiringAt,
+        upcoming: f.upcoming ?? null,
       }
     })
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
