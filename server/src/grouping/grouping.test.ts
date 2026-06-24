@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { AniListMedia, MediaFormat, RelationType } from '../anilist/types.js'
 import { deterministicGroup } from './deterministic.js'
 import { expandComponent } from './graph.js'
-import type { GroupingInput } from './llm.js'
+import { groupingTier, type GroupingInput } from './llm.js'
 
 // Build a minimal AniListMedia for fixtures.
 function m(
@@ -56,6 +56,55 @@ describe('expandComponent', () => {
     const fetcher = async (ids: number[]) => ids.flatMap((id) => (id === 1 ? [m(1, { rel: [['SEQUEL', 2]] })] : []))
     const comp = await expandComponent(1, fetcher)
     expect([...comp.keys()]).toEqual([1])
+  })
+})
+
+describe('groupingTier', () => {
+  const cand = (id: number): GroupingInput['candidates'][number] => ({
+    id,
+    title: `T${id}`,
+    format: 'TV',
+    status: 'FINISHED',
+    seasonYear: 2013,
+    episodes: 12,
+    synopsis: '',
+  })
+
+  it('skips the LLM for a single-member component', () => {
+    expect(groupingTier({ candidates: [cand(1)], edges: [] })).toBe('deterministic')
+  })
+
+  it('skips the LLM for a pure sequel chain (no side-story to split)', () => {
+    const input: GroupingInput = {
+      candidates: [cand(1), cand(2), cand(3)],
+      edges: [
+        { from: 1, to: 2, type: 'SEQUEL' },
+        { from: 2, to: 3, type: 'SEQUEL' },
+      ],
+    }
+    expect(groupingTier(input)).toBe('deterministic')
+  })
+
+  it('uses the standard model for a single side-story', () => {
+    const input: GroupingInput = {
+      candidates: [cand(1), cand(2), cand(10)],
+      edges: [
+        { from: 1, to: 2, type: 'SEQUEL' },
+        { from: 1, to: 10, type: 'SIDE_STORY' },
+      ],
+    }
+    expect(groupingTier(input)).toBe('standard')
+  })
+
+  it('escalates when there are multiple distinct side-story targets', () => {
+    const input: GroupingInput = {
+      candidates: [cand(1), cand(10), cand(11)],
+      edges: [
+        { from: 1, to: 10, type: 'SIDE_STORY' },
+        { from: 1, to: 11, type: 'SIDE_STORY' },
+      ],
+    }
+    expect(groupingTier(input)).toBe('escalate')
   })
 })
 

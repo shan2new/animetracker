@@ -23,6 +23,8 @@ struct AniTrackApp: App {
                 .environment(appModel)
                 .preferredColorScheme(.dark)
                 .tint(Theme.accent)
+                // Scale text for accessibility, but cap before the densest grids break.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                 .task { await auth.bootstrap() }
         }
     }

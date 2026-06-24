@@ -1,0 +1,16 @@
+{
+  "model": "openai/gpt-5-image-mini",
+  "modalities": [
+    "image",
+    "text"
+  ],
+  "image_config": {
+    "aspect_ratio": "1:1"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "FOCAL ELEMENT: a single clean thin circular orbit ring set slightly off-center (a weekly airing-cycle motif), with one brilliant four-point starlight glint / lens-flare sparkle catching the top of the ring — anime's signature dramatic light, abstracted. Ring and glint glow in an electric coral to hot-pink gradient. Calm, elegant, cyclical. Premium minimalist iOS app icon for a modern anime tracker app. Full-bleed 1024x1024 square composition, NO rounded corners and NO outer drop shadow (the OS applies the rounded-rect mask itself). Single centered focal element with generous negative space. No text, no letters, no words, no clutter, no thin fragile lines. Apple iOS 26 Liquid Glass aesthetic: subtle material depth, translucency and a clean specular highlight, but do NOT bake in heavy gloss. Modern, sophisticated, high contrast, reads clearly when shrunk to a tiny home-screen tile. Warm-but-not-gold palette: deep plum #2A0F3A mesh gradient blending into near-black #0E0E12, with a soft warm radial glow; accents in glowing electric coral #FF4D6D to hot magenta-pink (absolutely NO gold, amber, yellow or orange). Square aspect ratio."
+    }
+  ]
+}

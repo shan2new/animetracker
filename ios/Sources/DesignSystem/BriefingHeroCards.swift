@@ -1,7 +1,8 @@
 import SwiftUI
 
-// "Out now" briefing row (legacy `BriefingRow`): thumb + "Ep N just aired" + a full-width
-// glass "Mark caught up" button.
+// "Out now" briefing row (legacy `BriefingRow`): art-forward dense row — a larger poster, the
+// "Ep N just aired" subtitle, and a COMPACT trailing checkmark-circle action (matching the
+// PosterCard `.mark` affordance) rather than a full-width billboard button.
 struct BriefingRow: View {
     let vm: CardModel
     var justCaughtUp: Bool = false
@@ -10,34 +11,49 @@ struct BriefingRow: View {
 
     @GestureState private var pressing = false
 
+    private var subtitle: String {
+        var parts = ["Ep \(vm.airedEpisodes) just aired"]
+        if !vm.behindLabel.isEmpty { parts.append(vm.behindLabel) }
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
         ZStack {
-            VStack(spacing: 12) {
+            HStack(spacing: 14) {
                 Button(action: onOpen) {
                     HStack(spacing: 14) {
-                        Thumb(cover: vm.cover, width: 54, height: 80, radius: 10)
-                        VStack(alignment: .leading, spacing: 2) {
+                        Thumb(cover: vm.cover, width: 64, height: 96, radius: 11)
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(vm.title)
-                                .font(.system(size: 16, weight: .semibold))
+                                .scaledFont(16, weight: .semibold)
                                 .tracking(-0.3)
-                                .lineLimit(1)
+                                .lineLimit(2)
                                 .foregroundStyle(Theme.textPrimary)
-                            Text("Ep \(vm.airedEpisodes) just aired")
-                                .font(.system(size: 13, weight: .medium))
+                            Text(subtitle)
+                                .scaledFont(12.5, weight: .medium, monospacedDigit: true)
                                 .foregroundStyle(Theme.accent)
-                                .padding(.top, 3)
-                            Text(vm.airedAgo + (vm.behindLabel.isEmpty ? "" : " · \(vm.behindLabel)"))
-                                .font(Theme.mono(12))
-                                .foregroundStyle(Theme.text42)
+                            // DECISION C — exactly what to play next (next UNWATCHED episode).
+                            if let nextWatch = vm.nextWatchLabel {
+                                Text(nextWatch)
+                                    .scaledFont(12, weight: .medium, monospacedDigit: true)
+                                    .foregroundStyle(Theme.text62)
+                            } else if !vm.airedAgo.isEmpty {
+                                Text(vm.airedAgo)
+                                    .scaledFont(12, monospacedDigit: true)
+                                    .foregroundStyle(Theme.text42)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
-                MarkCaughtUpButton(label: "Mark caught up", action: onPrimary)
+                // DECISION A — a clearly-actionable, LABELED "Catch up" control. NOT a bare
+                // checkmark (the ✓ is reserved for the passive "Caught up" status badge).
+                CatchUpPill(action: onPrimary)
             }
-            .padding(13)
+            .padding(12)
 
             if justCaughtUp { CaughtUpOverlay(size: 50) }
         }
@@ -52,6 +68,27 @@ struct BriefingRow: View {
             DragGesture(minimumDistance: 0)
                 .updating($pressing) { _, state, _ in state = true }
         )
+    }
+}
+
+// DECISION A — the "Catch up" action affordance for dense rows. A compact LABELED glass capsule
+// (glyph + word) that reads unambiguously as "advance my progress to the latest aired episode",
+// distinct from the bare ✓ "Caught up" status badge. Same callback as the old checkmark circle.
+struct CatchUpPill: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.append").scaledFont(13, weight: .bold)
+                Text("Catch up").scaledFont(13.5, weight: .semibold)
+            }
+            .foregroundStyle(Theme.background)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 9)
+        }
+        .buttonStyleProminentGlass()
+        .clipShape(Capsule())
     }
 }
 
@@ -83,7 +120,7 @@ struct HeroCard: View {
                         startPoint: .bottom, endPoint: .top
                     )
                     Text("FRESH EPISODE")
-                        .font(.system(size: 11, weight: .semibold))
+                        .scaledFont(11, weight: .semibold)
                         .tracking(0.5)
                         .foregroundStyle(Theme.background)
                         .padding(.horizontal, 10).padding(.vertical, 4)
@@ -98,12 +135,12 @@ struct HeroCard: View {
                         .shadow(color: .black.opacity(0.55), radius: 15, y: 12)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(vm.title)
-                            .font(.system(size: 19, weight: .semibold))
+                            .scaledFont(19, weight: .semibold)
                             .tracking(-0.4)
                             .lineLimit(2)
                             .foregroundStyle(Theme.textPrimary)
                         Text("Ep \(Text("\(vm.airedEpisodes)").foregroundStyle(Theme.accent)) · \(Text(vm.airedAgo).foregroundStyle(Theme.text62))")
-                            .font(.system(size: 13))
+                            .scaledFont(13)
                     }
                     .padding(.top, 50)
                     Spacer(minLength: 0)
@@ -135,7 +172,9 @@ struct HeroCard: View {
     }
 }
 
-// The functional glass "Mark caught up" button used by briefing/hero cards and the detail sheet.
+// The functional glass "Mark caught up" button used by the hero card and the detail sheet.
+// DECISION A — leads with the "advance to latest" glyph (NOT a bare ✓, which is reserved for the
+// passive "Caught up" status badge), so the action never reads as a done/wipe toggle.
 struct MarkCaughtUpButton: View {
     let label: String
     let action: () -> Void
@@ -143,8 +182,8 @@ struct MarkCaughtUpButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 9) {
-                Image(systemName: "checkmark").font(.system(size: 16, weight: .bold))
-                Text(label).font(.system(size: 15, weight: .semibold))
+                Image(systemName: "text.append").scaledFont(16, weight: .bold)
+                Text(label).scaledFont(15, weight: .semibold)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)

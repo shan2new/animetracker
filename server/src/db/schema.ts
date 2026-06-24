@@ -11,6 +11,7 @@ import {
   timestamp,
   uuid,
 } from 'drizzle-orm/pg-core'
+import type { FranchiseUpcoming } from '../types/api.js'
 
 // ---------- Cached AniList catalogue ----------
 
@@ -64,6 +65,8 @@ export const franchise = pgTable('franchise', {
   groupingSource: text('grouping_source').notNull().default('relations'), // relations | llm | manual
   groupingModel: text('grouping_model'),
   confidence: real('confidence'),
+  // Web-sourced "what's next" news (announced/airing seasons & films). See FranchiseUpcoming.
+  upcoming: jsonb('upcoming').$type<FranchiseUpcoming>(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 })

@@ -1,0 +1,16 @@
+{
+  "model": "openai/gpt-5-image-mini",
+  "modalities": [
+    "image",
+    "text"
+  ],
+  "image_config": {
+    "aspect_ratio": "1:1"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "content": "The ENTIRE 1024x1024 square is filled EDGE TO EDGE with a dark background — a deep plum #2A0F3A mesh gradient sinking into near-black #0E0E12, with a soft warm glow behind the subject. ABSOLUTELY NO white background, NO transparency, NO empty space, NO light/pale areas: every pixel to all four edges is dark. This is a full-bleed iOS app icon. FOCAL ELEMENT: three bold tapered diagonal motion slashes sweeping upward-right, layered with strong depth and a bright coral-to-magenta neon glow and glass highlights — pure abstract anime velocity, dramatic and energetic. Premium minimalist iOS app icon for a modern anime tracker app. Full-bleed 1024x1024 square, NO rounded corners and NO outer drop shadow (the OS adds the rounded mask). Single centered focal element, generous negative space, no text or letters, no clutter. The subject is a SOLID, chunky, glowing GLASS shape with a clean specular highlight (NOT a thin wireframe outline) so it holds at tiny sizes. Apple iOS 26 Liquid Glass: material depth and translucency, modern and sophisticated, high contrast. Accents glow in electric coral #FF4D6D to hot magenta-pink — absolutely NO gold, amber, yellow or orange. Square aspect ratio."
+    }
+  ]
+}

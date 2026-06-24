@@ -20,7 +20,7 @@ struct RootView: View {
     }
 }
 
-// The four tabs. Drives both the ZStack switcher and the floating tab bar.
+// The four tabs.
 enum AppTab: Int, CaseIterable, Hashable {
     case today, schedule, library, discover
 
@@ -33,62 +33,60 @@ enum AppTab: Int, CaseIterable, Hashable {
         }
     }
 
-    // Outline icon (unselected state).
+    // Custom tab-bar glyphs (asset-catalog template images, see icon/navbar/). They tint with
+    // the accent color when selected and gray when not, just like SF Symbols.
     var icon: String {
         switch self {
-        case .today:    "house"
-        case .schedule: "calendar"
-        case .library:  "books.vertical"
-        case .discover: "magnifyingglass"
-        }
-    }
-
-    // Fill icon (selected state) — use explicit names because .symbolVariant behaves
-    // inconsistently for calendar and magnifyingglass across OS versions.
-    var iconFill: String {
-        switch self {
-        case .today:    "house.fill"
-        case .schedule: "calendar.fill"
-        case .library:  "books.vertical.fill"
-        case .discover: "magnifyingglass"
+        case .today:    "TabToday"
+        case .schedule: "TabSchedule"
+        case .library:  "TabLibrary"
+        case .discover: "TabAdd"
         }
     }
 }
 
-// Four-tab app. All four content views stay mounted in a ZStack so scroll positions,
-// navigation stacks, and search state survive tab switches. The selected tab is shown
-// via opacity; a 0.22 s easeOut crossfade plays on every switch.
+// Native four-tab app. On iOS 26 the system renders the floating, morphing glass tab bar with
+// scroll-edge effects; on iOS 17–25 it's the standard tab bar. Franchise detail presents as a
+// native drawer sheet that slides up over the current tab (medium detent, drag to full).
 struct MainTabView: View {
     @Environment(AppModel.self) private var appModel
     @State private var selectedTab: AppTab = .today
 
+    // The franchise detail presented as a drawer sheet over the current tab, plus its current
+    // resting detent so we can fire a snap haptic as the user drags between medium and full.
+    @State private var detail: DetailRoute?
+    @State private var detailDetent: PresentationDetent = .medium
+
     var body: some View {
-        @Bindable var model = appModel
-
         ZStack(alignment: .bottom) {
-            // Content — four views always in the hierarchy; only the active one is visible.
-            ZStack {
-                TodayView(onOpenDetail: open)
-                    .opacity(selectedTab == .today ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .today)
-                ScheduleView(onOpenDetail: open)
-                    .opacity(selectedTab == .schedule ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .schedule)
-                LibraryView(onOpenDetail: open)
-                    .opacity(selectedTab == .library ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .library)
-                DiscoverView(onOpenDetail: open)
-                    .opacity(selectedTab == .discover ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .discover)
-            }
-            .animation(.easeOut(duration: 0.22), value: selectedTab)
+            TabView(selection: $selectedTab) {
+                NavigationStack {
+                    TodayView(onOpenDetail: openDetail)
+                }
+                .tabItem { Label(AppTab.today.label, image: AppTab.today.icon) }
+                .tag(AppTab.today)
 
-            // Floating glass tab bar.
-            FloatingTabBar(selectedTab: $selectedTab)
-        }
-        .ignoresSafeArea(.keyboard)
-        // Undo toast floats above the tab bar.
-        .overlay(alignment: .bottom) {
+                NavigationStack {
+                    ScheduleView(onOpenDetail: openDetail)
+                }
+                .tabItem { Label(AppTab.schedule.label, image: AppTab.schedule.icon) }
+                .tag(AppTab.schedule)
+
+                NavigationStack {
+                    LibraryView(onOpenDetail: openDetail)
+                }
+                .tabItem { Label(AppTab.library.label, image: AppTab.library.icon) }
+                .tag(AppTab.library)
+
+                NavigationStack {
+                    DiscoverView(onOpenDetail: openDetail)
+                }
+                .tabItem { Label(AppTab.discover.label, image: AppTab.discover.icon) }
+                .tag(AppTab.discover)
+            }
+            .sensoryFeedback(.selection, trigger: selectedTab)
+
+            // Undo toast floats above the tab bar.
             if let undo = appModel.undo {
                 UndoToast(state: undo) { appModel.performUndo() }
                     .padding(.horizontal, 16)
@@ -97,79 +95,24 @@ struct MainTabView: View {
                     .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appModel.undo != nil)
             }
         }
-        .sheet(item: $model.detailRoute) { route in
-            FranchiseDetailView(franchiseId: route.value)
+        // Detail slides up as a native drawer: opens at half height, drag the grabber up to full.
+        .sheet(item: $detail) { route in
+            FranchiseDetailView(franchiseId: route.id)
+                .presentationDetents([.medium, .large], selection: $detailDetent)
+                .presentationDragIndicator(.visible)
+                // Light snap as the drawer settles between medium and full.
+                .sensoryFeedback(.impact(weight: .light), trigger: detailDetent)
         }
+        // Tactile tap as the drawer rises (nil → id) and again as it dismisses (id → nil).
+        .sensoryFeedback(.impact(weight: .medium), trigger: detail?.id)
     }
 
-    private func open(_ franchiseId: String) {
-        appModel.detailRoute = DetailRoute(value: franchiseId)
-    }
-}
-
-// Floating pill tab bar. Uses Liquid Glass on iOS 26, ultraThinMaterial on iOS 17–25.
-private struct FloatingTabBar: View {
-    @Binding var selectedTab: AppTab
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppTab.allCases, id: \.self) { tab in
-                TabBarItem(tab: tab, selectedTab: $selectedTab)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .glassChrome(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Theme.hairlineStrong, lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.45), radius: 28, y: 10)
-        .padding(.horizontal, 28)
-        .padding(.bottom, 12)
+    // Open at the medium detent every time, regardless of where the last drawer was left.
+    private func openDetail(_ id: String) {
+        detailDetent = .medium
+        detail = DetailRoute(id: id)
     }
 }
 
-private struct TabBarItem: View {
-    let tab: AppTab
-    @Binding var selectedTab: AppTab
-    @GestureState private var pressing = false
-
-    private var isSelected: Bool { selectedTab == tab }
-
-    var body: some View {
-        Button {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
-                selectedTab = tab
-            }
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: isSelected ? tab.iconFill : tab.icon)
-                    .font(.system(size: 21, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Theme.accent : Theme.text46)
-                    .scaleEffect(isSelected ? 1.1 : 1.0)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isSelected)
-                Text(tab.label)
-                    .font(.system(size: 10, weight: isSelected ? .semibold : .medium))
-                    .foregroundStyle(isSelected ? Theme.accent : Theme.text44)
-                    .animation(.easeOut(duration: 0.15), value: isSelected)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 7)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .scaleEffect(pressing ? 0.87 : 1)
-        .animation(.spring(response: 0.2, dampingFraction: 0.5), value: pressing)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .updating($pressing) { _, state, _ in state = true }
-        )
-    }
-}
-
-// Small Identifiable wrapper so a franchise id can drive `.sheet(item:)`.
-struct DetailRoute: Identifiable, Equatable {
-    let value: String
-    var id: String { value }
-}
+// Identifiable wrapper so a franchise id can drive `.sheet(item:)`.
+private struct DetailRoute: Identifiable { let id: String }

@@ -1,0 +1,9 @@
+# XcodeGen regenerates this from project.yml — don't commit it.
+*.xcodeproj
+# Xcode / SwiftPM build artifacts
+build/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
