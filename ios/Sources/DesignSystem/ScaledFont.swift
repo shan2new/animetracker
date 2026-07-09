@@ -1,8 +1,8 @@
 import SwiftUI
 
-// Dynamic Type-aware system font. `@ScaledMetric` is exactly 1.0 at the default content size, so
-// every existing layout stays pixel-identical to before; at larger accessibility sizes the text
-// grows with the user's setting. Drop-in replacement for `.font(.system(size:weight:))`.
+// Dynamic Type-aware Outfit font (the app's brand typeface — weight maps to a bundled cut via
+// AppFont). `@ScaledMetric` is exactly 1.0 at the default content size, so every existing layout
+// stays pixel-identical to before; at larger accessibility sizes the text grows with the setting.
 struct ScaledFont: ViewModifier {
     @ScaledMetric private var size: CGFloat
     private let weight: Font.Weight
@@ -15,14 +15,14 @@ struct ScaledFont: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        let font = Font.system(size: size, weight: weight)
+        let font = AppFont.font(size: size, weight: weight)
         return content.font(monospacedDigit ? font.monospacedDigit() : font)
     }
 }
 
 extension View {
-    /// Dynamic Type-scaled system font. Identical to `.font(.system(size:weight:))` at the default
-    /// text size; grows at accessibility sizes. Pass `monospacedDigit: true` for ticking numbers.
+    /// Dynamic Type-scaled Outfit font. Pixel-identical at the default text size; grows at
+    /// accessibility sizes. Pass `monospacedDigit: true` for ticking numbers.
     func scaledFont(_ size: CGFloat, weight: Font.Weight = .regular,
                     monospacedDigit: Bool = false,
                     relativeTo: Font.TextStyle = .body) -> some View {

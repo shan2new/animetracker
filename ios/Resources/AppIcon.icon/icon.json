@@ -1,13 +1,17 @@
 {
   "fill" : {
-    "automatic-gradient" : "extended-srgb:0.16471,0.05882,0.22745,1.00000"
+    "automatic-gradient" : "extended-srgb:0.04314,0.04314,0.05490,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "06-arc-v2.png",
-          "name" : "06-arc-v2"
+          "image-name" : "play.png",
+          "name" : "play"
+        },
+        {
+          "image-name" : "arc.png",
+          "name" : "arc"
         }
       ],
       "shadow" : {
@@ -15,7 +19,7 @@
         "opacity" : 0.5
       },
       "translucency" : {
-        "enabled" : false,
+        "enabled" : true,
         "value" : 0.5
       }
     }

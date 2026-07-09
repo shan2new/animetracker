@@ -4,7 +4,7 @@ import SwiftUI
 // buckets.
 struct LibraryView: View {
     @Environment(AppModel.self) private var appModel
-    let onOpenDetail: (String) -> Void
+    let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
     private var now: Int64 { appModel.now }
     @Namespace private var chipNS
@@ -28,10 +28,18 @@ struct LibraryView: View {
             }
             .padding(.top, 34)
             .padding(.bottom, 120)
+            // Loading → content cross-fades instead of popping.
+            .animation(.easeInOut(duration: 0.25), value: appModel.loading)
+            .animation(.easeInOut(duration: 0.25), value: appModel.loadError)
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background)
-        .refreshable { await appModel.reload() }
+        .background(AppBackground())
+        .scrollDismissesKeyboard(.interactively)
+        .refreshable {
+            await appModel.reload()
+            // Quiet completion tick; failures already buzz via showError.
+            if !appModel.loadError { Haptics.impact(.light) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -57,6 +65,7 @@ struct LibraryView: View {
     private func chip(label: String, filter: LibFilter) -> some View {
         let on = appModel.libFilter == filter
         return Button {
+            Haptics.selection()
             withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { appModel.libFilter = filter }
         } label: {
             Text(label)
@@ -78,10 +87,19 @@ struct LibraryView: View {
 
     @ViewBuilder
     private var content: some View {
-        if appModel.loadError { RetryBanner { Task { await appModel.reload() } }.padding(.horizontal, 20) }
+        if appModel.loadError && !appModel.libraryEmpty {
+            RetryBanner { Task { await appModel.reload() } }.padding(.horizontal, 20)
+        }
 
         if appModel.loading && appModel.library.isEmpty {
             Loader()
+        } else if appModel.loadError && appModel.libraryEmpty {
+            EmptyStateView(
+                title: "Couldn't load your library",
+                message: "The server couldn't be reached. Check your connection and try again.",
+                ctaLabel: "Retry",
+                onCta: { Task { await appModel.reload() } }
+            )
         } else if appModel.librarySections.isEmpty {
             emptyState
         } else {
@@ -92,6 +110,9 @@ struct LibraryView: View {
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
+            // Cards settle into place when a show is removed or re-buckets after a status change.
+            .animation(.spring(response: 0.4, dampingFraction: 0.82),
+                       value: appModel.librarySections.map { $0.franchises.map(\.id) })
         }
     }
 
@@ -127,6 +148,8 @@ struct LibraryView: View {
                     .foregroundStyle(Theme.text70)
                 Text("\(section.count)")
                     .scaledFont(12, monospacedDigit: true)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.3), value: section.count)
                     .foregroundStyle(Theme.text36)
             }
             .padding(.bottom, 13)
@@ -136,9 +159,14 @@ struct LibraryView: View {
                     let action = appModel.bucket(of: f).cardAction
                     PosterCard(vm: CardModel(franchise: f, action: action, now: now),
                                justCaughtUp: appModel.justCaught.contains(f.id),
-                               onOpen: { onOpenDetail(f.id) },
+                               onOpen: { onOpenDetail(f.id, "lib/\(f.id)") },
                                onPrimary: { appModel.markCaughtUp(f.id) })
+                        .zoomSource("lib/\(f.id)")
                         .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.94)),
+                            removal: .opacity
+                        ))
                 }
             }
         }

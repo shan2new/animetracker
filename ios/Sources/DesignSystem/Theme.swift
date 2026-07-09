@@ -32,10 +32,10 @@ enum Theme {
     static let accentBorder = Color(hex: 0xF0A24E).opacity(0.18)
     static let accentChipFill = Color(hex: 0xF0A24E).opacity(0.13)
 
-    // Counts/countdowns: native SF Pro with monospaced digits, so ticking numbers don't jitter
-    // while the type stays warm (replaces the old full SF Mono treatment).
+    // Counts/countdowns: Outfit with monospaced digits requested, so ticking numbers stay on-brand
+    // and don't jitter where the font provides tabular figures.
     static func numeric(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight).monospacedDigit()
+        AppFont.font(size: size, weight: weight).monospacedDigit()
     }
 }
 

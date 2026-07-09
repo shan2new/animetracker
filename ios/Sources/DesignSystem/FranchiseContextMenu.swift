@@ -11,7 +11,9 @@ struct FranchiseContextMenu: View {
             Button {
                 appModel.markCaughtUp(f.id)
             } label: {
-                Label("Mark caught up · Ep \(part.airedEpisodes)", systemImage: "checkmark.circle")
+                // text.append is the app-wide "advance to latest aired" glyph (DECISION A);
+                // ✓ stays reserved for the passive "Caught up" status badge.
+                Label("Mark caught up · Ep \(part.airedEpisodes)", systemImage: "text.append")
             }
         }
 

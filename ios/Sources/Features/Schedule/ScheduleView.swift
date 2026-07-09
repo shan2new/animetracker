@@ -3,7 +3,7 @@ import SwiftUI
 // "Schedule" tab — today through the end of the local week, each releasing part bucketed by its next airing day.
 struct ScheduleView: View {
     @Environment(AppModel.self) private var appModel
-    let onOpenDetail: (String) -> Void
+    let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
     private var now: Int64 { appModel.now }
 
@@ -19,10 +19,19 @@ struct ScheduleView: View {
                     .lineSpacing(2)
                     .padding(.top, 8)
 
-                if appModel.loadError { RetryBanner { Task { await appModel.reload() } } }
+                if appModel.loadError && !appModel.libraryEmpty {
+                    RetryBanner { Task { await appModel.reload() } }
+                }
 
                 if appModel.loading && appModel.library.isEmpty {
                     Loader()
+                } else if appModel.loadError && appModel.libraryEmpty {
+                    EmptyStateView(
+                        title: "Couldn't load your shows",
+                        message: "The server couldn't be reached. Check your connection and try again.",
+                        ctaLabel: "Retry",
+                        onCta: { Task { await appModel.reload() } }
+                    )
                 } else if appModel.airingFranchises.isEmpty {
                     EmptyStateView(
                         title: "No airing shows yet",
@@ -42,10 +51,17 @@ struct ScheduleView: View {
             .padding(.horizontal, 20)
             .padding(.top, 34)
             .padding(.bottom, 120)
+            // Loading → content cross-fades instead of popping.
+            .animation(.easeInOut(duration: 0.25), value: appModel.loading)
+            .animation(.easeInOut(duration: 0.25), value: appModel.loadError)
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background)
-        .refreshable { await appModel.reload() }
+        .background(AppBackground())
+        .refreshable {
+            await appModel.reload()
+            // Quiet completion tick; failures already buzz via showError.
+            if !appModel.loadError { Haptics.impact(.light) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -130,7 +146,7 @@ struct ScheduleView: View {
 
     private func airedRow(_ f: Franchise) -> some View {
         let vm = CardModel(franchise: f, action: .none, now: now)
-        return Button { onOpenDetail(f.id) } label: {
+        return Button { onOpenDetail(f.id, "aired/\(f.id)") } label: {
             HStack(spacing: 14) {
                 Thumb(cover: vm.cover, width: 46, height: 64, radius: 9)
                 VStack(alignment: .leading, spacing: 3) {
@@ -151,12 +167,13 @@ struct ScheduleView: View {
         .buttonStyle(SpringPressButtonStyle(scale: 0.98))
         .background(Color.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+        .zoomSource("aired/\(f.id)")
         .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
     }
 
     private func row(_ f: Franchise) -> some View {
         let vm = CardModel(franchise: f, action: .none, now: now)
-        return Button { onOpenDetail(f.id) } label: {
+        return Button { onOpenDetail(f.id, "sched/\(f.id)") } label: {
             HStack(spacing: 14) {
                 Thumb(cover: vm.cover, width: 46, height: 64, radius: 9)
                 VStack(alignment: .leading, spacing: 3) {
@@ -188,6 +205,8 @@ struct ScheduleView: View {
                         .foregroundStyle(Theme.text28)
                     Text(vm.countdown)
                         .scaledFont(16, weight: .medium, monospacedDigit: true)
+                        .contentTransition(.numericText(countsDown: true))
+                        .animation(.snappy(duration: 0.3), value: vm.countdown)
                         .foregroundStyle(vm.countdownColor)
                 }
             }
@@ -196,6 +215,7 @@ struct ScheduleView: View {
         .buttonStyle(SpringPressButtonStyle(scale: 0.98))
         .background(Color.white.opacity(0.028), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+        .zoomSource("sched/\(f.id)")
         .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
     }
 }

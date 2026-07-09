@@ -3,7 +3,7 @@ import SwiftUI
 // "Today" tab — greeting, "Out now" (fresh episodes since last open), and "Airing soon" (48h).
 struct TodayView: View {
     @Environment(AppModel.self) private var appModel
-    let onOpenDetail: (String) -> Void
+    let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
     private var now: Int64 { appModel.now }
 
@@ -18,9 +18,16 @@ struct TodayView: View {
 
                 if appModel.loading && appModel.library.isEmpty {
                     Loader()
-                }
-
-                if appModel.libraryEmpty && !appModel.loading {
+                } else if appModel.loadError && appModel.libraryEmpty {
+                    // The load failed and we have nothing local — an error state, NOT the
+                    // first-run welcome (we don't know the library is empty).
+                    EmptyStateView(
+                        title: "Couldn't load your shows",
+                        message: "The server couldn't be reached. Check your connection and try again.",
+                        ctaLabel: "Retry",
+                        onCta: { Task { await appModel.reload() } }
+                    )
+                } else if appModel.libraryEmpty && !appModel.loading {
                     EmptyStateView(
                         title: "Welcome to AniTrack",
                         message: "Your airing-first tracker. Add shows you're watching and we'll tell you exactly what dropped and what's next. Use the Add tab to get started."
@@ -42,10 +49,19 @@ struct TodayView: View {
             .padding(.horizontal, 20)
             .padding(.top, 22)
             .padding(.bottom, 140)
+            // Loading → content and list membership changes cross-fade / settle instead of popping.
+            .animation(.easeInOut(duration: 0.25), value: appModel.loading)
+            .animation(.easeInOut(duration: 0.25), value: appModel.loadError)
+            .animation(.spring(response: 0.42, dampingFraction: 0.82), value: appModel.outNow.map(\.id))
+            .animation(.spring(response: 0.42, dampingFraction: 0.82), value: appModel.soon.map(\.id))
         }
         .scrollContentBackground(.hidden)
-        .background(Theme.background)
-        .refreshable { await appModel.reload() }
+        .background(AppBackground())
+        .refreshable {
+            await appModel.reload()
+            // Quiet completion tick; failures already buzz via showError.
+            if !appModel.loadError { Haptics.impact(.light) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -79,7 +95,8 @@ struct TodayView: View {
         }
         let n = appModel.outNow.count
         if n > 0 {
-            return "\(n) fresh \(n == 1 ? "episode" : "episodes") waiting."
+            // outNow counts franchises, not episodes — say so.
+            return n == 1 ? "1 show with a new episode." : "\(n) shows with new episodes."
         }
         return "You're all caught up."
     }
@@ -103,9 +120,11 @@ struct TodayView: View {
                 ForEach(appModel.outNow) { f in
                     BriefingRow(vm: CardModel(franchise: f, action: .mark, now: now),
                                 justCaughtUp: appModel.justCaught.contains(f.id),
-                                onOpen: { onOpenDetail(f.id) },
+                                onOpen: { onOpenDetail(f.id, "outnow/\(f.id)") },
                                 onPrimary: { appModel.markCaughtUp(f.id) })
+                        .zoomSource("outnow/\(f.id)")
                         .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
             }
         }
@@ -122,7 +141,7 @@ struct TodayView: View {
             VStack(spacing: 10) {
                 ForEach(appModel.soon) { f in
                     let vm = CardModel(franchise: f, action: .none, now: now)
-                    Button { onOpenDetail(f.id) } label: {
+                    Button { onOpenDetail(f.id, "soon/\(f.id)") } label: {
                         HStack(spacing: 13) {
                             Thumb(cover: vm.cover, width: 44, height: 62, radius: 9)
                             VStack(alignment: .leading, spacing: 3) {
@@ -145,6 +164,8 @@ struct TodayView: View {
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
                     }
                     .buttonStyle(SpringPressButtonStyle(scale: 0.98))
+                    .zoomSource("soon/\(f.id)")
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
             }
         }
@@ -157,6 +178,8 @@ struct TodayView: View {
         let shape = Capsule()
         Text(vm.countdown)
             .scaledFont(13.5, weight: .semibold, monospacedDigit: true)
+            .contentTransition(.numericText(countsDown: true))
+            .animation(.snappy(duration: 0.3), value: vm.countdown)
             .foregroundStyle(vm.countdownIsImminent ? Theme.background : Theme.accent)
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background {

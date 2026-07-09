@@ -123,7 +123,7 @@ struct RetryBanner: View {
     let onRetry: () -> Void
     var body: some View {
         HStack(spacing: 12) {
-            Text("Couldn't reach the server. Showing what's saved.")
+            Text("Couldn't refresh — showing earlier data.")
                 .scaledFont(13)
                 .foregroundStyle(Theme.text72)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,6 +142,7 @@ struct RetryBanner: View {
                 .stroke(Color(hex: 0xF0A24E).opacity(0.2), lineWidth: 1)
         )
         .padding(.top, 16)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }
 

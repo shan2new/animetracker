@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // Supplies the current bearer token for outgoing requests. Implemented by the auth layer
 // (Clerk session token, or a `dev:<clerkId>` token for local DEV_AUTH_BYPASS testing).
@@ -22,6 +23,17 @@ enum APIError: LocalizedError {
         case let .transport(err): return "Network error. \(err.localizedDescription)"
         }
     }
+}
+
+extension CharacterSet {
+    /// Characters safe inside a single query VALUE. Starts from `.urlQueryAllowed` and removes
+    /// the delimiters it permits (`&` splits parameters, `=` splits key/value, `+` decodes as a
+    /// space on the server, `?`/`#` end the component).
+    static let strictQueryValueAllowed: CharacterSet = {
+        var set = CharacterSet.urlQueryAllowed
+        set.remove(charactersIn: "&=+?#")
+        return set
+    }()
 }
 
 // URLSession-backed client implementing every endpoint in the API contract.
@@ -54,7 +66,9 @@ final class APIClient: @unchecked Sendable {
     }
 
     func search(query: String) async throws -> [FranchiseSummary] {
-        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        // .urlQueryAllowed leaves `&`, `+`, and `=` unescaped, which corrupts the q parameter
+        // (searching "X & Y" truncated at the ampersand). Escape the value strictly.
+        let q = query.addingPercentEncoding(withAllowedCharacters: .strictQueryValueAllowed) ?? ""
         let res: FranchiseListResponse = try await request("/search?q=\(q)")
         return res.franchises
     }
@@ -120,6 +134,10 @@ final class APIClient: @unchecked Sendable {
         return try await send(path: path, method: method, body: data, auth: auth)
     }
 
+    // Failure diagnostics land in the unified log (`log stream --predicate 'subsystem ==
+    // "com.anitrack.app"'`) so "the app says unreachable" is attributable to a concrete cause.
+    private static let log = Logger(subsystem: "com.anitrack.app", category: "api")
+
     private func send<Response: Decodable>(
         path: String,
         method: String,
@@ -138,6 +156,7 @@ final class APIClient: @unchecked Sendable {
             if let token = await tokenProvider.currentToken() {
                 req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             } else {
+                APIClient.log.error("\(method) \(path): no auth token available (signed out or token fetch failed)")
                 throw APIError.unauthorized
             }
         }
@@ -147,6 +166,7 @@ final class APIClient: @unchecked Sendable {
         do {
             (data, response) = try await session.data(for: req)
         } catch {
+            APIClient.log.error("\(method) \(url.absoluteString): transport error: \(error)")
             throw APIError.transport(error)
         }
 
@@ -154,16 +174,19 @@ final class APIClient: @unchecked Sendable {
             throw APIError.http(-1, "No HTTP response")
         }
         if http.statusCode == 401 || http.statusCode == 403 {
+            APIClient.log.error("\(method) \(path): HTTP \(http.statusCode) (unauthorized)")
             throw APIError.unauthorized
         }
         guard (200..<300).contains(http.statusCode) else {
             let bodyText = String(data: data, encoding: .utf8) ?? ""
+            APIClient.log.error("\(method) \(path): HTTP \(http.statusCode): \(bodyText, privacy: .public)")
             throw APIError.http(http.statusCode, bodyText)
         }
 
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
+            APIClient.log.error("\(method) \(path): decoding failed: \(error)")
             throw APIError.decoding(error)
         }
     }

@@ -1,113 +1,64 @@
 #!/usr/bin/env python3
-"""Bespoke AniTrack tab-bar glyphs, hand-authored as vectors and rendered crisp via
-rsvg-convert into transparent TEMPLATE imagesets (@1x/@2x/@3x). Shared language: solid
-rounded forms with negative-space cutouts + rounded corners throughout, so they stay
-razor-sharp at ~28pt and tint with the iOS 26 glass bar's selected/unselected states."""
-import json, math, os, subprocess
+"""AniTrack tab-bar glyphs, sourced from the Hugeicons free set (stroke / rounded,
+24x24 viewBox) and rendered crisp via rsvg-convert into transparent TEMPLATE imagesets
+(@1x/@2x/@3x). Stroke paths use `currentColor`, so they tint with the iOS 26 glass bar's
+selected/unselected states. Shared weight is the Hugeicons 1.5px stroke at ~28pt.
+
+Icons (Hugeicons free, https://hugeicons.com — import names from @hugeicons/core-free-icons):
+  TabToday    -> Tv01            (what's on now)
+  TabSchedule -> Calendar03      (calendar + day grid)
+  TabLibrary  -> PlayList        (media card with play mark)
+  TabAdd      -> PlusSignSquare  (rounded square with a plus)
+
+To swap a glyph, copy the icon's raw SVG paths from hugeicons.com into GLYPHS below
+(keep stroke="currentColor", fill="none" on the root) and re-run this script.
+"""
+import json, os, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SVGDIR = os.path.join(HERE, "vector")
 XCASSETS = os.path.normpath(os.path.join(HERE, "..", "..", "ios", "Resources", "Assets.xcassets"))
 PT = 30
 SCALES = [1, 2, 3]
-RAD = 0.21          # shared corner roundness as a fraction of a form's smaller side
+# Hugeicons content bleeds to a ~2u margin in its 24u box; the old bespoke glyphs sat at a ~4u
+# margin. Pad the canvas so the glyph's optical footprint matches (and isn't oversized in the bar).
+PAD = 3
+VB = 24 + 2 * PAD
 os.makedirs(SVGDIR, exist_ok=True)
 
+# Inner SVG markup (paths only) for each glyph. The root <svg fill="none"> is added by svg().
+GLYPHS = {
+    # Tv01: rounded screen on a center antenna.
+    "TabToday": '''
+  <path d="M2 14C2 10.2288 2 8.34315 3.17157 7.17157C4.34315 6 6.22876 6 10 6H14C17.7712 6 19.6569 6 20.8284 7.17157C22 8.34315 22 10.2288 22 14C22 17.7712 22 19.6569 20.8284 20.8284C19.6569 22 17.7712 22 14 22H10C6.22876 22 4.34315 22 3.17157 20.8284C2 19.6569 2 17.7712 2 14Z" stroke="currentColor" stroke-linecap="round" stroke-width="1.5"/>
+  <path d="M9 3L12 6L16 2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>''',
 
-def rr(x, y, w, h, r=None):
-    """Rounded-rect as a path (so it can join an even-odd cutout group)."""
-    if r is None:
-        r = RAD * min(w, h)
-    return (f"M{x+r},{y} H{x+w-r} A{r},{r} 0 0 1 {x+w},{y+r} V{y+h-r} "
-            f"A{r},{r} 0 0 1 {x+w-r},{y+h} H{x+r} A{r},{r} 0 0 1 {x},{y+h-r} "
-            f"V{y+r} A{r},{r} 0 0 1 {x+r},{y} Z")
+    # Calendar03: rounded calendar with binding tabs, header bar and a 3x2 day grid.
+    "TabSchedule": '''
+  <path d="M16 2V6M8 2V6" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M13 4H11C7.22876 4 5.34315 4 4.17157 5.17157C3 6.34315 3 8.22876 3 12V14C3 17.7712 3 19.6569 4.17157 20.8284C5.34315 22 7.22876 22 11 22H13C16.7712 22 18.6569 22 19.8284 20.8284C21 19.6569 21 17.7712 21 14V12C21 8.22876 21 6.34315 19.8284 5.17157C18.6569 4 16.7712 4 13 4Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M3 10H21" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M12.1258 14H12.0008M12.1258 18H12.0008M7.625 14H7.5M7.625 18H7.5M16.625 14H16.5M12.2508 14C12.2508 14.1381 12.1389 14.25 12.0008 14.25C11.8628 14.25 11.7508 14.1381 11.7508 14C11.7508 13.8619 11.8628 13.75 12.0008 13.75C12.1389 13.75 12.2508 13.8619 12.2508 14ZM12.2508 18C12.2508 18.1381 12.1389 18.25 12.0008 18.25C11.8628 18.25 11.7508 18.1381 11.7508 18C11.7508 17.8619 11.8628 17.75 12.0008 17.75C12.1389 17.75 12.2508 17.8619 12.2508 18ZM7.75 14C7.75 14.1381 7.63807 14.25 7.5 14.25C7.36193 14.25 7.25 14.1381 7.25 14C7.25 13.8619 7.36193 13.75 7.5 13.75C7.63807 13.75 7.75 13.8619 7.75 14ZM7.75 18C7.75 18.1381 7.63807 18.25 7.5 18.25C7.36193 18.25 7.25 18.1381 7.25 18C7.25 17.8619 7.36193 17.75 7.5 17.75C7.63807 17.75 7.75 17.8619 7.75 18ZM16.75 14C16.75 14.1381 16.6381 14.25 16.5 14.25C16.3619 14.25 16.25 14.1381 16.25 14C16.25 13.8619 16.3619 13.75 16.5 13.75C16.6381 13.75 16.75 13.8619 16.75 14Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>''',
 
+    # PlayList: rounded media card with a play triangle, slats reading like film/episodes.
+    "TabLibrary": '''
+  <path d="M2.50012 7.5H21.5001" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M17.0001 2.5L14.0001 7.5" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M10.0001 2.5L7.00012 7.5" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M14.9531 14.8948C14.8016 15.5215 14.0857 15.9644 12.6539 16.8502C11.2697 17.7064 10.5777 18.1346 10.0199 17.9625C9.78934 17.8913 9.57925 17.7562 9.40982 17.57C9 17.1198 9 16.2465 9 14.5C9 12.7535 9 11.8802 9.40982 11.4299C9.57925 11.2438 9.78934 11.1087 10.0199 11.0375C10.5777 10.8654 11.2697 11.2936 12.6539 12.1498C14.0857 13.0356 14.8016 13.4785 14.9531 14.1052C15.0156 14.3639 15.0156 14.6361 14.9531 14.8948Z" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5"/>''',
 
-def round_poly(pts, r):
-    """Path for a polygon with every corner rounded by radius r (clamped to edges)."""
-    n = len(pts)
-    seg = []
-    for i in range(n):
-        v, p, nx = pts[i], pts[(i - 1) % n], pts[(i + 1) % n]
-        def unit(a, b):
-            dx, dy = a[0] - b[0], a[1] - b[1]
-            d = math.hypot(dx, dy) or 1
-            return (dx / d, dy / d), d
-        (e1, d1), (e2, d2) = unit(p, v), unit(nx, v)
-        rr_ = min(r, d1 / 2, d2 / 2)
-        entry = (v[0] + e1[0] * rr_, v[1] + e1[1] * rr_)
-        exit_ = (v[0] + e2[0] * rr_, v[1] + e2[1] * rr_)
-        seg.append((entry, v, exit_))
-    d = f"M{seg[0][0][0]:.3f},{seg[0][0][1]:.3f} "
-    for i in range(n):
-        _, v, ex = seg[i]
-        d += f"Q{v[0]:.3f},{v[1]:.3f} {ex[0]:.3f},{ex[1]:.3f} "
-        ne = seg[(i + 1) % n][0]
-        d += f"L{ne[0]:.3f},{ne[1]:.3f} "
-    return d + "Z"
-
-
-def star(cx, cy, R, k):
-    """4-point concave sparkle (the brand 'glint'); k pinches the waist toward center."""
-    return (f"M{cx},{cy-R} Q{cx+k},{cy-k} {cx+R},{cy} Q{cx+k},{cy+k} {cx},{cy+R} "
-            f"Q{cx-k},{cy+k} {cx-R},{cy} Q{cx-k},{cy-k} {cx},{cy-R} Z")
-
-
-def mirror_x(pts, axis=12.0):
-    return [(2 * axis - x, y) for x, y in pts]
-
-
-def cross(cx, cy, a, t):
-    return [(cx-t, cy-a), (cx+t, cy-a), (cx+t, cy-t), (cx+a, cy-t), (cx+a, cy+t),
-            (cx+t, cy+t), (cx+t, cy+a), (cx-t, cy+a), (cx-t, cy+t), (cx-a, cy+t),
-            (cx-a, cy-t), (cx-t, cy-t)]
-
-
-# --- the four glyphs --------------------------------------------------------
-# Today: a TV (what's on now) — a filled rounded screen on a center pedestal stand.
-TODAY = f'''
-  <path fill="#fff" d="{rr(7.6,17.4,8.8,1.9,0.95)}"/>
-  <path fill="#fff" d="{round_poly([(10.7,15.5),(13.3,15.5),(14.0,17.8),(10.0,17.8)], 0.5)}"/>
-  <path fill="#fff" d="{rr(3.5,4.6,17.0,11.4,2.9)}"/>'''
-
-# Schedule: rounded calendar with binding tabs, header bar and a 3x2 day grid.
-# (whole unit nudged down 0.4 so its optical center sits at the box center.)
-_cells = " ".join(
-    rr(5.5 + c * 5.0, 11.4 + r * 4.0, 3.4, 3.0, 0.95)
-    for r in range(2) for c in range(3)
-)
-SCHEDULE = f'''
-  <path fill="#fff" d="{rr(7.7,2.7,2,4,1)}"/>
-  <path fill="#fff" d="{rr(14.3,2.7,2,4,1)}"/>
-  <path fill="#fff" fill-rule="evenodd" d="
-    {rr(3.6,5.4,16.8,15.6,3.4)}
-    {rr(6.2,8.8,11.6,1.4,0.7)}
-    {_cells}"/>'''
-
-# Library: a solid media card with a rounded play mark, plus a SOLID card peeking
-# behind it, separated by a clean transparent gap (mask) so all glyphs share one weight.
-_front, _back, _moat = (4.3, 7.6, 12.4, 11.8), (7.3, 4.6, 12.4, 11.8), 0.95
-LIBRARY = f'''
-  <defs><mask id="libcut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
-    <rect x="0" y="0" width="24" height="24" fill="#fff"/>
-    <path fill="#000" d="{rr(_front[0]-_moat,_front[1]-_moat,_front[2]+2*_moat,_front[3]+2*_moat,2.6)}"/>
-  </mask></defs>
-  <path fill="#fff" mask="url(#libcut)" d="{rr(*_back,2.6)}"/>
-  <path fill="#fff" fill-rule="evenodd" d="
-    {rr(*_front,2.6)}
-    {round_poly([(8.9,10.9),(8.9,15.9),(13.6,13.4)], 0.7)}"/>'''
-
-# Add: solid rounded square with a slightly slimmer, longer rounded plus cut out of it.
-ADD = f'''
-  <path fill="#fff" fill-rule="evenodd" d="
-    {rr(4.3,4.3,15.4,15.4,3.4)}
-    {round_poly(cross(12,12,4.7,1.4), 0.55)}"/>'''
-
-GLYPHS = {"TabToday": TODAY, "TabSchedule": SCHEDULE, "TabLibrary": LIBRARY, "TabAdd": ADD}
+    # PlusSignSquare: rounded square with a centered plus.
+    "TabAdd": '''
+  <path d="M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z" stroke="currentColor" stroke-linejoin="round" stroke-width="1.5"/>
+  <path d="M12 8V16M16 12H8" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"/>''',
+}
 
 
 def svg(body):
-    return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">{body}</svg>'
+    return ('<svg xmlns="http://www.w3.org/2000/svg" '
+            f'viewBox="{-PAD} {-PAD} {VB} {VB}" width="{VB}" height="{VB}" '
+            f'fill="none">{body}\n</svg>')
 
 
 def contents(name):
