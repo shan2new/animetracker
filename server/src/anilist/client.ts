@@ -19,6 +19,9 @@ const MEDIA_FIELDS = `
   seasonYear
   popularity
   trending
+  duration
+  studios { nodes { name isAnimationStudio } }
+  streamingEpisodes { title thumbnail }
   nextAiringEpisode { episode airingAt }
   relations { edges { relationType node { id type format } } }
 `

@@ -12,7 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
-import type { FranchiseUpcoming } from '../types/api.js'
+import type { EpisodeMeta, FranchiseUpcoming } from '../types/api.js'
 
 // ---------- Cached AniList catalogue ----------
 
@@ -34,6 +34,11 @@ export const media = pgTable(
     banner: text('banner'),
     description: text('description'),
     genres: jsonb('genres').$type<string[]>().default([]),
+    // Studios (AniList animation studios) or networks (TMDB) — names only, for the detail meta line.
+    studios: jsonb('studios').$type<string[]>().default([]),
+    // Per-episode metadata. TMDB: full (title/overview/air_date/still/runtime) from the season
+    // endpoint. AniList: best-effort titles/thumbnails from streamingEpisodes (no per-ep overview).
+    episodesList: jsonb('episodes_list').$type<EpisodeMeta[]>().default([]),
     // nextAiringEpisode snapshot: { episode, airingAt(seconds) } | null
     nextAiringEpisode: jsonb('next_airing_episode').$type<{ episode: number; airingAt: number } | null>(),
     seasonYear: integer('season_year'),

@@ -34,6 +34,9 @@ export interface AniListMedia {
   seasonYear: number | null
   popularity: number | null
   trending: number | null
+  duration?: number | null // per-episode runtime (minutes)
+  studios?: { nodes: { name: string; isAnimationStudio: boolean }[] } | null
+  streamingEpisodes?: { title: string | null; thumbnail: string | null }[] | null
   nextAiringEpisode: { episode: number; airingAt: number } | null
   relations?: { edges: AniListRelationEdge[] } | null
 }

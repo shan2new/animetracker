@@ -12,8 +12,9 @@ type MediaRow = typeof media.$inferSelect
 type MemberRow = typeof franchiseMember.$inferSelect
 type FranchiseRow = typeof franchise.$inferSelect
 
-/** Derive a FranchisePart's airing fields from a media row + the user's progress. Mirrors legacy `toShow`. */
-function toPart(m: MediaRow, member: MemberRow, watched: number): FranchisePart {
+/** Derive a FranchisePart's airing fields from a media row + the user's progress. Mirrors legacy `toShow`.
+ *  `opts.episodes` includes the full per-episode list (detail only; omitted from lean list payloads). */
+function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episodes?: boolean }): FranchisePart {
   const title = m.titleEnglish || m.titleRomaji || `Anime #${m.id}`
   const isReleasing = m.status === 'RELEASING'
   const total = m.episodes ?? 0
@@ -26,6 +27,10 @@ function toPart(m: MediaRow, member: MemberRow, watched: number): FranchisePart 
       : next && next.episode > 1
         ? next.airingAt * 1000 - 7 * D
         : null
+
+  const eps = m.episodesList ?? []
+  // Episodes sharing the exact next airing instant ⇒ a same-day multi-episode / full-season drop.
+  const nextAiringCount = nextAiringAt != null ? eps.filter((e) => e.airDate === nextAiringAt).length : 0
 
   return {
     mediaId: m.id,
@@ -46,6 +51,10 @@ function toPart(m: MediaRow, member: MemberRow, watched: number): FranchisePart 
     synopsis: stripHtml(m.description),
     genres: (m.genres ?? []).slice(0, 4),
     progress: watched,
+    year: m.seasonYear ?? null,
+    studios: m.studios ?? [],
+    nextAiringCount,
+    episodes: opts?.episodes ? eps : [],
   }
 }
 
@@ -79,18 +88,26 @@ function buildFranchise(
   mediaById: Map<number, MediaRow>,
   watchedById: Map<number, number>,
   sub: { status: WatchStatus } | null,
+  opts?: { episodes?: boolean },
 ): Franchise {
   const parts = sortParts(
     mems
       .map((mem) => {
         const m = mediaById.get(mem.mediaId)
-        return m ? toPart(m, mem, watchedById.get(mem.mediaId) ?? 0) : null
+        return m ? toPart(m, mem, watchedById.get(mem.mediaId) ?? 0, opts) : null
       })
       .filter((p): p is FranchisePart => p !== null),
   )
 
   const partCounts: Partial<Record<PartKind, number>> = {}
   for (const p of parts) partCounts[p.kind] = (partCounts[p.kind] ?? 0) + 1
+
+  // Franchise-level meta for the detail header: premiere year (earliest dated part) + the primary
+  // installment's studios/networks (fall back to the first part that has any).
+  const primary = f.primaryMediaId != null ? mediaById.get(f.primaryMediaId) : undefined
+  const years = parts.map((p) => p.year).filter((y): y is number => y != null)
+  const year = years.length ? Math.min(...years) : (primary?.seasonYear ?? null)
+  const studios = (primary?.studios?.length ? primary.studios : parts.find((p) => p.studios.length > 0)?.studios) ?? []
 
   return {
     id: f.id,
@@ -105,6 +122,8 @@ function buildFranchise(
     parts,
     subscription: sub,
     upcoming: f.upcoming ?? null,
+    year,
+    studios,
   }
 }
 
@@ -129,7 +148,8 @@ export async function getFranchise(franchiseId: string, userId?: string): Promis
     if (s) sub = { status: s.status as WatchStatus }
   }
 
-  return buildFranchise(f, members, mediaById, watchedById, sub)
+  // Detail is the only response that ships the full per-episode list.
+  return buildFranchise(f, members, mediaById, watchedById, sub, { episodes: true })
 }
 
 /** Build a list of FranchiseSummary for the given franchise ids (trending/search). */
@@ -154,13 +174,16 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
       const mems = byFranchise.get(f.id) ?? []
       let nextAiringAt: number | null = null
       let releasing = false
+      let minYear: number | null = null
       for (const mem of mems) {
         const m = mediaById.get(mem.mediaId)
         if (!m) continue
         if (m.status === 'RELEASING') releasing = true
         const next = m.nextAiringEpisode && m.nextAiringEpisode.airingAt > 0 ? m.nextAiringEpisode.airingAt * 1000 : null
         if (next && (nextAiringAt == null || next < nextAiringAt)) nextAiringAt = next
+        if (m.seasonYear != null && (minYear == null || m.seasonYear < minYear)) minYear = m.seasonYear
       }
+      const primary = f.primaryMediaId != null ? mediaById.get(f.primaryMediaId) : undefined
       return {
         id: f.id,
         source: (f.source as MediaSource) ?? 'anilist',
@@ -171,6 +194,7 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
         partCount: mems.length,
         nextAiringAt,
         upcoming: f.upcoming ?? null,
+        year: primary?.seasonYear ?? minYear,
       }
     })
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))

@@ -1,7 +1,8 @@
 import type { MediaStatus } from '../anilist/types.js'
 import type { media } from '../db/schema.js'
 import type { GroupingResult } from '../grouping/llm.js'
-import type { TmdbSearchResult, TmdbSeason, TmdbShow } from './types.js'
+import type { EpisodeMeta } from '../types/api.js'
+import type { TmdbEpisode, TmdbSearchResult, TmdbSeason, TmdbShow } from './types.js'
 
 // Pure TMDB → local-model mapping. No I/O here — everything is unit-testable.
 
@@ -71,7 +72,29 @@ export function deriveSeasonStatus(show: TmdbShow, season: TmdbSeason, nowMs: nu
   return 'FINISHED'
 }
 
-export function tmdbSeasonToMediaRow(show: TmdbShow, season: TmdbSeason, nowMs: number): MediaRow {
+/** Map a TMDB season's full episode list to the source-neutral EpisodeMeta shape (dates → 17:00 UTC ms). */
+export function tmdbEpisodes(episodes: TmdbEpisode[] | null | undefined): EpisodeMeta[] {
+  return (episodes ?? []).map((e) => ({
+    number: e.episode_number,
+    title: e.name || null,
+    airDate: airDateToMs(e.air_date),
+    overview: e.overview || null,
+    still: imageUrl(e.still_path, 'w780'),
+    runtime: e.runtime ?? null,
+  }))
+}
+
+/** Network names for the detail meta line (the TV analogue of AniList studios). */
+export function tmdbNetworks(show: TmdbShow): string[] {
+  return (show.networks ?? []).map((n) => n.name).slice(0, 3)
+}
+
+export function tmdbSeasonToMediaRow(
+  show: TmdbShow,
+  season: TmdbSeason,
+  nowMs: number,
+  episodes: EpisodeMeta[] = [],
+): MediaRow {
   const status = deriveSeasonStatus(show, season, nowMs)
   const next = show.next_episode_to_air
   const nextAirMs = status === 'RELEASING' ? airDateToMs(next?.air_date) : null
@@ -96,6 +119,8 @@ export function tmdbSeasonToMediaRow(show: TmdbShow, season: TmdbSeason, nowMs: 
     banner: imageUrl(show.backdrop_path, 'w1280') ?? imageUrl(show.poster_path, 'w780'),
     description: season.overview || show.overview || null,
     genres: (show.genres ?? []).map((g) => g.name),
+    studios: tmdbNetworks(show),
+    episodesList: episodes,
     nextAiringEpisode:
       next && nextAirMs != null
         ? { episode: next.episode_number, airingAt: Math.floor(nextAirMs / 1000) }

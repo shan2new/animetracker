@@ -22,6 +22,21 @@ keep decoding):
 
 ## Core JSON shapes
 
+### EpisodeMeta
+Per-episode metadata. Richness is **source-dependent**: TMDB gives title/overview/still/runtime/date
+from the season endpoint; AniList gives best-effort titles/thumbnails from `streamingEpisodes`
+(numbered by position, often sparse) and **no** per-episode `airDate`/`overview`. Any field may be null.
+```jsonc
+{
+  "number": 1,
+  "title": "The North Remembers" | null,
+  "airDate": 1333472400000 | null,   // ms epoch (TMDB 17:00 UTC); null for AniList
+  "overview": "…" | null,            // null for AniList
+  "still": "https://…" | null,       // thumbnail
+  "runtime": 51 | null               // minutes
+}
+```
+
 ### FranchisePart
 A single installment (one season/movie/OVA/etc.) inside a franchise, merged with the
 authenticated user's progress.
@@ -44,7 +59,11 @@ authenticated user's progress.
   "lastAiredAt": 1372000000000, // ms epoch or null
   "synopsis": "…",
   "genres": ["Action","Drama"],
-  "progress": 25              // user's watched count for THIS part (0 if not subscribed/unwatched)
+  "progress": 25,             // user's watched count for THIS part (0 if not subscribed/unwatched)
+  "year": 2013,               // premiere/season year, or null
+  "studios": ["Wit Studio"],  // studios (anime) or networks (TV) — names only
+  "nextAiringCount": 1,       // episodes sharing the next airing date; >1 ⇒ a full-season "drop"
+  "episodes": [ EpisodeMeta, … ] // FULL list on GET /franchises/:id ONLY; [] on list/library payloads
 }
 ```
 
@@ -60,8 +79,10 @@ authenticated user's progress.
   "genres": ["Action","Drama"],
   "isReleasing": true,             // any part currently releasing
   "partCounts": { "season": 4, "movie": 2, "ova": 3, "special": 1 },
-  "parts": [ FranchisePart, … ],   // ordered by kind then sequence
-  "subscription": { "status": "watching" } | null
+  "parts": [ FranchisePart, … ],   // ordered by kind then sequence; each part carries its `episodes`
+  "subscription": { "status": "watching" } | null,
+  "year": 2013,                    // premiere year (earliest dated part), or null
+  "studios": ["Wit Studio"]        // primary installment's studios (anime) / networks (TV)
 }
 ```
 
@@ -76,6 +97,7 @@ authenticated user's progress.
   "isReleasing": true,
   "partCount": 10,
   "nextAiringAt": 1700000000000,   // soonest upcoming across parts, or null
+  "year": 2013,                    // premiere year (for "Anime · 2023" / "TV · 2024"), or null
   // present only in /me/library:
   "status": "watching",            // watching | completed | planned
   "behind": 2,                      // unwatched aired eps across releasing parts

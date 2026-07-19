@@ -3,8 +3,41 @@ import { fetchByIds } from '../anilist/client.js'
 import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
 import { media, mediaRelations } from '../db/schema.js'
+import type { EpisodeMeta } from '../types/api.js'
 
 export type MediaRow = typeof media.$inferInsert
+
+/** Strip AniList's "Episode 12 - " prefix from a streaming-episode title. */
+function cleanEpisodeTitle(raw: string): string {
+  const m = raw.match(/^\s*Episode\s+\d+\s*[-–:]\s*(.+)$/i)
+  return (m?.[1] ?? raw).trim()
+}
+
+/**
+ * Best-effort per-episode metadata for an AniList media, from `streamingEpisodes`. AniList exposes
+ * no per-episode air date or overview; titles/thumbnails come as an ordered (but un-numbered) list,
+ * so episodes are numbered by position. Sparse or empty for many titles — the client then falls
+ * back to "Episode N", and the next-episode date badge uses the season-level `nextAiringAt`.
+ */
+function aniListEpisodes(m: AniListMedia): EpisodeMeta[] {
+  const se = m.streamingEpisodes ?? []
+  return se.map((e, i) => ({
+    number: i + 1,
+    title: e.title ? cleanEpisodeTitle(e.title) : null,
+    airDate: null,
+    overview: null,
+    still: e.thumbnail ?? null,
+    runtime: m.duration ?? null,
+  }))
+}
+
+/** Studio names for an AniList media, preferring animation studios. */
+function aniListStudios(m: AniListMedia): string[] {
+  const nodes = m.studios?.nodes ?? []
+  const anim = nodes.filter((n) => n.isAnimationStudio).map((n) => n.name)
+  const names = anim.length ? anim : nodes.map((n) => n.name)
+  return names.slice(0, 3)
+}
 
 export function toMediaRow(m: AniListMedia): MediaRow {
   return {
@@ -20,6 +53,8 @@ export function toMediaRow(m: AniListMedia): MediaRow {
     banner: m.bannerImage ?? m.coverImage.extraLarge ?? null,
     description: m.description,
     genres: m.genres ?? [],
+    studios: aniListStudios(m),
+    episodesList: aniListEpisodes(m),
     nextAiringEpisode: m.nextAiringEpisode,
     seasonYear: m.seasonYear,
     season: m.season,
@@ -53,6 +88,8 @@ export async function upsertMediaRows(rows: MediaRow[], opts: { setLastAired?: b
         banner: sqlExcluded('banner'),
         description: sqlExcluded('description'),
         genres: sqlExcluded('genres'),
+        studios: sqlExcluded('studios'),
+        episodesList: sqlExcluded('episodes_list'),
         nextAiringEpisode: sqlExcluded('next_airing_episode'),
         seasonYear: sqlExcluded('season_year'),
         season: sqlExcluded('season'),

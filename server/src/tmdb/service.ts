@@ -4,8 +4,28 @@ import { franchise, franchiseMember } from '../db/schema.js'
 import type { GroupedPart } from '../grouping/llm.js'
 import { persistFranchises, type GroupOutcome } from '../grouping/service.js'
 import { upsertMediaRows } from '../services/mediaStore.js'
-import { getShow } from './client.js'
-import { imageUrl, includedSeasons, tmdbSeasonToMediaRow, tmdbShowToGroupingResult } from './mapping.js'
+import type { EpisodeMeta } from '../types/api.js'
+import { getSeason, getShow } from './client.js'
+import { imageUrl, includedSeasons, tmdbEpisodes, tmdbSeasonToMediaRow, tmdbShowToGroupingResult } from './mapping.js'
+import type { TmdbSeason } from './types.js'
+
+/**
+ * Best-effort per-episode metadata for every included season, keyed by season_number. A failed
+ * season fetch degrades to no episodes rather than failing the whole materialization.
+ */
+async function fetchSeasonEpisodes(showId: number, seasons: TmdbSeason[]): Promise<Map<number, EpisodeMeta[]>> {
+  const entries = await Promise.all(
+    seasons.map(async (s): Promise<[number, EpisodeMeta[]]> => {
+      try {
+        const detail = await getSeason(showId, s.season_number)
+        return [s.season_number, detail ? tmdbEpisodes(detail.episodes) : []]
+      } catch {
+        return [s.season_number, []]
+      }
+    }),
+  )
+  return new Map(entries)
+}
 
 /**
  * Idempotently materialize a TMDB show as a franchise (seasons as members). Deterministic —
@@ -26,9 +46,11 @@ export async function ensureTvFranchise(showId: number): Promise<GroupOutcome | 
   if (!show || includedSeasons(show).length === 0) return null
 
   const now = Date.now()
+  const seasons = includedSeasons(show)
+  const episodesBySeason = await fetchSeasonEpisodes(showId, seasons)
   let rows
   try {
-    rows = includedSeasons(show).map((s) => tmdbSeasonToMediaRow(show, s, now))
+    rows = seasons.map((s) => tmdbSeasonToMediaRow(show, s, now, episodesBySeason.get(s.season_number) ?? []))
   } catch (err) {
     // Season id outside the offset-safe range — skip the show rather than corrupt the keyspace.
     console.warn(`ensureTvFranchise: skipping show ${showId}:`, (err as Error).message)
@@ -74,9 +96,11 @@ export async function refreshTvShow(
   if (!show || includedSeasons(show).length === 0) return { refreshed: false, attached: 0 }
 
   const now = Date.now()
+  const seasons = includedSeasons(show)
+  const episodesBySeason = await fetchSeasonEpisodes(showId, seasons)
   let rows
   try {
-    rows = includedSeasons(show).map((s) => tmdbSeasonToMediaRow(show, s, now))
+    rows = seasons.map((s) => tmdbSeasonToMediaRow(show, s, now, episodesBySeason.get(s.season_number) ?? []))
   } catch (err) {
     console.warn(`refreshTvShow: skipping show ${showId}:`, (err as Error).message)
     return { refreshed: false, attached: 0 }
