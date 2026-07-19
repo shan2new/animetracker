@@ -46,6 +46,8 @@ final class AppModel {
     // Library filtering.
     var libFilter: LibFilter = .all
     var libQuery = ""
+    // Global anime/TV filter — applies to Today, Schedule, Library, and search results.
+    var mediaFilter: MediaFilter = .all
 
     // Live clock for countdowns.
     var now: Int64 = .nowMs
@@ -260,11 +262,31 @@ final class AppModel {
 
     func isInLibrary(_ id: String) -> Bool { libraryIds.contains(id) || pendingAdds.contains(id) }
 
+    /// Search results with the anime/TV chip applied (the server interleaves both sources).
+    var filteredSearchResults: [FranchiseSummary] {
+        searchResults.filter { matchesMediaFilter($0.source) }
+    }
+
     func franchise(id: String) -> Franchise? { library.first { $0.id == id } }
 
-    /// All subscribed franchises that have a currently-releasing part.
+    func matchesMediaFilter(_ source: MediaSource) -> Bool {
+        switch mediaFilter {
+        case .all: return true
+        case .anime: return source == .anilist
+        case .tv: return source == .tmdb
+        }
+    }
+
+    /// True when the library spans both catalogues — the only case the anime/TV chips earn
+    /// their screen space.
+    var libraryHasMixedSources: Bool {
+        let sources = Set(library.map(\.source))
+        return sources.count > 1
+    }
+
+    /// All subscribed franchises that have a currently-releasing part (media-filtered).
     var airingFranchises: [Franchise] {
-        library.filter { $0.releasingPart != nil }
+        library.filter { $0.releasingPart != nil && matchesMediaFilter($0.source) }
     }
 
     var libraryEmpty: Bool { library.isEmpty }
@@ -384,7 +406,9 @@ final class AppModel {
 
     var librarySections: [LibrarySection] {
         let q = libQuery.lowercased().trimmingCharacters(in: .whitespaces)
-        let filtered = library.filter { q.isEmpty || $0.title.lowercased().contains(q) }
+        let filtered = library.filter {
+            (q.isEmpty || $0.title.lowercased().contains(q)) && matchesMediaFilter($0.source)
+        }
         return LibGroup.allCases
             .filter { libFilter == .all || libFilter == .group($0) }
             .compactMap { group -> LibrarySection? in
@@ -641,6 +665,20 @@ enum LibGroup: String, CaseIterable {
     var cardAction: CardAction { self == .behind ? .mark : .none }
 }
 
+enum MediaFilter: String, CaseIterable {
+    case all
+    case anime
+    case tv
+
+    var chipLabel: String {
+        switch self {
+        case .all: return "All"
+        case .anime: return "Anime"
+        case .tv: return "TV"
+        }
+    }
+}
+
 enum LibFilter: Equatable {
     case all
     case group(LibGroup)
@@ -677,7 +715,7 @@ extension Franchise {
     /// Returns a copy with the watch status replaced (both the library field and the subscription
     /// mirror, so `effectiveStatus` flips immediately). Used for optimistic status updates.
     func withStatus(_ newStatus: WatchStatus) -> Franchise {
-        Franchise(id: id, title: title, cover: cover, banner: banner, synopsis: synopsis,
+        Franchise(id: id, source: source, title: title, cover: cover, banner: banner, synopsis: synopsis,
                   genres: genres, isReleasing: isReleasing, partCounts: partCounts, parts: parts,
                   subscription: Subscription(status: newStatus), upcoming: upcoming,
                   status: newStatus, behind: behind, newParts: newParts)

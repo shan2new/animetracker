@@ -22,7 +22,11 @@ struct LibraryView: View {
                     .padding(.top, 18)
 
                 if !appModel.libraryEmpty {
-                    filterChips.padding(.top, 16)
+                    // Anime/TV chips only when the library actually spans both catalogues.
+                    if appModel.libraryHasMixedSources {
+                        MediaFilterChips().padding(.top, 16)
+                    }
+                    filterChips.padding(.top, appModel.libraryHasMixedSources ? 10 : 16)
                 }
                 content.padding(.top, 6)
             }

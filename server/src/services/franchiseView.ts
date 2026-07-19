@@ -2,7 +2,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions } from '../db/schema.js'
 import type { PartKind } from '../grouping/partKind.js'
-import type { Franchise, FranchisePart, FranchiseSummary, LibraryFranchise, WatchStatus } from '../types/api.js'
+import type { Franchise, FranchisePart, FranchiseSummary, LibraryFranchise, MediaSource, WatchStatus } from '../types/api.js'
 import { stripHtml } from '../util/text.js'
 
 const D = 86_400_000
@@ -94,6 +94,7 @@ function buildFranchise(
 
   return {
     id: f.id,
+    source: (f.source as MediaSource) ?? 'anilist',
     title: f.title,
     cover: f.cover ?? '',
     banner: f.banner || f.cover || '',
@@ -162,6 +163,7 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
       }
       return {
         id: f.id,
+        source: (f.source as MediaSource) ?? 'anilist',
         title: f.title,
         cover: f.cover ?? '',
         banner: f.banner || f.cover || '',

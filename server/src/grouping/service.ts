@@ -6,7 +6,15 @@ import { env } from '../env.js'
 import { makeAniListFetcher, upsertMedia } from '../services/mediaStore.js'
 import { stripHtml } from '../util/text.js'
 import { expandComponent, type MediaFetcher } from './graph.js'
-import { DeterministicGrouper, groupingTier, makeGrouper, type GroupingInput, type GroupingResult, type LlmGrouper } from './llm.js'
+import {
+  DeterministicGrouper,
+  groupingTier,
+  makeGrouper,
+  type GroupedFranchise,
+  type GroupingInput,
+  type GroupingResult,
+  type LlmGrouper,
+} from './llm.js'
 import { partKindForFormat } from './partKind.js'
 
 export interface GroupOptions {
@@ -71,30 +79,73 @@ export async function groupKnownComponent(
     result = await new DeterministicGrouper().group(input)
   }
 
+  return persistFranchises({
+    result,
+    seedId,
+    allIds: ids,
+    metaFor: (f) => {
+      const memberIds = f.parts.map((p) => p.id)
+      const primary = pickPrimary(memberIds, component)
+      return {
+        title: f.canonicalName,
+        primaryMediaId: primary?.id ?? null,
+        cover: primary?.coverImage.extraLarge ?? primary?.coverImage.large ?? null,
+        banner: primary?.bannerImage ?? primary?.coverImage.extraLarge ?? null,
+        description: stripHtml(primary?.description ?? null),
+        genres: dedupeGenres(memberIds, component),
+        groupingSource: result.model ? 'llm' : 'relations',
+        groupingModel: result.model,
+        confidence: result.confidence,
+        source: 'anilist',
+        externalId: null,
+      }
+    },
+    onRaced: (raced, tx) => attachToExisting(raced, component, seedId, tx),
+  })
+}
+
+/** Per-franchise row values supplied by the caller of persistFranchises. */
+export interface FranchisePersistMeta {
+  title: string
+  primaryMediaId: number | null
+  cover: string | null
+  banner: string | null
+  description: string | null
+  genres: string[]
+  groupingSource: string
+  groupingModel: string | null
+  confidence: number | null
+  source: 'anilist' | 'tmdb'
+  externalId: number | null
+}
+
+/**
+ * Persist a GroupingResult as franchise + member rows, with the create-race handling shared by
+ * every source (anime's LLM/deterministic grouping and the deterministic TMDB show path).
+ * The grouper/LLM never appears here — callers hand over a finished `result` plus row metadata.
+ */
+export async function persistFranchises(opts: {
+  result: GroupingResult
+  seedId: number
+  /** Every media id involved — used for the in-transaction race re-check. */
+  allIds: number[]
+  metaFor: (f: GroupedFranchise) => FranchisePersistMeta
+  /** Called when another request grouped (part of) `allIds` first. */
+  onRaced: (existing: { mediaId: number; franchiseId: string }[], tx: Executor) => Promise<GroupOutcome>
+}): Promise<GroupOutcome> {
+  const { result, seedId, allIds } = opts
   try {
     return await db.transaction(async (tx) => {
       // Re-check inside the tx: a concurrent request may have grouped this component while the
       // grouper ran. If so, attach onto the winner rather than creating a duplicate franchise.
-      const raced = await tx.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, ids))
-      if (raced.length > 0) return attachToExisting(raced, component, seedId, tx)
+      const raced = await tx.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, allIds))
+      if (raced.length > 0) return opts.onRaced(raced, tx)
 
       let seedFranchiseId: string | null = null
       for (const f of result.franchises) {
-        const memberIds = f.parts.map((p) => p.id)
-        const primary = pickPrimary(memberIds, component)
         const [row] = await tx
           .insert(franchise)
-          .values({
-            title: f.canonicalName,
-            primaryMediaId: primary?.id ?? null,
-            cover: primary?.coverImage.extraLarge ?? primary?.coverImage.large ?? null,
-            banner: primary?.bannerImage ?? primary?.coverImage.extraLarge ?? null,
-            description: stripHtml(primary?.description ?? null),
-            genres: dedupeGenres(memberIds, component),
-            groupingSource: result.model ? 'llm' : 'relations',
-            groupingModel: result.model,
-            confidence: result.confidence,
-          })
+          .values(opts.metaFor(f))
           .returning({ id: franchise.id })
 
         const fid = row!.id
@@ -125,7 +176,7 @@ export async function groupKnownComponent(
     // return the winner. Any other error — including a genuine "seed not placed" bug — is real
     // and must surface, so we rethrow it rather than masking it behind a re-read.
     if ((err as { code?: string })?.code !== '23505') throw err
-    const winners = await db.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, ids))
+    const winners = await db.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, allIds))
     if (winners.length > 0) {
       const fid = winners.find((m) => m.mediaId === seedId)?.franchiseId ?? mostCommon(winners.map((m) => m.franchiseId))
       if (fid) return { franchiseId: fid, created: false, attached: 0 }

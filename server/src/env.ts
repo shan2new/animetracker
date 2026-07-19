@@ -37,6 +37,11 @@ const schema = z.object({
   SEARCH_CORRECT_DISABLED: envBool(false),
 
   TRENDING_SEED_COUNT: z.coerce.number().default(300),
+
+  // TMDB v4 read access token (Bearer). Powers the general-TV source; when unset, TV
+  // search/sync is silently disabled and the app is anime-only (same spirit as
+  // GROUPING_LLM_DISABLED: absence degrades, never crashes).
+  TMDB_ACCESS_TOKEN: z.string().optional(),
 })
 
 export const env = schema.parse(process.env)

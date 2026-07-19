@@ -23,10 +23,24 @@ npm run db:generate    # regenerate SQL migration after editing src/db/schema.ts
 npm run db:migrate     # apply migrations to DATABASE_URL
 npm run seed -- 60     # seed N trending franchises (hits AniList + LLM)
 npm run group -- 16498 # group one franchise by AniList media id
+npm run tv -- 95396    # materialize one TV franchise by TMDB show id (needs TMDB_ACCESS_TOKEN)
 ```
 
 iOS has no CLI test/build flow here — after editing `project.yml` run `cd ios && xcodegen generate`,
-then build in Xcode. **Never hand-edit `AniTrack.xcodeproj`** (gitignored, regenerated).
+then build in Xcode (or `xcodebuild -scheme AniTrack` — a shared scheme exists for CLI builds).
+**Never hand-edit `AniTrack.xcodeproj`** (gitignored, regenerated).
+
+## Two sources: AniList (anime) + TMDB (general TV)
+
+Franchises carry `source` (`anilist` | `tmdb`); a franchise never mixes sources.
+TV is deterministic — one TMDB show = one franchise, seasons as members (`sequence` =
+season_number), **zero LLM**; all mapping lives in `src/tmdb/mapping.ts` (pure, unit-tested).
+TMDB media rows share the integer `media.id` keyspace via `id = 1e9 + tmdb season id` — never
+change `TMDB_ID_OFFSET`. Search suppresses TMDB hits that are JP animation (AniList owns those).
+TMDB air dates are **date-only**; `airingAt` is synthesized at 17:00 UTC, so iOS gates episode
+notifications/Live Activities to `source == .anilist`. `TMDB_ACCESS_TOKEN` unset = TV disabled
+(anime-only mode; everything still works). Sync jobs must stay source-filtered — never feed
+offset ids to AniList (`refreshAiring`/`attachNewSeasons` filter on `source='anilist'`).
 
 ## Server conventions
 

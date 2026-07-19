@@ -14,6 +14,7 @@
     "db:push": "drizzle-kit push",
     "seed": "tsx src/scripts/seed-trending.ts",
     "group": "tsx src/scripts/group-one.ts",
+    "tv": "tsx src/scripts/tv-one.ts",
     "test": "vitest run"
   },
   "dependencies": {

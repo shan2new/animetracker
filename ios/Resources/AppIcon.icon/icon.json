@@ -1,26 +1,22 @@
 {
   "fill" : {
-    "automatic-gradient" : "extended-srgb:0.04314,0.04314,0.05490,1.00000"
+    "solid" : "extended-srgb:0.94118,0.63529,0.30588,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "play.png",
-          "name" : "play"
-        },
-        {
-          "image-name" : "arc.png",
-          "name" : "arc"
+          "image-name" : "layer-glyph.png",
+          "name" : "layer-glyph"
         }
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0.6
       },
       "translucency" : {
         "enabled" : true,
-        "value" : 0.5
+        "value" : 0.2
       }
     }
   ],

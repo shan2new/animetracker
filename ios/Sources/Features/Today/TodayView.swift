@@ -6,6 +6,7 @@ struct TodayView: View {
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
     private var now: Int64 { appModel.now }
+    @State private var showAbout = false
 
     var body: some View {
         ScrollView {
@@ -64,6 +65,7 @@ struct TodayView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showAbout) { AboutView() }
     }
 
     private var homeEmpty: Bool { appModel.outNow.isEmpty && appModel.soon.isEmpty }
@@ -81,6 +83,15 @@ struct TodayView: View {
                 Text(Formatting.fmtTodayDate(now))
                     .scaledFont(12.5, weight: .medium, monospacedDigit: true)
                     .foregroundStyle(Theme.accent)
+                Spacer()
+                Button {
+                    showAbout = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .scaledFont(16)
+                        .foregroundStyle(Theme.text40)
+                }
+                .buttonStyle(.plain)
             }
             Text(subtitle)
                 .scaledFont(13.5)

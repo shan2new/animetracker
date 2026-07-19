@@ -11,6 +11,13 @@ enum WatchStatus: String, Codable, Sendable, CaseIterable {
     case planned
 }
 
+/// Which catalogue a franchise came from. A franchise never mixes sources; absent in older
+/// server responses, so decoding defaults to `.anilist`.
+enum MediaSource: String, Codable, Sendable {
+    case anilist
+    case tmdb
+}
+
 enum PartKind: String, Codable, Sendable {
     case season
     case movie
@@ -249,6 +256,7 @@ struct FranchiseUpcoming: Codable, Sendable {
 
 struct Franchise: Codable, Identifiable, Sendable {
     let id: String
+    let source: MediaSource
     let title: String
     let cover: String?
     let banner: String?
@@ -266,13 +274,14 @@ struct Franchise: Codable, Identifiable, Sendable {
     let newParts: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, cover, banner, synopsis, genres, isReleasing, partCounts, parts, subscription, upcoming
+        case id, source, title, cover, banner, synopsis, genres, isReleasing, partCounts, parts, subscription, upcoming
         case status, behind, newParts
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
+        source = (try? c.decode(MediaSource.self, forKey: .source)) ?? .anilist
         title = (try? c.decode(String.self, forKey: .title)) ?? "Untitled"
         cover = try? c.decodeIfPresent(String.self, forKey: .cover)
         banner = try? c.decodeIfPresent(String.self, forKey: .banner)
@@ -289,11 +298,11 @@ struct Franchise: Codable, Identifiable, Sendable {
     }
 
     // Memberwise init (previews + optimistic local copies).
-    init(id: String, title: String, cover: String?, banner: String?, synopsis: String?,
+    init(id: String, source: MediaSource, title: String, cover: String?, banner: String?, synopsis: String?,
          genres: [String], isReleasing: Bool, partCounts: PartCounts?, parts: [FranchisePart],
          subscription: Subscription?, upcoming: FranchiseUpcoming? = nil,
          status: WatchStatus?, behind: Int?, newParts: Int?) {
-        self.id = id; self.title = title; self.cover = cover; self.banner = banner
+        self.id = id; self.source = source; self.title = title; self.cover = cover; self.banner = banner
         self.synopsis = synopsis; self.genres = genres; self.isReleasing = isReleasing
         self.partCounts = partCounts; self.parts = parts; self.subscription = subscription
         self.upcoming = upcoming
@@ -302,7 +311,7 @@ struct Franchise: Codable, Identifiable, Sendable {
 
     /// Copy with replaced parts — used for optimistic progress updates.
     init(copying other: Franchise, parts: [FranchisePart]) {
-        self.init(id: other.id, title: other.title, cover: other.cover, banner: other.banner,
+        self.init(id: other.id, source: other.source, title: other.title, cover: other.cover, banner: other.banner,
                   synopsis: other.synopsis, genres: other.genres, isReleasing: other.isReleasing,
                   partCounts: other.partCounts, parts: parts, subscription: other.subscription,
                   upcoming: other.upcoming,
@@ -314,6 +323,7 @@ struct Franchise: Codable, Identifiable, Sendable {
 
 struct FranchiseSummary: Codable, Identifiable, Sendable {
     let id: String
+    let source: MediaSource
     let title: String
     let cover: String?
     let banner: String?
@@ -328,12 +338,13 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
     let newParts: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, cover, banner, isReleasing, partCount, nextAiringAt, upcoming, status, behind, newParts
+        case id, source, title, cover, banner, isReleasing, partCount, nextAiringAt, upcoming, status, behind, newParts
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
+        source = (try? c.decode(MediaSource.self, forKey: .source)) ?? .anilist
         title = (try? c.decode(String.self, forKey: .title)) ?? "Untitled"
         cover = try? c.decodeIfPresent(String.self, forKey: .cover)
         banner = try? c.decodeIfPresent(String.self, forKey: .banner)

@@ -24,9 +24,11 @@ final class AiringLiveActivityManager {
     func sync(library: [Franchise], now: Int64) {
         let enabled = ActivityAuthorizationInfo().areActivitiesEnabled
 
+        // Anime only: TMDB airings are date-precision (synthesized 17:00 UTC), so a countdown
+        // Live Activity would count down to a fictitious instant.
         let candidate: Candidate? = enabled
             ? library
-                .filter { $0.effectiveStatus == .watching }
+                .filter { $0.effectiveStatus == .watching && $0.source == .anilist }
                 .compactMap { f -> Candidate? in
                     guard let part = f.releasingPart, let at = part.nextAiringAt else { return nil }
                     // Inside the window: airing within the next hour, or aired in the last 15 min.

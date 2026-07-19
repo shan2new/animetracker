@@ -127,3 +127,12 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         DEVELOPMENT_TEAM: YLPZXZS2F4
         CODE_SIGN_STYLE: Automatic
+
+# Shared scheme so CLI builds (xcodebuild -scheme AniTrack) work outside Xcode.
+schemes:
+  AniTrack:
+    build:
+      targets:
+        AniTrack: all
+    run:
+      config: Debug

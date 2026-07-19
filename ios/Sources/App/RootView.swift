@@ -95,7 +95,7 @@ struct MainTabView: View {
                 }
                 Tab(value: AppTab.discover, role: .search) {
                     NavigationStack { DiscoverView(onOpenDetail: openDetail) }
-                        .searchable(text: $model.searchQuery, prompt: "Search anime")
+                        .searchable(text: $model.searchQuery, prompt: "Search anime & TV")
                         .onSubmit(of: .search) { appModel.recordRecentSearch() }
                 }
             }

@@ -21,10 +21,18 @@ struct DiscoverView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 PageHeader(
-                    title: "Add anime",
-                    subtitle: queryEmpty ? "Find anime to add to your library." : nil
+                    title: "Add shows",
+                    subtitle: queryEmpty ? "Find anime and TV shows to add to your library." : nil
                 )
                 .padding(.bottom, 18)
+
+                // Anime/TV chips — only meaningful once mixed results are on screen.
+                if !queryEmpty && !appModel.searchResults.isEmpty {
+                    MediaFilterChips()
+                        .padding(.horizontal, -20) // chips manage their own 20pt content margins
+                        .padding(.bottom, 13)
+                        .transition(.opacity)
+                }
 
                 // Re-query sweep while results are already on screen — keeps the screen feeling live.
                 if appModel.searchBusy && !appModel.searchResults.isEmpty {
@@ -154,7 +162,7 @@ struct DiscoverView: View {
 
     private var resultsGrid: some View {
         LazyVGrid(columns: columns, spacing: 13) {
-            ForEach(appModel.searchResults) { summary in
+            ForEach(appModel.filteredSearchResults) { summary in
                 let owned = appModel.isInLibrary(summary.id)
                 PosterCard(
                     vm: CardModel(summary: summary, owned: owned, now: now),

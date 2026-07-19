@@ -5,6 +5,9 @@ import { db } from '../db/index.js'
 import { franchiseMember } from '../db/schema.js'
 import { expandComponent } from '../grouping/graph.js'
 import { groupKnownComponent } from '../grouping/service.js'
+import { searchTv, tmdbEnabled } from '../tmdb/client.js'
+import { isJapaneseAnimation } from '../tmdb/mapping.js'
+import { ensureTvFranchise } from '../tmdb/service.js'
 import type { FranchiseSummary } from '../types/api.js'
 import { mapWithConcurrency } from '../util/concurrency.js'
 import { getSummaries, getTrendingFranchises } from './franchiseView.js'
@@ -17,23 +20,45 @@ const LAZY_GROUP_CAP = 8
 // the OpenRouter budget, and the DB connection pool.
 const EXPAND_CONCURRENCY = 6
 const GROUP_CONCURRENCY = 4
+// Cap how many not-yet-known TMDB shows we materialize per search (each costs one /tv/{id}
+// call; known shows short-circuit on a DB lookup, so steady-state is ~1 TMDB call per search).
+const LAZY_TV_CAP = 5
+const TV_CONCURRENCY = 4
 
 /**
- * Search franchises. Empty query → trending. For each AniList hit, resolve its franchise,
- * lazily grouping (and caching) up to LAZY_GROUP_CAP ungrouped hits. Returns distinct
- * franchises in search-relevance order.
+ * Search franchises across both sources. Empty query → trending. AniList hits resolve to
+ * franchises via lazy relation-graph grouping; TMDB TV hits (minus Japanese animation, which
+ * AniList owns) are materialized deterministically via ensureTvFranchise. Results interleave
+ * anime and TV in each source's relevance order.
  */
 export async function searchFranchises(query: string, limit = 30): Promise<FranchiseSummary[]> {
   if (!query.trim()) return getTrendingFranchises(limit)
 
-  let hits = await searchMedia(query)
+  const searchTvSafe = (q: string) => (tmdbEnabled() ? searchTv(q).catch(() => []) : Promise.resolve([]))
+
+  let [hits, tvHitsRaw] = await Promise.all([searchMedia(query), searchTvSafe(query)])
   // AniList ANDs the query's whitespace tokens with no typo tolerance, so one misspelled word
-  // ("Mushuko" for "Mushoku") returns nothing at all. When that happens, spell-correct the query
-  // via Cerebras and search once more with the fixed query before giving up.
-  if (hits.length === 0) {
+  // ("Mushuko" for "Mushoku") returns nothing at all. When both sources whiff, spell-correct the
+  // query via Cerebras and search once more with the fixed query before giving up.
+  if (hits.length === 0 && tvHitsRaw.length === 0) {
     const corrected = await correctSearchQuery(query)
-    if (corrected) hits = await searchMedia(corrected)
+    if (corrected) [hits, tvHitsRaw] = await Promise.all([searchMedia(corrected), searchTvSafe(corrected)])
   }
+
+  // Materialize TV franchises concurrently with the anime grouping below. Japanese animation is
+  // suppressed — the AniList result is authoritative for that class (see docs/api-contract.md).
+  const tvOutcomesPromise = mapWithConcurrency(
+    tvHitsRaw.filter((r) => !isJapaneseAnimation(r)).slice(0, LAZY_TV_CAP),
+    TV_CONCURRENCY,
+    async (r) => {
+      try {
+        return await ensureTvFranchise(r.id)
+      } catch {
+        return null // a show that fails to materialize just doesn't contribute
+      }
+    },
+  )
+
   await upsertMedia(hits)
 
   const hitIds = hits.map((h) => h.id)
@@ -78,17 +103,30 @@ export async function searchFranchises(query: string, limit = 30): Promise<Franc
     : []
   const franchiseByMedia = new Map(members.map((m) => [m.mediaId, m.franchiseId]))
 
-  const orderedFranchiseIds: string[] = []
+  const animeIds: string[] = []
   const seen = new Set<string>()
   for (const hit of hits) {
     const fid = franchiseByMedia.get(hit.id)
     if (fid && !seen.has(fid)) {
       seen.add(fid)
-      orderedFranchiseIds.push(fid)
+      animeIds.push(fid)
     }
   }
 
-  return getSummaries(orderedFranchiseIds.slice(0, limit))
+  const tvIds = (await tvOutcomesPromise)
+    .filter((o): o is NonNullable<typeof o> => o != null)
+    .map((o) => o.franchiseId)
+    .filter((fid) => !seen.has(fid))
+
+  // Interleave the two relevance-ordered lists (anime first) — deterministic, and keeps both
+  // sources visible on mixed-name queries without inventing a cross-source score.
+  const merged: string[] = []
+  for (let i = 0; i < Math.max(animeIds.length, tvIds.length); i++) {
+    if (animeIds[i]) merged.push(animeIds[i]!)
+    if (tvIds[i]) merged.push(tvIds[i]!)
+  }
+
+  return getSummaries(merged.slice(0, limit))
 }
 
 interface ExpandedComponent {

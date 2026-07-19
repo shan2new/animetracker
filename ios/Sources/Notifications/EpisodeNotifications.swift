@@ -48,8 +48,10 @@ final class EpisodeNotifications {
             let airsAt: Int64
         }
 
+        // TMDB air times are date-precision only (synthesized 17:00 UTC), so time-of-day alerts
+        // would fire at a meaningless instant — anime (AniList) only for now.
         let upcoming = library
-            .filter { $0.effectiveStatus == .watching }
+            .filter { $0.effectiveStatus == .watching && $0.source == .anilist }
             .compactMap { f -> UpcomingAiring? in
                 guard let part = f.releasingPart, let at = part.nextAiringAt, at > now else { return nil }
                 return UpcomingAiring(franchiseId: f.id, title: f.title, mediaId: part.mediaId,

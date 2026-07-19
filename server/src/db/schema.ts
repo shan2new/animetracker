@@ -1,4 +1,4 @@
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 import {
   bigint,
   index,
@@ -9,34 +9,47 @@ import {
   real,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
 import type { FranchiseUpcoming } from '../types/api.js'
 
 // ---------- Cached AniList catalogue ----------
 
-// One AniList Media node (a single season / movie / OVA / special), cached locally.
-export const media = pgTable('media', {
-  id: integer('id').primaryKey(), // AniList media id
-  titleRomaji: text('title_romaji'),
-  titleEnglish: text('title_english'),
-  format: text('format'), // TV | TV_SHORT | MOVIE | OVA | ONA | SPECIAL | MUSIC
-  status: text('status'), // FINISHED | RELEASING | NOT_YET_RELEASED | CANCELLED | HIATUS
-  episodes: integer('episodes'),
-  cover: text('cover'),
-  banner: text('banner'),
-  description: text('description'),
-  genres: jsonb('genres').$type<string[]>().default([]),
-  // nextAiringEpisode snapshot: { episode, airingAt(seconds) } | null
-  nextAiringEpisode: jsonb('next_airing_episode').$type<{ episode: number; airingAt: number } | null>(),
-  seasonYear: integer('season_year'),
-  season: text('season'),
-  popularity: integer('popularity'),
-  trending: integer('trending'),
-  // Exact last-aired time (ms epoch) from airingSchedules, kept fresh by the sync job.
-  lastAiredAt: bigint('last_aired_at', { mode: 'number' }),
-  fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
-})
+// One trackable installment (a single season / movie / OVA / special), cached locally.
+// source 'anilist': id = AniList media id, externalId null.
+// source 'tmdb': id = TMDB_ID_OFFSET + TMDB season id (see tmdb/mapping.ts), externalId = TMDB season id.
+export const media = pgTable(
+  'media',
+  {
+    id: integer('id').primaryKey(),
+    source: text('source').notNull().default('anilist'), // anilist | tmdb
+    externalId: integer('external_id'), // provider-native id for non-anilist rows
+    titleRomaji: text('title_romaji'),
+    titleEnglish: text('title_english'),
+    format: text('format'), // TV | TV_SHORT | MOVIE | OVA | ONA | SPECIAL | MUSIC
+    status: text('status'), // FINISHED | RELEASING | NOT_YET_RELEASED | CANCELLED | HIATUS
+    episodes: integer('episodes'),
+    cover: text('cover'),
+    banner: text('banner'),
+    description: text('description'),
+    genres: jsonb('genres').$type<string[]>().default([]),
+    // nextAiringEpisode snapshot: { episode, airingAt(seconds) } | null
+    nextAiringEpisode: jsonb('next_airing_episode').$type<{ episode: number; airingAt: number } | null>(),
+    seasonYear: integer('season_year'),
+    season: text('season'),
+    popularity: integer('popularity'),
+    trending: integer('trending'),
+    // Exact last-aired time (ms epoch) from airingSchedules, kept fresh by the sync job.
+    lastAiredAt: bigint('last_aired_at', { mode: 'number' }),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex('media_source_external_uq')
+      .on(t.source, t.externalId)
+      .where(sql`${t.source} = 'tmdb'`),
+  ],
+)
 
 // Directed relation edges between media (PREQUEL, SEQUEL, SIDE_STORY, PARENT, ALTERNATIVE, ...).
 export const mediaRelations = pgTable(
@@ -54,22 +67,33 @@ export const mediaRelations = pgTable(
 
 // ---------- Canonical franchises ----------
 
-export const franchise = pgTable('franchise', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  title: text('title').notNull(),
-  primaryMediaId: integer('primary_media_id'),
-  cover: text('cover'),
-  banner: text('banner'),
-  description: text('description'),
-  genres: jsonb('genres').$type<string[]>().default([]),
-  groupingSource: text('grouping_source').notNull().default('relations'), // relations | llm | manual
-  groupingModel: text('grouping_model'),
-  confidence: real('confidence'),
-  // Web-sourced "what's next" news (announced/airing seasons & films). See FranchiseUpcoming.
-  upcoming: jsonb('upcoming').$type<FranchiseUpcoming>(),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-})
+export const franchise = pgTable(
+  'franchise',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    source: text('source').notNull().default('anilist'), // anilist | tmdb
+    externalId: integer('external_id'), // TMDB show id for tmdb franchises
+    title: text('title').notNull(),
+    primaryMediaId: integer('primary_media_id'),
+    cover: text('cover'),
+    banner: text('banner'),
+    description: text('description'),
+    genres: jsonb('genres').$type<string[]>().default([]),
+    groupingSource: text('grouping_source').notNull().default('relations'), // relations | llm | manual | tmdb
+    groupingModel: text('grouping_model'),
+    confidence: real('confidence'),
+    // Web-sourced "what's next" news (announced/airing seasons & films). See FranchiseUpcoming.
+    upcoming: jsonb('upcoming').$type<FranchiseUpcoming>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    // One TMDB show can never become two franchises.
+    uniqueIndex('franchise_source_external_uq')
+      .on(t.source, t.externalId)
+      .where(sql`${t.source} = 'tmdb'`),
+  ],
+)
 
 // A media belongs to exactly one franchise (media_id is the PK).
 export const franchiseMember = pgTable(
