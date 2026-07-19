@@ -154,17 +154,53 @@ enum Formatting {
         wdFull[(col + 1) % 7]
     }
 
-    /// Strip HTML and truncate a synopsis, mirroring `stripHtml` in format.ts.
+    /// Strip HTML tags and decode entities from a synopsis. Returns the FULL cleaned text —
+    /// visual clamping (lineLimit + "Read more") is the view's job, not a data-layer truncation.
     static func stripHtml(_ s: String?) -> String {
         guard let s, !s.isEmpty else { return "" }
         let noTags = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        let collapsed = noTags.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        let trimmed = collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.count > 440 {
-            let cut = String(trimmed.prefix(437)).trimmingCharacters(in: .whitespacesAndNewlines)
-            return cut + "…"
+        let decoded = decodeHtmlEntities(noTags)
+        let collapsed = decoded.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Decode the HTML entities that actually occur in AniList descriptions: numeric forms and
+    /// the common named ones. `&amp;` is decoded LAST so `&amp;lt;` yields `&lt;`, not `<`.
+    static func decodeHtmlEntities(_ s: String) -> String {
+        guard s.contains("&") else { return s }
+        var out = decodeNumericEntities(s)
+        let named: [(String, String)] = [
+            ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&apos;", "'"),
+            ("&nbsp;", " "), ("&mdash;", "\u{2014}"), ("&ndash;", "\u{2013}"),
+            ("&hellip;", "\u{2026}"), ("&lsquo;", "\u{2018}"), ("&rsquo;", "\u{2019}"),
+            ("&ldquo;", "\u{201C}"), ("&rdquo;", "\u{201D}"),
+            ("&amp;", "&"),  // must stay last
+        ]
+        for (entity, char) in named {
+            out = out.replacingOccurrences(of: entity, with: char)
         }
-        return trimmed
+        return out
+    }
+
+    private static let numericEntityRegex = try! NSRegularExpression(pattern: "&#(x[0-9A-Fa-f]+|[0-9]+);")
+
+    /// Decode `&#8217;` / `&#x2019;` style numeric character references.
+    private static func decodeNumericEntities(_ s: String) -> String {
+        guard s.contains("&#") else { return s }
+        let ns = s as NSString
+        var out = ""
+        var last = 0
+        for m in numericEntityRegex.matches(in: s, range: NSRange(location: 0, length: ns.length)) {
+            out += ns.substring(with: NSRange(location: last, length: m.range.location - last))
+            let code = ns.substring(with: m.range(at: 1))
+            let value = code.hasPrefix("x") ? UInt32(code.dropFirst(), radix: 16) : UInt32(code)
+            if let value, let scalar = Unicode.Scalar(value) {
+                out.append(Character(scalar))
+            }
+            last = m.range.location + m.range.length
+        }
+        out += ns.substring(from: last)
+        return out
     }
 }
 

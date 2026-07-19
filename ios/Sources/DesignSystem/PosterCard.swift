@@ -32,21 +32,36 @@ struct PosterCard: View {
                         startPoint: .bottom, endPoint: .top
                     )
                 }
-                .overlay(alignment: .topLeading) { badges }
+                // Badge/action swaps (behind → caught up, + → in library) settle in instead of
+                // popping when a card's state changes under the user's thumb.
+                .overlay(alignment: .topLeading) {
+                    badges.animation(.snappy(duration: 0.32), value: badgeKey)
+                }
                 .overlay(alignment: .bottomLeading) { titleBlock }
                 .overlay {
-                    if justCaughtUp { CaughtUpOverlay(size: 52) }
+                    ZStack {
+                        if justCaughtUp { CaughtUpOverlay(size: 52) }
+                    }
+                    .animation(.easeOut(duration: 0.22), value: justCaughtUp)
                 }
+                // Surface backing goes BEFORE the clip so it's rounded with the card — applied
+                // after, it painted a square behind the corners.
+                .background(Theme.surface)
                 .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 15, style: .continuous)
                         .stroke(Theme.hairline, lineWidth: 1)
                 )
-                .background(Theme.surface)
-                .overlay(alignment: .topTrailing) { actionButton }
+                .overlay(alignment: .topTrailing) {
+                    actionButton.animation(.snappy(duration: 0.32), value: badgeKey)
+                }
         }
         .buttonStyle(SpringPressButtonStyle(scale: 0.96))
     }
+
+    /// The state axes that decide which badge / action button shows — one key so both overlays
+    /// animate their swap in the same transaction.
+    private var badgeKey: String { "\(vm.isBehind)|\(vm.caughtUp)|\(vm.owned)" }
 
     // Title + progress (+ subtle airing hint when there's no progress bar), pinned bottom-leading.
     private var titleBlock: some View {
@@ -60,6 +75,8 @@ struct PosterCard: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(vm.progressLabel)
                         .scaledFont(11, monospacedDigit: true)
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.3), value: vm.progressLabel)
                         .foregroundStyle(Theme.text62)
                     ProgressBar(fraction: vm.progressFraction, height: 3)
                 }
@@ -107,10 +124,13 @@ struct PosterCard: View {
                         .padding(.horizontal, 9).padding(.vertical, 4)
                         .background(Theme.accent, in: badgeShape)
                         .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
                 } else if vm.caughtUp {
                     StatusBadge(systemName: "checkmark", label: "Caught up")
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
                 } else if vm.action == .add && vm.owned {
                     StatusBadge(systemName: "checkmark", label: "In library")
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
                 Spacer(minLength: 0)
             }
@@ -148,12 +168,14 @@ struct PosterCard: View {
                 onPrimary()
             }
             .padding(8)
+            .transition(.scale(scale: 0.6).combined(with: .opacity))
         } else if vm.action == .add && !vm.owned {
             GlassCircleButton(systemName: "plus", size: 26, iconSize: 12,
                               foreground: Theme.textPrimary) {
                 onPrimary()
             }
             .padding(8)
+            .transition(.scale(scale: 0.6).combined(with: .opacity))
         }
     }
 }

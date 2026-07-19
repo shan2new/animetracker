@@ -48,6 +48,11 @@ const schema = z.object({
   NEWS_AGENT_TIMEOUT_MS: z.coerce.number().default(300_000),
   NEWS_MAX_FRANCHISES_PER_RUN: z.coerce.number().default(25),
   NEWS_CHECK_INTERVAL_HOURS: z.coerce.number().default(20),
+
+  // TMDB v4 read access token (Bearer). Powers the general-TV source; when unset, TV
+  // search/sync is silently disabled and the app is anime-only (same spirit as
+  // GROUPING_LLM_DISABLED: absence degrades, never crashes).
+  TMDB_ACCESS_TOKEN: z.string().optional(),
 })
 
 export const env = schema.parse(process.env)

@@ -4,10 +4,26 @@ The Node backend (`server/`) and the iOS app (`ios/`) both build against this. B
 configurable; default dev `http://localhost:8787`. All times are **ms since epoch** (Int64).
 All endpoints except `GET /health` require `Authorization: Bearer <Clerk session JWT>`.
 
+## Sources
+
+Franchises come from one of two catalogues, tagged by `source` on `Franchise`/`FranchiseSummary`
+(a franchise never mixes sources; the field defaults to `"anilist"` when absent, so old clients
+keep decoding):
+
+- `"anilist"` — anime. Parts are AniList Media entries; grouping via the relation graph (+LLM).
+- `"tmdb"` — general TV. One TMDB **show** = one franchise; each TMDB **season** is a part
+  (`kind: "season"`, `sequence` = TMDB season_number; season 0 → `kind: "special"`, label
+  "Specials"). `mediaId` = `1_000_000_000 + TMDB season id`. Grouping is deterministic (no LLM).
+  **Date precision caveat**: TMDB publishes air *dates* only, so `nextAiringAt`/`lastAiredAt`
+  for tmdb parts are synthesized at **17:00 UTC** of the air date. Clients must not show
+  minute-level countdowns or schedule time-of-day notifications for `source: "tmdb"`.
+  **Attribution**: any client surface using this data must show the TMDB logo and the line
+  "This product uses the TMDB API but is not endorsed or certified by TMDB."
+
 ## Core JSON shapes
 
 ### FranchisePart
-A single AniList Media (one season/movie/OVA/etc.) inside a franchise, merged with the
+A single installment (one season/movie/OVA/etc.) inside a franchise, merged with the
 authenticated user's progress.
 ```jsonc
 {
@@ -36,6 +52,7 @@ authenticated user's progress.
 ```jsonc
 {
   "id": "uuid",
+  "source": "anilist",             // anilist | tmdb (default anilist)
   "title": "Attack on Titan",
   "cover": "https://…",
   "banner": "https://…",
@@ -52,6 +69,7 @@ authenticated user's progress.
 ```jsonc
 {
   "id": "uuid",
+  "source": "anilist",             // anilist | tmdb (default anilist)
   "title": "Attack on Titan",
   "cover": "https://…",
   "banner": "https://…",
@@ -71,7 +89,7 @@ authenticated user's progress.
 |--------|------|------|---------|
 | GET | `/health` | — | `{ ok: true }` |
 | GET | `/franchises/trending?limit=30` | — | `{ franchises: FranchiseSummary[] }` |
-| GET | `/search?q=` | — | `{ franchises: FranchiseSummary[] }` — empty `q` = trending; lazily groups+caches an ungrouped match |
+| GET | `/search?q=` | — | `{ franchises: FranchiseSummary[] }` — empty `q` = trending; fans out to AniList + TMDB `/search/tv` in parallel, lazily groups/materializes ungrouped matches, suppresses TMDB results that are Japanese animation (AniList owns those), and interleaves the two relevance-ordered lists |
 | GET | `/franchises/:id` | — | `Franchise` |
 | GET | `/me/library` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }` where `LibraryFranchise` = full `Franchise` + `status` + `behind` + `newParts` |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |

@@ -35,7 +35,8 @@ extension View {
 }
 
 // A circular icon button rendered as glass chrome (close button, floating "+"/check actions).
-// Uses @GestureState for a bounce press effect that doesn't conflict with the glass button style.
+// Press feedback comes from the glass button style itself — an earlier DragGesture
+// (minimumDistance: 0) bounce fired on every touch-down, including scrolls over the button.
 struct GlassCircleButton: View {
     let systemName: String
     var size: CGFloat = 40
@@ -43,8 +44,6 @@ struct GlassCircleButton: View {
     var tint: Color? = nil
     var foreground: Color = Theme.textPrimary
     let action: () -> Void
-
-    @GestureState private var pressing = false
 
     var body: some View {
         Button(action: action) {
@@ -55,12 +54,6 @@ struct GlassCircleButton: View {
         }
         .buttonStyleGlass(tint: tint)
         .clipShape(Circle())
-        .scaleEffect(pressing ? 0.84 : 1)
-        .animation(.spring(response: 0.2, dampingFraction: 0.42), value: pressing)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .updating($pressing) { _, state, _ in state = true }
-        )
     }
 }
 

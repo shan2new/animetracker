@@ -12,7 +12,15 @@ final class AppModel {
     static let soonWindow: Int64 = 48 * Formatting.H  // "Airing soon" lookahead
     static let newLookback: Int64 = 3 * Formatting.D   // default "out now" window with no prior open
     static let undoSeconds: Double = 5
+    static let errorSeconds: Double = 4
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
+    static let recentsKey = "recentSearches"
+    static let maxRecents = 10
+    // Foreground-refresh thresholds: reload when the app was backgrounded long enough for aired
+    // counts to be stale; re-stamp /me/opened only when the away-time reads as a NEW visit (so
+    // brief app switches don't wipe "Out now").
+    static let staleReloadAfter: Int64 = 2 * Formatting.minuteMs
+    static let newVisitAfter: Int64 = 6 * Formatting.H
 
     let api: APIClient
 
@@ -20,6 +28,9 @@ final class AppModel {
     // O(1) membership checks — the Discover grid calls isInLibrary per card on every (animating) frame.
     var library: [Franchise] = [] { didSet { libraryIds = Set(library.map(\.id)) } }
     private(set) var libraryIds: Set<String> = []
+    // Ids optimistically added but not yet confirmed by a reload — isInLibrary includes them so
+    // "+" buttons flip instantly instead of waiting a network round-trip.
+    private(set) var pendingAdds: Set<String> = []
     var prevOpenedAt: Int64 = 0
     var loading = true
     var loadError = false
@@ -29,31 +40,39 @@ final class AppModel {
     var searchResults: [FranchiseSummary] = []
     var searchBusy = false
     var searchError = false
+    // Persisted recent search terms, most-recent first — the search surface's empty state.
+    var recentSearches: [String] = []
 
     // Library filtering.
     var libFilter: LibFilter = .all
     var libQuery = ""
+    // Global anime/TV filter — applies to Today, Schedule, Library, and search results.
+    var mediaFilter: MediaFilter = .all
 
     // Live clock for countdowns.
     var now: Int64 = .nowMs
 
-    // Celebration + undo.
+    // Celebration + undo + error surfacing.
     var justCaught: Set<String> = []          // franchise ids currently celebrating
     var undo: UndoState?
+    // A transient failure message (write didn't reach the server). Rendered by ToastHost.
+    var errorToast: String?
 
     private var clockTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var ccTasks: [String: Task<Void, Never>] = [:]
     private var undoTask: Task<Void, Never>?
+    private var errorTask: Task<Void, Never>?
+    // Set when the scene enters background; drives the staleness checks on return.
+    private var backgroundedAt: Int64?
 
-    // Trending, fetched once and reused so clearing the search box restores it instantly.
-    private var trendingCache: [FranchiseSummary] = []
     // Monotonic token: each fired request claims the next value; a response only mutates
     // state if it's still the latest, so out-of-order completions can't clobber fresh results.
     private var searchSeq = 0
 
     init(api: APIClient) {
         self.api = api
+        recentSearches = UserDefaults.standard.stringArray(forKey: AppModel.recentsKey) ?? []
     }
 
     // MARK: - Lifecycle
@@ -62,7 +81,6 @@ final class AppModel {
         startClock()
         Task { await stampOpened() }
         Task { await reload() }
-        Task { await loadTrending() }
     }
 
     private func startClock() {
@@ -94,49 +112,96 @@ final class AppModel {
             // Keep the larger of the two prevOpenedAt values we may have seen.
             if res.prevOpenedAt > 0 { prevOpenedAt = max(prevOpenedAt, res.prevOpenedAt) }
             loadError = false
+            await syncAmbient()
         } catch {
             loadError = true
         }
     }
 
-    func loadTrending() async {
-        let seq = nextSeq()
-        if searchResults.isEmpty { searchBusy = true }   // cold start → show the skeleton grid
-        do {
-            let results = try await api.trending()
-            trendingCache = results
-            // Don't clobber active search results if the user typed while this was in flight.
-            guard seq == searchSeq, queryIsEmpty else { return }
-            searchResults = results
-            searchBusy = false
-            searchError = false
-        } catch {
-            guard !isCancellation(error), seq == searchSeq, queryIsEmpty else { return }
-            searchError = true
-            searchBusy = false
+    // MARK: - Scene lifecycle (foreground refresh)
+
+    func sceneEnteredBackground() {
+        backgroundedAt = .nowMs
+    }
+
+    /// Called when the scene becomes active. Snaps the countdown clock immediately (the 20s tick
+    /// task was suspended), reloads when the data is stale, and re-stamps /me/opened when the
+    /// away-time is long enough to count as a new visit.
+    func sceneBecameActive() {
+        now = .nowMs
+        guard let bg = backgroundedAt else { return }  // launch activation — start() covers it
+        backgroundedAt = nil
+        let away = now - bg
+        guard away >= AppModel.staleReloadAfter else { return }
+        Task {
+            if away >= AppModel.newVisitAfter { await stampOpened() }
+            await reload()
         }
     }
 
-    // MARK: - Search (debounced)
-
-    private var queryIsEmpty: Bool {
-        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// Push the current library into the ambient layers (pending episode notifications and the
+    /// airing Live Activity) after any confirmed server-side change.
+    private func syncAmbient() async {
+        await EpisodeNotifications.shared.sync(library: library, now: .nowMs)
+        AiringLiveActivityManager.shared.sync(library: library, now: .nowMs)
     }
+
+    // MARK: - Error toast
+
+    /// Surface a write failure. Every optimistic mutation calls this after rolling itself back,
+    /// so the UI never silently disagrees with the server.
+    func showError(_ message: String) {
+        Haptics.error()
+        errorToast = message
+        errorTask?.cancel()
+        errorTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(AppModel.errorSeconds))
+            if Task.isCancelled { return }
+            await MainActor.run { self?.errorToast = nil }
+        }
+    }
+
+    // MARK: - Recent searches (the search surface's empty state)
+
+    /// Records the current query as a recent term (most-recent first, de-duplicated, capped).
+    /// Called when the user submits the search field.
+    func recordRecentSearch() {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return }
+        recentSearches.removeAll { $0.caseInsensitiveCompare(q) == .orderedSame }
+        recentSearches.insert(q, at: 0)
+        if recentSearches.count > AppModel.maxRecents {
+            recentSearches = Array(recentSearches.prefix(AppModel.maxRecents))
+        }
+        persistRecents()
+    }
+
+    func removeRecentSearch(_ term: String) {
+        recentSearches.removeAll { $0.caseInsensitiveCompare(term) == .orderedSame }
+        persistRecents()
+    }
+
+    func clearRecentSearches() {
+        recentSearches = []
+        persistRecents()
+    }
+
+    private func persistRecents() {
+        UserDefaults.standard.set(recentSearches, forKey: AppModel.recentsKey)
+    }
+
+    // MARK: - Search (debounced)
 
     private func scheduleSearch() {
         searchTask?.cancel()
         let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Cleared box: cancel any pending search and restore trending instantly.
+        // Cleared box: cancel any pending search and fall back to the recent-searches empty state.
         if trimmed.isEmpty {
             searchBusy = false
             searchError = false
-            if trendingCache.isEmpty {
-                searchTask = Task { [weak self] in await self?.loadTrending() }
-            } else {
-                searchResults = trendingCache
-                searchTask = nil
-            }
+            searchResults = []
+            searchTask = nil
             return
         }
 
@@ -165,6 +230,18 @@ final class AppModel {
         }
     }
 
+    /// Re-run the current query immediately (no debounce) — the Retry affordance on a failed search.
+    func retrySearch() {
+        let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        searchTask?.cancel()
+        searchBusy = true
+        searchError = false
+        searchTask = Task { [weak self] in
+            await self?.runSearch(query: trimmed)
+        }
+    }
+
     private func nextSeq() -> Int {
         searchSeq += 1
         return searchSeq
@@ -183,13 +260,33 @@ final class AppModel {
 
     // MARK: - Derived helpers
 
-    func isInLibrary(_ id: String) -> Bool { libraryIds.contains(id) }
+    func isInLibrary(_ id: String) -> Bool { libraryIds.contains(id) || pendingAdds.contains(id) }
+
+    /// Search results with the anime/TV chip applied (the server interleaves both sources).
+    var filteredSearchResults: [FranchiseSummary] {
+        searchResults.filter { matchesMediaFilter($0.source) }
+    }
 
     func franchise(id: String) -> Franchise? { library.first { $0.id == id } }
 
-    /// All subscribed franchises that have a currently-releasing part.
+    func matchesMediaFilter(_ source: MediaSource) -> Bool {
+        switch mediaFilter {
+        case .all: return true
+        case .anime: return source == .anilist
+        case .tv: return source == .tmdb
+        }
+    }
+
+    /// True when the library spans both catalogues — the only case the anime/TV chips earn
+    /// their screen space.
+    var libraryHasMixedSources: Bool {
+        let sources = Set(library.map(\.source))
+        return sources.count > 1
+    }
+
+    /// All subscribed franchises that have a currently-releasing part (media-filtered).
     var airingFranchises: [Franchise] {
-        library.filter { $0.releasingPart != nil }
+        library.filter { $0.releasingPart != nil && matchesMediaFilter($0.source) }
     }
 
     var libraryEmpty: Bool { library.isEmpty }
@@ -309,7 +406,9 @@ final class AppModel {
 
     var librarySections: [LibrarySection] {
         let q = libQuery.lowercased().trimmingCharacters(in: .whitespaces)
-        let filtered = library.filter { q.isEmpty || $0.title.lowercased().contains(q) }
+        let filtered = library.filter {
+            (q.isEmpty || $0.title.lowercased().contains(q)) && matchesMediaFilter($0.source)
+        }
         return LibGroup.allCases
             .filter { libFilter == .all || libFilter == .group($0) }
             .compactMap { group -> LibrarySection? in
@@ -356,7 +455,10 @@ final class AppModel {
                 }
             }
         case .finished, .planned:
-            return arr
+            // Server order is subscription order — arbitrary to the reader. Alphabetical scans.
+            return arr.sorted {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
         }
     }
 
@@ -382,45 +484,104 @@ final class AppModel {
         celebrate(franchiseId)
         scheduleUndoDismissal()
 
-        Task { try? await api.setProgress(mediaId: part.mediaId, episodes: aired) }
+        Task {
+            do {
+                _ = try await api.setProgress(mediaId: part.mediaId, episodes: aired)
+            } catch {
+                // Roll back the optimistic write and retract the celebration/undo that now lie.
+                applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: prev)
+                justCaught.remove(franchiseId)
+                if let cur = undo, !cur.added, cur.franchiseId == franchiseId { undo = nil }
+                showError("Couldn't save progress — check your connection.")
+            }
+        }
     }
 
-    /// Set explicit progress for a part (detail stepper).
+    /// Set explicit progress for a part (detail pips / movie toggle).
     func setProgress(franchiseId: String, mediaId: Int, episodes: Int) {
         let clamped = max(0, episodes)
         Haptics.impact(.light)
+        let prev = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }?.progress
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
-        Task { try? await api.setProgress(mediaId: mediaId, episodes: clamped) }
+        Task {
+            do {
+                _ = try await api.setProgress(mediaId: mediaId, episodes: clamped)
+            } catch {
+                if let prev {
+                    applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: prev)
+                }
+                showError("Couldn't save progress — check your connection.")
+            }
+        }
     }
 
-    /// Subscribe to a franchise (POST /me/subscriptions). Status defaults server-side.
+    /// Subscribe to a franchise (POST /me/subscriptions). Status defaults server-side. The add is
+    /// optimistic via `pendingAdds` so the card flips to "In library" instantly.
     func addToLibrary(franchiseId: String, title: String, isReleasing: Bool) {
         guard !isInLibrary(franchiseId) else { return }
         Haptics.success()
+        pendingAdds.insert(franchiseId)
         let status: WatchStatus = isReleasing ? .watching : .planned
         let label = status == .watching ? "Watching" : "Plan to watch"
         undo = UndoState(mediaId: nil, franchiseId: franchiseId, prevProgress: 0,
                          title: title, episode: 0, added: true, statusLabel: label)
         scheduleUndoDismissal()
+        // First airing show added: the moment notifications become valuable, so ask now.
+        if isReleasing {
+            Task { _ = await EpisodeNotifications.shared.requestPermissionIfNeeded() }
+        }
         Task {
-            _ = try? await api.subscribe(franchiseId: franchiseId, status: nil)
-            await reload()
+            do {
+                _ = try await api.subscribe(franchiseId: franchiseId, status: nil)
+                await reload()
+            } catch {
+                if let cur = undo, cur.added, cur.franchiseId == franchiseId { undo = nil }
+                showError("Couldn't add \(title) — check your connection.")
+            }
+            pendingAdds.remove(franchiseId)
         }
     }
 
     func setStatus(franchiseId: String, status: WatchStatus) {
         Haptics.selection()
-        // Optimistic local update by reloading after the patch.
+        guard let idx = library.firstIndex(where: { $0.id == franchiseId }) else {
+            // Not in the loaded library (e.g. a pending add) — fire and hope; reload reconciles.
+            Task { _ = try? await api.setStatus(franchiseId: franchiseId, status: status) }
+            return
+        }
+        let prevStatus = library[idx].effectiveStatus
+        guard prevStatus != status else { return }
+        library[idx] = library[idx].withStatus(status)
         Task {
-            _ = try? await api.setStatus(franchiseId: franchiseId, status: status)
-            await reload()
+            do {
+                _ = try await api.setStatus(franchiseId: franchiseId, status: status)
+                await syncAmbient()
+            } catch {
+                if let i = library.firstIndex(where: { $0.id == franchiseId }) {
+                    library[i] = library[i].withStatus(prevStatus)
+                }
+                showError("Couldn't update status — check your connection.")
+            }
         }
     }
 
-    func removeFromLibrary(franchiseId: String) {
+    /// `haptic: false` for the undo path — performUndo already fired its own impact.
+    func removeFromLibrary(franchiseId: String, haptic: Bool = true) {
+        if haptic { Haptics.impact(.rigid) }
+        pendingAdds.remove(franchiseId)
+        let idx = library.firstIndex(where: { $0.id == franchiseId })
+        let removed = idx.map { library[$0] }
+        if let idx { library.remove(at: idx) }
         Task {
-            _ = try? await api.unsubscribe(franchiseId: franchiseId)
-            await reload()
+            do {
+                _ = try await api.unsubscribe(franchiseId: franchiseId)
+                await syncAmbient()
+            } catch {
+                if let removed, !library.contains(where: { $0.id == franchiseId }) {
+                    library.insert(removed, at: min(idx ?? library.count, library.count))
+                }
+                showError("Couldn't remove \(removed?.title ?? "show") — check your connection.")
+            }
         }
     }
 
@@ -428,11 +589,18 @@ final class AppModel {
         guard let u = undo else { return }
         Haptics.impact(.medium)
         if u.added, let fid = u.franchiseId {
-            removeFromLibrary(franchiseId: fid)
+            removeFromLibrary(franchiseId: fid, haptic: false)
         } else if let fid = u.franchiseId, let mediaId = u.mediaId, isInLibrary(fid) {
             applyLocalProgress(franchiseId: fid, mediaId: mediaId, episodes: u.prevProgress)
             justCaught.remove(fid)
-            Task { try? await api.setProgress(mediaId: mediaId, episodes: u.prevProgress) }
+            Task {
+                do {
+                    _ = try await api.setProgress(mediaId: mediaId, episodes: u.prevProgress)
+                } catch {
+                    showError("Couldn't undo — check your connection.")
+                    await reload()  // converge back to server truth
+                }
+            }
         }
         undo = nil
         undoTask?.cancel()
@@ -497,6 +665,20 @@ enum LibGroup: String, CaseIterable {
     var cardAction: CardAction { self == .behind ? .mark : .none }
 }
 
+enum MediaFilter: String, CaseIterable {
+    case all
+    case anime
+    case tv
+
+    var chipLabel: String {
+        switch self {
+        case .all: return "All"
+        case .anime: return "Anime"
+        case .tv: return "TV"
+        }
+    }
+}
+
 enum LibFilter: Equatable {
     case all
     case group(LibGroup)
@@ -528,5 +710,14 @@ extension Franchise {
             )
         }
         return Franchise(copying: self, parts: newParts)
+    }
+
+    /// Returns a copy with the watch status replaced (both the library field and the subscription
+    /// mirror, so `effectiveStatus` flips immediately). Used for optimistic status updates.
+    func withStatus(_ newStatus: WatchStatus) -> Franchise {
+        Franchise(id: id, source: source, title: title, cover: cover, banner: banner, synopsis: synopsis,
+                  genres: genres, isReleasing: isReleasing, partCounts: partCounts, parts: parts,
+                  subscription: Subscription(status: newStatus), upcoming: upcoming,
+                  status: newStatus, behind: behind, newParts: newParts)
     }
 }

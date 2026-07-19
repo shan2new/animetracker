@@ -1,22 +1,22 @@
 {
   "fill" : {
-    "automatic-gradient" : "extended-srgb:0.16471,0.05882,0.22745,1.00000"
+    "solid" : "extended-srgb:0.94118,0.63529,0.30588,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
-          "image-name" : "06-arc-v2.png",
-          "name" : "06-arc-v2"
+          "image-name" : "layer-glyph.png",
+          "name" : "layer-glyph"
         }
       ],
       "shadow" : {
         "kind" : "neutral",
-        "opacity" : 0.5
+        "opacity" : 0.6
       },
       "translucency" : {
-        "enabled" : false,
-        "value" : 0.5
+        "enabled" : true,
+        "value" : 0.2
       }
     }
   ],

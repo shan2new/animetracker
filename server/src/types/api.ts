@@ -2,6 +2,9 @@ import type { PartKind } from '../grouping/partKind.js'
 
 export type WatchStatus = 'watching' | 'completed' | 'planned'
 
+/** Which catalogue a franchise (and all its parts) came from. A franchise never mixes sources. */
+export type MediaSource = 'anilist' | 'tmdb'
+
 /**
  * Web-sourced "what's next" news for a franchise (announced/airing seasons, films, etc.).
  * Populated out-of-band (research/cron), stored on franchise.upcoming. `release` is a
@@ -40,6 +43,7 @@ export interface FranchisePart {
 
 export interface Franchise {
   id: string
+  source: MediaSource
   title: string
   cover: string
   banner: string
@@ -54,6 +58,7 @@ export interface Franchise {
 
 export interface FranchiseSummary {
   id: string
+  source: MediaSource
   title: string
   cover: string
   banner: string

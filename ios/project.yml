@@ -30,7 +30,13 @@ targets:
     # auto-categorizes by file type into the resources build phase.
     sources:
       - path: Sources
+      # Types shared with the widget extension (Live Activity attributes) — the file must be a
+      # member of both targets so ActivityKit's app/widget halves agree on the payload.
+      - path: Shared
       - path: Resources/Assets.xcassets
+      # Bundled Outfit font weights (registered via UIAppFonts below). XcodeGen categorizes
+      # the .ttf files into the resources build phase automatically.
+      - path: Resources/Fonts
       # iOS 26 layered app icon (Icon Composer). `type: file` keeps the .icon package as a
       # single reference (not expanded into icon.json/Assets) so actool processes it.
       - path: Resources/AppIcon.icon
@@ -42,6 +48,8 @@ targets:
         product: ClerkKit
       - package: Clerk
         product: ClerkKitUI
+      # Widget extension hosting the airing-countdown Live Activity (embedded into PlugIns).
+      - target: AniTrackWidgets
     info:
       path: Resources/Info.plist
       properties:
@@ -53,16 +61,25 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIUserInterfaceStyle: Dark
+        # Bundled Outfit weights (files live in Resources/Fonts). Filenames only — XcodeGen
+        # flattens the folder into the bundle root.
+        UIAppFonts:
+          - Outfit-Light.ttf
+          - Outfit-Regular.ttf
+          - Outfit-Medium.ttf
+          - Outfit-SemiBold.ttf
+          - Outfit-Bold.ttf
         # Connecting to a server on the local network by private IP requires this
         # permission string (iOS shows a one-time "find devices on your network" prompt;
         # without the key the connection to a 192.168.x.x address fails silently).
         NSLocalNetworkUsageDescription: "AniTrack connects to your AniTrack server running on your local network."
-        # Dev: allow cleartext HTTP to the local backend. The self-hosted server is plain
-        # http on the LAN, which ATS blocks by default. Tighten/remove for a production
-        # HTTPS backend (or scope to NSExceptionDomains).
+        # Production backend is HTTPS (anime.cognipin.com), so ATS needs no cleartext
+        # exception for it. NSAllowsLocalNetworking is kept so pointing API_BASE_URL back
+        # at a local/LAN dev server (plain http) still works without re-enabling arbitrary loads.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+        # Lock-screen / Dynamic Island airing countdown (AiringLiveActivityManager).
+        NSSupportsLiveActivities: true
         # === FILL THESE IN ===
         # Your Clerk publishable key (pk_test_… / pk_live_…). Leave the placeholder
         # to run in dev-bypass mode against the local backend.
@@ -79,11 +96,43 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         # Placeholders read by Info.plist above. Override per-config or in an xcconfig.
         CLERK_PUBLISHABLE_KEY: "pk_test_bGVnaWJsZS1nb2JibGVyLTU3LmNsZXJrLmFjY291bnRzLmRldiQ"
-        # Use the Mac's stable mDNS hostname instead of a hardcoded LAN IP. The IP
-        # changes with DHCP / when joining a different Wi-Fi, which silently breaks
-        # the installed app; the .local name resolves on the same Wi-Fi regardless.
-        # (Run `scutil --get LocalHostName` and append `.local` if your machine differs.)
-        API_BASE_URL: "http://Shantanus-MacBook-Air.local:8787"
+        # Public HTTPS backend (self-hosted on the Mac mini, fronted at this domain).
+        # For local development, override with a LAN URL such as
+        # "http://Shantanus-MacBook-Air.local:8787" (NSAllowsLocalNetworking permits it).
+        API_BASE_URL: "https://anime.cognipin.com"
         # === SIGNING ===
         DEVELOPMENT_TEAM: YLPZXZS2F4
         CODE_SIGN_STYLE: Automatic
+
+  AniTrackWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Widgets
+      - path: Shared
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: AniTrack
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.anitrack.app.widgets
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        DEVELOPMENT_TEAM: YLPZXZS2F4
+        CODE_SIGN_STYLE: Automatic
+
+# Shared scheme so CLI builds (xcodebuild -scheme AniTrack) work outside Xcode.
+schemes:
+  AniTrack:
+    build:
+      targets:
+        AniTrack: all
+    run:
+      config: Debug

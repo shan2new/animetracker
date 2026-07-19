@@ -4,11 +4,13 @@ import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
 import { media, mediaRelations } from '../db/schema.js'
 
-type MediaRow = typeof media.$inferInsert
+export type MediaRow = typeof media.$inferInsert
 
 export function toMediaRow(m: AniListMedia): MediaRow {
   return {
     id: m.id,
+    source: 'anilist',
+    externalId: null,
     titleRomaji: m.title.romaji,
     titleEnglish: m.title.english,
     format: m.format,
@@ -27,16 +29,21 @@ export function toMediaRow(m: AniListMedia): MediaRow {
   }
 }
 
-/** Upsert media rows + their relation edges. */
-export async function upsertMedia(items: AniListMedia[]): Promise<void> {
-  if (items.length === 0) return
-  const rows = items.map(toMediaRow)
+/**
+ * Upsert prepared media rows (any source). `setLastAired` lets the TMDB path own lastAiredAt
+ * via the upsert; the AniList path must NOT set it — there lastAiredAt belongs to
+ * fetchLastAired (airingSchedules), which runs after the upsert.
+ */
+export async function upsertMediaRows(rows: MediaRow[], opts: { setLastAired?: boolean } = {}): Promise<void> {
+  if (rows.length === 0) return
   await db
     .insert(media)
     .values(rows)
     .onConflictDoUpdate({
       target: media.id,
       set: {
+        source: sqlExcluded('source'),
+        externalId: sqlExcluded('external_id'),
         titleRomaji: sqlExcluded('title_romaji'),
         titleEnglish: sqlExcluded('title_english'),
         format: sqlExcluded('format'),
@@ -51,9 +58,16 @@ export async function upsertMedia(items: AniListMedia[]): Promise<void> {
         season: sqlExcluded('season'),
         popularity: sqlExcluded('popularity'),
         trending: sqlExcluded('trending'),
+        ...(opts.setLastAired ? { lastAiredAt: sqlExcluded('last_aired_at') } : {}),
         fetchedAt: sqlExcluded('fetched_at'),
       },
     })
+}
+
+/** Upsert AniList media + their relation edges. */
+export async function upsertMedia(items: AniListMedia[]): Promise<void> {
+  if (items.length === 0) return
+  await upsertMediaRows(items.map(toMediaRow))
 
   const edges = items.flatMap((m) =>
     (m.relations?.edges ?? [])

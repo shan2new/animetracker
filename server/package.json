@@ -17,6 +17,7 @@
     "seed": "tsx src/scripts/seed-trending.ts",
     "group": "tsx src/scripts/group-one.ts",
     "news": "tsx src/scripts/news-once.ts",
+    "tv": "tsx src/scripts/tv-one.ts",
     "test": "vitest run"
   },
   "dependencies": {
