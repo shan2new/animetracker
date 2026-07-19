@@ -15,6 +15,13 @@
       "when": 1782301693708,
       "tag": "0001_damp_spacker_dave",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783627971015,
+      "tag": "0002_empty_mister_sinister",
+      "breakpoints": true
     }
   ]
 }

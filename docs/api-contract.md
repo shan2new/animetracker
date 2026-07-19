@@ -79,6 +79,28 @@ authenticated user's progress.
 | DELETE | `/me/subscriptions/:franchiseId` | — | `{ ok: true }` |
 | PUT | `/me/progress` | `{ mediaId, episodes }` | `{ ok: true }` |
 | POST | `/me/opened` | — | `{ prevOpenedAt: Int }` (returns the value *before* this call, then stamps now) |
+| GET | `/me/notifications?limit=50` | — | `{ items: NotificationItem[], unread: Int }` newest-first |
+| POST | `/me/notifications/read` | `{ ids?: [uuid] }` | `{ marked: Int }` — omit `ids` to mark all unread as read |
+
+### NotificationItem
+
+```
+{
+  id: uuid,
+  franchiseId: uuid,
+  kind: "news_rumored" | "news_announced" | "news_dated",
+  title: String,       // franchise title, e.g. "Jujutsu Kaisen"
+  body: String,        // e.g. "Season 4 announced — release TBA"
+  createdAt: Int,      // ms epoch
+  readAt: Int | null   // ms epoch, null while unread
+}
+```
+
+Notifications are produced by a daily backend job (Claude Agent SDK web research over each
+subscribed franchise). A notification is created only when news is genuinely new: first
+sighting of an upcoming installment (including credible rumors), a status upgrade
+(rumored → announced → dated), or a TBA release gaining a concrete date. The same job keeps
+`franchise.upcoming` fresh, so the existing upcoming badges/callouts update automatically.
 
 ## Client-side derivation (ported from the legacy React app's `format.ts`/`App.tsx`)
 

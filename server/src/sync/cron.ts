@@ -1,4 +1,6 @@
 import cron from 'node-cron'
+import { env } from '../env.js'
+import { refreshSubscribedNews } from '../news/service.js'
 import { attachNewSeasons, refreshAiring, seedTrending } from './sync.js'
 
 let started = false
@@ -28,4 +30,16 @@ export function startCron(): void {
       console.error('[cron] daily sync failed:', (err as Error).message)
     }
   })
+
+  // Daily 05:00: agent-based announcement research over subscribed franchises → notifications.
+  if (!env.NEWS_AGENT_DISABLED) {
+    cron.schedule('0 5 * * *', async () => {
+      try {
+        const { checked, notified, skipped } = await refreshSubscribedNews()
+        console.log(`[cron] news: checked ${checked} franchises, ${notified} notifications, ${skipped} fresh-enough`)
+      } catch (err) {
+        console.error('[cron] news refresh failed:', (err as Error).message)
+      }
+    })
+  }
 }

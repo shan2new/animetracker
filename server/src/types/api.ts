@@ -67,3 +67,14 @@ export interface FranchiseSummary {
 }
 
 export type LibraryFranchise = Franchise & { status: WatchStatus; behind: number; newParts: number }
+
+/** A stored per-user notification (announcement news for a subscribed franchise). */
+export interface NotificationItem {
+  id: string
+  franchiseId: string
+  kind: string // news_rumored | news_announced | news_dated
+  title: string // franchise title
+  body: string // e.g. "Season 4 announced — release TBA"
+  createdAt: number // ms epoch
+  readAt: number | null // ms epoch, null while unread
+}

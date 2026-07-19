@@ -9,6 +9,7 @@ import {
   real,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
 import type { FranchiseUpcoming } from '../types/api.js'
@@ -124,6 +125,55 @@ export const progress = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.mediaId] })],
+)
+
+// ---------- Announcements & notifications ----------
+
+// One row per distinct piece of upcoming-installment news for a franchise ("Season 4",
+// "Infinity Castle Part 2"), written by the news agent. Re-observations of the same news
+// bump lastSeenAt; a status upgrade (rumored → announced → dated) or a release window
+// materially changing is what triggers notifications, not the row's existence.
+export const announcements = pgTable(
+  'announcements',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    franchiseId: uuid('franchise_id')
+      .notNull()
+      .references(() => franchise.id, { onDelete: 'cascade' }),
+    // Normalized form of `next` ("season 4") so the same installment reported with varying
+    // wording across runs maps to one row. Unique per franchise.
+    dedupeKey: text('dedupe_key').notNull(),
+    status: text('status').notNull(), // rumored | announced_no_date | announced | upcoming_dated | airing | recently_aired | concluded
+    next: text('next').notNull(), // e.g. "Season 4", "Infinity Castle - Part 2 (movie)"
+    release: text('release').notNull(), // human-readable window: "2026-10", "January 2027", "TBA"
+    note: text('note'),
+    source: text('source'),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [uniqueIndex('announcements_franchise_dedupe_idx').on(t.franchiseId, t.dedupeKey)],
+)
+
+// Per-user notification inbox. Fanned out from announcements to subscribers at detection time
+// so reads are a single indexed scan; readAt is null until the client acknowledges.
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    franchiseId: uuid('franchise_id')
+      .notNull()
+      .references(() => franchise.id, { onDelete: 'cascade' }),
+    announcementId: uuid('announcement_id').references(() => announcements.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(), // news_rumored | news_announced | news_dated
+    title: text('title').notNull(), // franchise title, e.g. "Jujutsu Kaisen"
+    body: text('body').notNull(), // e.g. "Season 4 announced — release TBA"
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+  },
+  (t) => [index('notifications_user_created_idx').on(t.userId, t.createdAt)],
 )
 
 // Cron / sync bookkeeping (single-row keyed values).

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { getLibrary } from '../services/franchiseView.js'
+import { listNotifications, markNotificationsRead } from '../services/notifications.js'
 import {
   franchiseExists,
   markOpened,
@@ -54,5 +55,17 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
   app.post('/me/opened', async (req) => {
     const prevOpenedAt = await markOpened(req.user!.id)
     return { prevOpenedAt }
+  })
+
+  app.get('/me/notifications', async (req) => {
+    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query)
+    return listNotifications(req.user!.id, limit)
+  })
+
+  app.post('/me/notifications/read', async (req) => {
+    // ids omitted → mark everything unread as read.
+    const { ids } = z.object({ ids: z.array(z.string().uuid()).optional() }).parse(req.body ?? {})
+    const marked = await markNotificationsRead(req.user!.id, ids)
+    return { marked }
   })
 }

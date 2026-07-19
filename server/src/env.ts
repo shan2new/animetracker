@@ -37,6 +37,17 @@ const schema = z.object({
   SEARCH_CORRECT_DISABLED: envBool(false),
 
   TRENDING_SEED_COUNT: z.coerce.number().default(300),
+
+  // Announcement/news research agent (Claude Agent SDK, web tools only). Runs daily over
+  // subscribed franchises; writes franchise.upcoming + announcement rows and fans out
+  // notifications to subscribers. Auth: rides the machine's Claude Code login (Max
+  // subscription) — ANTHROPIC_API_KEY is deliberately stripped from the agent subprocess.
+  NEWS_AGENT_DISABLED: envBool(false),
+  NEWS_AGENT_MODEL: z.string().optional(), // unset → the Agent SDK's default model
+  NEWS_AGENT_MAX_TURNS: z.coerce.number().default(16),
+  NEWS_AGENT_TIMEOUT_MS: z.coerce.number().default(300_000),
+  NEWS_MAX_FRANCHISES_PER_RUN: z.coerce.number().default(25),
+  NEWS_CHECK_INTERVAL_HOURS: z.coerce.number().default(20),
 })
 
 export const env = schema.parse(process.env)
