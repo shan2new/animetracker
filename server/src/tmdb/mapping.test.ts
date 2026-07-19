@@ -6,11 +6,13 @@ import {
   deriveSeasonStatus,
   includedSeasons,
   isJapaneseAnimation,
+  tmdbEpisodes,
+  tmdbNetworks,
   tmdbSeasonMediaId,
   tmdbSeasonToMediaRow,
   tmdbShowToGroupingResult,
 } from './mapping.js'
-import type { TmdbSearchResult, TmdbSeason, TmdbShow } from './types.js'
+import type { TmdbEpisode, TmdbSearchResult, TmdbSeason, TmdbShow } from './types.js'
 
 // Fixed "now": 2026-07-01T00:00Z.
 const NOW = Date.UTC(2026, 6, 1)
@@ -57,6 +59,18 @@ function result(opts: Partial<TmdbSearchResult> = {}): TmdbSearchResult {
     first_air_date: '2020-01-01',
     popularity: 1,
     overview: null,
+    ...opts,
+  }
+}
+
+function episode(n: number, opts: Partial<TmdbEpisode> = {}): TmdbEpisode {
+  return {
+    episode_number: n,
+    name: `Episode ${n}`,
+    overview: `Overview ${n}`,
+    air_date: '2025-05-04',
+    still_path: `/e${n}.jpg`,
+    runtime: 42,
     ...opts,
   }
 }
@@ -182,6 +196,67 @@ describe('tmdbSeasonToMediaRow', () => {
     const row = tmdbSeasonToMediaRow(show(), season(1, { poster_path: null }), NOW)
     expect(row.cover).toBe('https://image.tmdb.org/t/p/w780/poster.jpg')
     expect(row.banner).toBe('https://image.tmdb.org/t/p/w1280/back.jpg')
+  })
+
+  it('carries the passed episode list and the show networks as studios', () => {
+    const s = show({ networks: [{ id: 1, name: 'HBO' }] })
+    const eps = tmdbEpisodes([episode(1)])
+    const row = tmdbSeasonToMediaRow(s, season(1), NOW, eps)
+    expect(row.studios).toEqual(['HBO'])
+    expect(row.episodesList).toEqual(eps)
+  })
+
+  it('defaults to no episodes and no studios when omitted', () => {
+    const row = tmdbSeasonToMediaRow(show(), season(1), NOW)
+    expect(row.episodesList).toEqual([])
+    expect(row.studios).toEqual([])
+  })
+})
+
+describe('tmdbEpisodes', () => {
+  it('maps to EpisodeMeta with 17:00 UTC dates, still urls, and runtime', () => {
+    const eps = tmdbEpisodes([episode(1), episode(2, { name: '', still_path: null, runtime: null })])
+    expect(eps).toEqual([
+      {
+        number: 1,
+        title: 'Episode 1',
+        airDate: Date.UTC(2025, 4, 4, 17),
+        overview: 'Overview 1',
+        still: 'https://image.tmdb.org/t/p/w780/e1.jpg',
+        runtime: 42,
+      },
+      {
+        number: 2,
+        title: null, // empty name → null
+        airDate: Date.UTC(2025, 4, 4, 17),
+        overview: 'Overview 2',
+        still: null,
+        runtime: null,
+      },
+    ])
+  })
+
+  it('is empty for null/undefined episode lists', () => {
+    expect(tmdbEpisodes(null)).toEqual([])
+    expect(tmdbEpisodes(undefined)).toEqual([])
+  })
+})
+
+describe('tmdbNetworks', () => {
+  it('takes up to three network names', () => {
+    const s = show({
+      networks: [
+        { id: 1, name: 'HBO' },
+        { id: 2, name: 'Max' },
+        { id: 3, name: 'Sky' },
+        { id: 4, name: 'Crave' },
+      ],
+    })
+    expect(tmdbNetworks(s)).toEqual(['HBO', 'Max', 'Sky'])
+  })
+
+  it('is empty when the show has no networks', () => {
+    expect(tmdbNetworks(show())).toEqual([])
   })
 })
 

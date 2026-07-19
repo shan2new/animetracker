@@ -1,5 +1,5 @@
 import { env } from '../env.js'
-import type { TmdbSearchResult, TmdbShow } from './types.js'
+import type { TmdbSeasonDetail, TmdbSearchResult, TmdbShow } from './types.js'
 
 const BASE = 'https://api.themoviedb.org/3'
 
@@ -55,6 +55,16 @@ export async function searchTv(query: string): Promise<TmdbSearchResult[]> {
 export async function getShow(showId: number): Promise<TmdbShow | null> {
   try {
     return await tmdbGet<TmdbShow>(`/tv/${showId}`)
+  } catch (err) {
+    if ((err as Error).message === 'TMDB 404') return null
+    throw err
+  }
+}
+
+/** Season detail with the full per-episode list. Null on 404 (season absent/unpublished). */
+export async function getSeason(showId: number, seasonNumber: number): Promise<TmdbSeasonDetail | null> {
+  try {
+    return await tmdbGet<TmdbSeasonDetail>(`/tv/${showId}/season/${seasonNumber}`)
   } catch (err) {
     if ((err as Error).message === 'TMDB 404') return null
     throw err

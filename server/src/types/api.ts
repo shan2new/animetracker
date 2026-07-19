@@ -20,6 +20,20 @@ export interface FranchiseUpcoming {
   checked: string | null // ISO date the info was last verified
 }
 
+/**
+ * Per-episode metadata. Richness is source-dependent: TMDB gives title/overview/still/runtime/date;
+ * AniList gives per-episode air dates (from airingSchedule) and best-effort titles/stills (from
+ * streamingEpisodes), but no per-episode overview. Any field may be null/absent.
+ */
+export interface EpisodeMeta {
+  number: number
+  title: string | null
+  airDate: number | null // ms epoch
+  overview: string | null
+  still: string | null // thumbnail/still image url
+  runtime: number | null // minutes
+}
+
 export interface FranchisePart {
   mediaId: number
   kind: PartKind
@@ -39,6 +53,21 @@ export interface FranchisePart {
   synopsis: string
   genres: string[]
   progress: number
+  /** Premiere/season year (AniList seasonYear or TMDB season air-date year). */
+  year: number | null
+  /** Studios (AniList) or networks (TMDB) — names only, for the detail meta line. */
+  studios: string[]
+  /**
+   * Episodes sharing the next airing date. `> 1` marks a same-day multi-episode / full-season
+   * "drop" (TMDB), so Schedule can label it "Season drop" without shipping the whole episode list.
+   * Computed from `episodes` server-side; `0` when nothing is upcoming or episode data is absent.
+   */
+  nextAiringCount: number
+  /**
+   * Full per-episode list. Populated ONLY on the franchise-detail response (`GET /franchises/:id`);
+   * empty on the library/summary payloads to keep those lean.
+   */
+  episodes: EpisodeMeta[]
 }
 
 export interface Franchise {
@@ -54,6 +83,10 @@ export interface Franchise {
   parts: FranchisePart[]
   subscription: { status: WatchStatus } | null
   upcoming: FranchiseUpcoming | null
+  /** Premiere year of the franchise (earliest dated part). */
+  year: number | null
+  /** Studios (anime) or networks (TV) for the primary installment — the detail meta line. */
+  studios: string[]
 }
 
 export interface FranchiseSummary {
@@ -66,6 +99,8 @@ export interface FranchiseSummary {
   partCount: number
   nextAiringAt: number | null
   upcoming: FranchiseUpcoming | null
+  /** Premiere year (for "Anime · 2023" / "TV · 2024" on discover cards). */
+  year: number | null
   status?: WatchStatus
   behind?: number
   newParts?: number
