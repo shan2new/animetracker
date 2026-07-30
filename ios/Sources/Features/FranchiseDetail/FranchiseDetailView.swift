@@ -1,24 +1,36 @@
 import SwiftUI
 
-// Franchise detail sheet (AnimeDetails design). Fetches the full franchise (parts + subscription)
-// and shows, top to bottom:
-//  - a banner hero with the title overlaid on the bottom scrim,
-//  - an "In Library" row + poster + Parts/Format/Aired meta + genres,
-//  - a LIVE BROADCAST BAR for the currently-airing season (big countdown, aired progress), which
-//    degrades to a quiet "Next up" line when nothing is airing but a future installment is known,
-//  - synopsis, a sliding status segmented control,
-//  - "Parts & Episodes" grouped into Seasons / Movies / OVAs / Specials / Music — episodic parts
-//    use a tappable PIPS grid, movies a binary toggle.
+// Franchise detail sheet — the approved "8a · refined accordion" redesign. Top to bottom:
+//  - a poster-forward hero (color-wash background + floating cover), with a frosted back button,
+//    a status-chip menu (Watching / Completed / Plan), and a ⋯ overflow (Refresh / Share / Remove),
+//  - centered title + a genre/format meta line + a clamped synopsis with "Read more",
+//  - an announced-installment line when a future season is known but not yet in the parts,
+//  - "SEASONS & MOVIES": a per-season accordion (each season expands to per-episode rows with a
+//    watched toggle, a "Next up" highlight, and a source-aware date badge on the next episode);
+//    movies / specials are binary-toggle peer rows.
+//
+// Note: the API exposes episode COUNTS, not per-episode metadata, so episode rows read "Episode N"
+// rather than titles/synopses, and progress is contiguous (tapping episode N sets watched-through-N).
+/// Deep-link target inside the detail sheet: pre-open a season's accordion and land on one episode
+/// (Schedule rows pass the aired/next episode; nil = the normal everything-collapsed opening).
+struct EpisodeFocus: Equatable {
+    let mediaId: Int
+    let episode: Int
+}
+
 struct FranchiseDetailView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
     let franchiseId: String
+    var focus: EpisodeFocus? = nil
 
     @State private var franchise: Franchise?
     @State private var loading = true
     @State private var loadError = false
     @State private var synopsisExpanded = false
     @State private var confirmRemove = false
-    @Namespace private var statusPillNS
+    @State private var openState: [Int: Bool] = [:]   // part.mediaId → user-overridden open/closed
+    @State private var openKinds: Set<PartKind> = []  // non-season kind groups currently expanded
 
     private var now: Int64 { appModel.now }
 
@@ -31,19 +43,14 @@ struct FranchiseDetailView: View {
                 Loader()
             } else if loadError {
                 VStack(spacing: 14) {
-                    Text("Couldn't load this franchise.")
-                        .foregroundStyle(Theme.text52)
+                    Text("Couldn't load this franchise.").foregroundStyle(Theme.text52)
                     Button("Retry") { Task { await load() } }
                         .buttonStyleProminentGlass()
                 }
             }
         }
-        // The sheet presents above MainTabView's toast layer, so mount the same host here —
-        // adds/undo/errors triggered in-sheet stay visible.
         .overlay(alignment: .bottom) {
-            ToastHost()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 24)
+            ToastHost().padding(.horizontal, 16).padding(.bottom, 24)
         }
         .task { await load() }
     }
@@ -64,168 +71,353 @@ struct FranchiseDetailView: View {
         appModel.franchise(id: franchiseId) ?? franchise ?? fallback
     }
 
+    /// The live franchise (fresh progress/status) grafted with per-episode data from the detail
+    /// fetch — the in-library copy is loaded without episodes, so overlay them by mediaId.
+    private func mergedEpisodes(into base: Franchise) -> Franchise {
+        guard let fetched = franchise, fetched.id == base.id else { return base }
+        let epByMedia = Dictionary(fetched.parts.map { ($0.mediaId, $0.episodes) }, uniquingKeysWith: { a, _ in a })
+        let parts = base.parts.map { p -> FranchisePart in
+            if p.episodes.isEmpty, let eps = epByMedia[p.mediaId], !eps.isEmpty { return p.withEpisodes(eps) }
+            return p
+        }
+        return Franchise(copying: base, parts: parts)
+    }
+
     @ViewBuilder
     private func content(_ initial: Franchise) -> some View {
-        let f = live(initial)
+        let f = mergedEpisodes(into: live(initial))
         let inLibrary = appModel.isInLibrary(f.id)
 
         GeometryReader { proxy in
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    hero(f)
-
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
-                        libraryRow(f, inLibrary: inLibrary)
-                            .padding(.top, 16)
-                        posterMeta(f).padding(.top, 18)
-                        if !f.genres.isEmpty {
-                            FlowChips(items: Array(f.genres.prefix(4)))
-                                .padding(.top, 16)
-                        }
+                        hero(f, inLibrary: inLibrary)
 
-                        releaseArea(f).padding(.top, 22)
+                        VStack(alignment: .leading, spacing: 0) {
+                            titleBlock(f)
+                            synopsisBlock(f).padding(.top, 14)
+                            announcedLine(f).padding(.top, 2)
 
-                        synopsisBlock(f).padding(.top, 20)
-
-                        if inLibrary {
-                            statusControl(f).padding(.top, 26)
-                        } else {
-                            Button {
-                                appModel.addToLibrary(franchiseId: f.id, title: f.title, isReleasing: f.isReleasing)
-                            } label: {
-                                HStack(spacing: 9) {
-                                    Image(systemName: "plus").scaledFont(16, weight: .bold)
-                                    Text("Add to library").scaledFont(15.5, weight: .semibold)
-                                }
-                                .frame(maxWidth: .infinity).padding(.vertical, 15)
-                                .foregroundStyle(Theme.background)
+                            if !inLibrary {
+                                addButton(f).padding(.top, 22)
                             }
-                            .buttonStyleProminentGlass()
-                            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                            .padding(.top, 24)
-                        }
 
-                        partsSections(f, inLibrary: inLibrary).padding(.top, 30)
-
-                        if inLibrary {
-                            removeButton(f).padding(.top, 28)
+                            seasonsAndMovies(f, inLibrary: inLibrary).padding(.top, 28)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 44)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 40)
+                    .frame(width: proxy.size.width, alignment: .topLeading)
                 }
-                .frame(width: proxy.size.width, alignment: .topLeading)
+                .scrollIndicators(.hidden)
+                .onAppear { focusScroll(scrollProxy) }
             }
-            .scrollIndicators(.hidden)
         }
         .ignoresSafeArea(edges: .top)
         .scrollContentBackground(.hidden)
         .overlay(alignment: .center) {
             ZStack {
                 if appModel.justCaught.contains(f.id) {
-                    CaughtUpOverlay(size: 62)
-                        .frame(width: 200, height: 200)
-                        .allowsHitTesting(false)
+                    CaughtUpOverlay(size: 62).frame(width: 200, height: 200).allowsHitTesting(false)
                 }
             }
-            .animation(.easeOut(duration: 0.22), value: appModel.justCaught.contains(f.id))
+            .animation(.uiGentle, value: appModel.justCaught.contains(f.id))
         }
     }
 
-    // MARK: hero banner with overlaid title
+    // MARK: hero — color wash + floating poster + frosted controls
 
-    private func hero(_ f: Franchise) -> some View {
-        ZStack(alignment: .bottomLeading) {
-            RemoteImageView(url: f.banner ?? f.cover)
-                .frame(maxWidth: .infinity, minHeight: 290, maxHeight: 290)
-                .clipped()
-                .opacity(0.62)
-            // Strong bottom scrim so the title stays legible over any banner art.
+    private func hero(_ f: Franchise, inLibrary: Bool) -> some View {
+        ZStack(alignment: .top) {
+            // The 8a subtle radial colour wash, fading to the app background. Independent of artwork
+            // loading, so the hero is always premium and the floating cover reads clearly on top.
             LinearGradient(
-                stops: [
-                    .init(color: Theme.background, location: 0.0),
-                    .init(color: Theme.background.opacity(0.55), location: 0.42),
-                    .init(color: Theme.background.opacity(0.0), location: 1.0),
-                ],
-                startPoint: .bottom, endPoint: .top
+                colors: [Color(hex: 0x2C3242), Theme.background],
+                startPoint: .top, endPoint: .bottom
             )
-            Text(f.title)
-                .scaledFont(28, weight: .semibold)
-                .tracking(-0.8)
-                .foregroundStyle(Theme.textPrimary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .shadow(color: .black.opacity(0.65), radius: 14, y: 2)
-                .padding(.horizontal, 20)
-                .padding(.bottom, 16)
+            .overlay(alignment: .top) {
+                RadialGradient(
+                    colors: [Color(hex: 0x3A4155).opacity(0.85), .clear],
+                    center: .top, startRadius: 0, endRadius: 300
+                )
+            }
+            .frame(height: 262)
+            .frame(maxWidth: .infinity)
+
+            // Floating cover.
+            Thumb(cover: f.cover, width: 116, height: 168, radius: 14)
+                .shadow(color: .black.opacity(0.6), radius: 24, y: 16)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1))
+                .padding(.top, 54)
+
+            // Overlaid controls.
+            HStack(alignment: .top) {
+                GlassCircleButton(systemName: "chevron.down", size: 34, iconSize: 16,
+                                  foreground: Theme.textPrimary) { dismiss() } // close haptic fires in the sheet's onDismiss
+                Spacer()
+                HStack(spacing: 8) {
+                    if inLibrary {
+                        statusMenu(f)
+                        overflowMenu(f)
+                    } else {
+                        addPill(f)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
         }
-        .frame(maxWidth: .infinity, minHeight: 290, maxHeight: 290)
-        .clipped()
+        .frame(height: 262)
+        .frame(maxWidth: .infinity)
     }
 
-    // MARK: in-library row (pill + status word)
+    private func statusMenu(_ f: Franchise) -> some View {
+        Menu {
+            ForEach(WatchStatus.allCases, id: \.self) { s in
+                Button {
+                    withAnimation(.uiSnappy) { appModel.setStatus(franchiseId: f.id, status: s) }
+                } label: {
+                    if f.effectiveStatus == s {
+                        Label(statusLabel(s), systemImage: "checkmark")
+                    } else {
+                        Text(statusLabel(s))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(statusLabel(f.effectiveStatus))
+                    .scaledFont(12.5, weight: .medium)
+                    .foregroundStyle(Theme.text72)
+                    .contentTransition(.numericText())
+                Image(systemName: "chevron.down")
+                    .scaledFont(10, weight: .semibold)
+                    .foregroundStyle(Theme.text40)
+            }
+            .frostedChrome(shape: Capsule(), leading: 12, trailing: 9)
+        }
+    }
+
+    private func overflowMenu(_ f: Franchise) -> some View {
+        Menu {
+            Button { Task { await load() } } label: { Label("Refresh metadata", systemImage: "arrow.clockwise") }
+            ShareLink(item: f.title) { Label("Share", systemImage: "square.and.arrow.up") }
+            Button(role: .destructive) { confirmRemove = true } label: {
+                Label("Remove from library", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .scaledFont(15, weight: .semibold)
+                .foregroundStyle(Theme.textPrimary)
+                .frame(width: 34, height: 34)
+                .frostedChrome(shape: Circle())
+        }
+        .confirmationDialog("Remove \u{201C}\(f.title)\u{201D} from your library?",
+                            isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { appModel.removeFromLibrary(franchiseId: f.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your episode progress for this franchise will no longer be tracked.")
+        }
+    }
+
+    private func addPill(_ f: Franchise) -> some View {
+        Button {
+            appModel.addToLibrary(franchiseId: f.id, title: f.title, isReleasing: f.isReleasing)
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus").scaledFont(11, weight: .bold)
+                Text("Add").scaledFont(12.5, weight: .semibold)
+            }
+            .foregroundStyle(Theme.background)
+            .padding(.horizontal, 13).padding(.vertical, 8)
+            .background(Theme.accent, in: Capsule())
+        }
+        .buttonStyle(SpringPressButtonStyle(scale: 0.94))
+    }
+
+    // MARK: title + synopsis + announced line
+
+    private func titleBlock(_ f: Franchise) -> some View {
+        VStack(spacing: 7) {
+            Text(f.title)
+                .scaledFont(23, weight: .semibold)
+                .tracking(-0.6)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if !metaLine(f).isEmpty {
+                Text(metaLine(f))
+                    .scaledFont(12.5, weight: .medium)
+                    .foregroundStyle(Theme.text62)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 2)
+    }
+
+    // "HBO · Drama · Fantasy · 2011" — studio/network + up to two genres + premiere year, falling
+    // back to the parts breakdown.
+    private func metaLine(_ f: Franchise) -> String {
+        var parts: [String] = []
+        if let studio = f.studios.first { parts.append(studio) }
+        parts.append(contentsOf: f.genres.prefix(2))
+        if let y = f.year { parts.append(String(y)) }
+        return parts.isEmpty ? (partBreakdown(f.partCounts) ?? "") : parts.joined(separator: " · ")
+    }
 
     @ViewBuilder
-    private func libraryRow(_ f: Franchise, inLibrary: Bool) -> some View {
-        HStack(spacing: 12) {
-            if inLibrary {
-                HStack(spacing: 5) {
-                    Image(systemName: "checkmark").scaledFont(9, weight: .bold)
-                    Text("In Library").scaledFont(12, weight: .semibold)
+    private func synopsisBlock(_ f: Franchise) -> some View {
+        let synopsis = Formatting.stripHtml(f.synopsis)
+        if !synopsis.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(synopsis)
+                    .scaledFont(13.5)
+                    .foregroundStyle(Theme.text70)
+                    .lineSpacing(4)
+                    .lineLimit(synopsisExpanded ? nil : 3)
+                if synopsis.count > 160 {
+                    Button {
+                        withAnimation(.uiSmooth) { synopsisExpanded.toggle() }
+                    } label: {
+                        Text(synopsisExpanded ? "Less" : "Read more")
+                            .scaledFont(13, weight: .semibold)
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .foregroundStyle(Theme.accent)
-                .padding(.horizontal, 11).padding(.vertical, 6)
-                .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.accentBorder, lineWidth: 1))
-                Text(statusLabel(f.effectiveStatus))
-                    .scaledFont(14)
-                    .foregroundStyle(Theme.text50)
-            } else {
-                Text("Not in library")
-                    .scaledFont(14)
-                    .foregroundStyle(Theme.text50)
             }
         }
     }
 
-    // MARK: poster + meta
-
-    private func posterMeta(_ f: Franchise) -> some View {
-        let releasing = f.releasingPart
-        return HStack(alignment: .top, spacing: 16) {
-            Thumb(cover: f.cover, width: 104, height: 152, radius: 13)
-                .shadow(color: .black.opacity(0.55), radius: 20, y: 16)
-            VStack(alignment: .leading, spacing: 15) {
-                if let breakdown = partBreakdown(f.partCounts) {
-                    metaRow(label: "Parts", value: breakdown)
-                }
-                if let releasing, let fmt = releasing.format, !fmt.isEmpty {
-                    metaRow(label: "Format", value: fmt)
-                }
-                if let releasing, releasing.totalEpisodes > 0 || releasing.airedEpisodes > 0 {
-                    metaRow(label: "Aired", value: episodesValue(releasing))
-                }
+    // A known future installment the airing schedule can't surface yet (no per-episode date).
+    @ViewBuilder
+    private func announcedLine(_ f: Franchise) -> some View {
+        if let up = f.upcoming, up.isFutureInstallment, !up.cardBadge.isEmpty {
+            HStack(spacing: 7) {
+                Image(systemName: "calendar").scaledFont(11, weight: .semibold).foregroundStyle(Theme.accent)
+                Text(up.cardBadge)
+                    .scaledFont(12.5, weight: .medium)
+                    .foregroundStyle(Theme.accent)
+                    .lineLimit(1)
             }
-            .padding(.top, 3)
-            Spacer(minLength: 0)
+            .padding(.top, 12)
         }
     }
 
-    /// A compact label / value pair for the metadata stack beside the poster.
-    private func metaRow(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .scaledFont(10, weight: .semibold)
-                .tracking(0.6)
-                .textCase(.uppercase)
+    private func addButton(_ f: Franchise) -> some View {
+        Button {
+            appModel.addToLibrary(franchiseId: f.id, title: f.title, isReleasing: f.isReleasing)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "plus").scaledFont(16, weight: .bold)
+                Text("Add to library").scaledFont(15.5, weight: .semibold)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 15)
+            .foregroundStyle(Theme.background)
+        }
+        .buttonStyleProminentGlass()
+        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+    }
+
+    // MARK: seasons & movies accordion
+
+    private func seasonsAndMovies(_ f: Franchise, inLibrary: Bool) -> some View {
+        let seasons = f.parts.filter { $0.kind == .season }.sorted { $0.sequence < $1.sequence }
+        let groups = nonSeasonGroups(f)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("SEASONS & MOVIES")
+                .scaledFont(11.5, weight: .semibold)
+                .tracking(0.9)
                 .foregroundStyle(Theme.text40)
-            Text(value)
-                .scaledFont(13, weight: .medium, monospacedDigit: true)
-                .foregroundStyle(Theme.text70)
-                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 4)
+
+            // Seasons — individual accordions, collapsed by default (tap to open).
+            ForEach(seasons) { part in
+                SeasonAccordion(
+                    part: part,
+                    source: f.source,
+                    now: now,
+                    isOpen: isOpen(part),
+                    interactive: inLibrary,
+                    onToggleOpen: { toggleOpen(part) },
+                    onSetProgress: { eps in setProgress(f, part: part, eps: eps) }
+                )
+                .id("part-\(part.mediaId)")
+            }
+
+            // Non-season parts — one collapsible category group per kind (Movies / OVAs / Specials /
+            // …), each with its kind as the header and its parts below, so they stay visually
+            // distinct from seasons and don't clutter the list.
+            ForEach(groups, id: \.kind) { group in
+                KindGroup(
+                    kind: group.kind,
+                    parts: group.parts,
+                    isOpen: openKinds.contains(group.kind),
+                    interactive: inLibrary,
+                    onToggleOpen: { toggleKind(group.kind) },
+                    onSetProgress: { part, eps in setProgress(f, part: part, eps: eps) }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Non-season parts grouped by kind, ordered by canonical rank (Movies, OVAs, ONAs, Specials, …).
+    private func nonSeasonGroups(_ f: Franchise) -> [(kind: PartKind, parts: [FranchisePart])] {
+        Dictionary(grouping: f.parts.filter { $0.kind != .season }, by: { $0.kind })
+            .map { (kind: $0.key, parts: $0.value.sorted { $0.sequence < $1.sequence }) }
+            .sorted { $0.kind.sortRank < $1.kind.sortRank }
+    }
+
+    /// Everything starts COLLAPSED; only a user tap opens a season — except a deep-linked focus
+    /// season (Schedule → episode), which arrives already open. A tap still overrides it.
+    private func isOpen(_ p: FranchisePart) -> Bool {
+        openState[p.mediaId] ?? (focus?.mediaId == p.mediaId)
+    }
+
+    /// Two-stage landing for a deep-linked episode: after the sheet settles, put the (pre-opened)
+    /// focus season at the top — realizing its lazy episode rows — then centre the episode itself.
+    private func focusScroll(_ proxy: ScrollViewProxy) {
+        guard let focus else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            withAnimation(.uiSmooth) { proxy.scrollTo("part-\(focus.mediaId)", anchor: .top) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                withAnimation(.uiSmooth) {
+                    proxy.scrollTo("ep-\(focus.mediaId)-\(focus.episode)", anchor: .center)
+                }
+            }
+        }
+    }
+
+    private func toggleOpen(_ p: FranchisePart) {
+        Haptics.selection()
+        withAnimation(.uiSnappy) { openState[p.mediaId] = !isOpen(p) }
+    }
+
+    private func toggleKind(_ kind: PartKind) {
+        Haptics.selection()
+        withAnimation(.uiSnappy) {
+            if openKinds.contains(kind) { openKinds.remove(kind) } else { openKinds.insert(kind) }
+        }
+    }
+
+    private func setProgress(_ f: Franchise, part: FranchisePart, eps: Int) {
+        withAnimation(.uiSnappy) {
+            appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: eps)
+        }
+    }
+
+    // MARK: helpers
+
+    private func statusLabel(_ s: WatchStatus) -> String {
+        switch s {
+        case .watching: return "Watching"
+        case .completed: return "Completed"
+        case .planned: return "Plan"
         }
     }
 
@@ -245,294 +437,469 @@ struct FranchiseDetailView: View {
         ].compactMap { $0 }
         return pieces.isEmpty ? nil : pieces.joined(separator: " · ")
     }
+}
 
-    /// Aired-episode summary for the releasing part. Always reads as "aired" so it is never
-    /// confused with the user's watched "X/Y" progress.
-    private func episodesValue(_ part: FranchisePart) -> String {
-        if part.totalEpisodes > 0 {
-            if part.isReleasing && part.airedEpisodes < part.totalEpisodes {
-                return "\(part.airedEpisodes) of \(part.totalEpisodes) aired"
-            }
-            return "\(part.totalEpisodes) total"
-        }
-        return "\(part.airedEpisodes) aired"
+// MARK: - Season accordion
+
+// A single season row that expands to its per-episode list. Collapsed shows a short state + a
+// chevron; open shows a detailed sub-line and the episode rows. Open/closed is signalled by the
+// chevron only — no background tint (restraint).
+private struct SeasonAccordion: View {
+    let part: FranchisePart
+    let source: MediaSource
+    let now: Int64
+    let isOpen: Bool
+    let interactive: Bool
+    let onToggleOpen: () -> Void
+    let onSetProgress: (Int) -> Void
+
+    // With a known total, never exceed it. With an unknown total (0, common for ongoing AniList
+    // shows), extend one past what's aired so the airing/next-to-air row can render its date badge.
+    private var episodeCount: Int {
+        if part.totalEpisodes > 0 { return part.totalEpisodes }
+        let nextToAir = (part.isReleasing && part.nextAiringAt != nil) ? part.airedEpisodes + 1 : 0
+        return max(part.airedEpisodes, part.progress, nextToAir)
     }
 
-    // MARK: synopsis (expandable)
+    /// Mark-all target: catch up to what's aired for a releasing season, else the full episode count.
+    private var markTarget: Int { part.isReleasing ? part.airedEpisodes : episodeCount }
+    /// Whether every available episode of this season is watched (drives the header checkbox).
+    private var seasonWatched: Bool { markTarget > 0 && part.progress >= markTarget }
 
-    /// Synopsis clamped to a few lines with a Read more / Less toggle — AniList descriptions can
-    /// run long, and hard truncation hid the text with no way to finish reading it.
-    @ViewBuilder
-    private func synopsisBlock(_ f: Franchise) -> some View {
-        let synopsis = Formatting.stripHtml(f.synopsis)
-        VStack(alignment: .leading, spacing: 8) {
-            Text(synopsis.isEmpty ? "No synopsis available." : synopsis)
-                .scaledFont(14.5)
-                .foregroundStyle(Theme.text66)
-                .lineSpacing(5)
-                .lineLimit(synopsisExpanded ? nil : 6)
-            // ~6 rendered lines ≈ 300 chars at this size; below that the clamp never bites.
-            if synopsis.count > 300 {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) { synopsisExpanded.toggle() }
-                } label: {
-                    Text(synopsisExpanded ? "Less" : "Read more")
-                        .scaledFont(13, weight: .semibold)
-                        .foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(.plain)
-            }
+    private var status: PartStatus {
+        if part.isUpcoming { return .upcoming }
+        if part.isReleasing {
+            if part.isBehind { return .behind(part.episodesBehind) }
+            return part.progress > 0 ? .caughtUp : .airing
         }
+        if part.isFinished { return .watched }
+        return part.progress > 0 ? .watching : .notStarted
     }
 
-    // MARK: remove from library
-
-    /// Quiet destructive action at the end of the sheet — confirmation-gated, since removing
-    /// drops the subscription (and the meaning of its progress) in one tap.
-    private func removeButton(_ f: Franchise) -> some View {
-        Button(role: .destructive) {
-            confirmRemove = true
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "trash").scaledFont(12, weight: .semibold)
-                Text("Remove from library").scaledFont(13.5, weight: .medium)
-            }
-            .foregroundStyle(Color(hex: 0xE5484D).opacity(0.9))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 13)
-        }
-        .buttonStyle(.plain)
-        .background(Theme.fillFaint, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
-            .stroke(Color(hex: 0xE5484D).opacity(0.22), lineWidth: 1))
-        .confirmationDialog("Remove \u{201C}\(f.title)\u{201D} from your library?",
-                            isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button("Remove", role: .destructive) {
-                appModel.removeFromLibrary(franchiseId: f.id)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Your episode progress for this franchise will no longer be tracked.")
-        }
-    }
-
-    // MARK: release area (live broadcast bar / next-up / hidden)
-
-    @ViewBuilder
-    private func releaseArea(_ f: Franchise) -> some View {
-        if let part = f.releasingPart, part.isReleasing {
-            liveBar(part, upcoming: f.upcoming)
-        } else if let up = f.upcoming, up.isFutureInstallment {
-            nextUpBar(up)
-        }
-    }
-
-    /// The currently-airing season: big countdown to the next episode (when AniList has dated it),
-    /// aired-progress bar, and the franchise's "what's next" folded into the footer.
-    private func liveBar(_ part: FranchisePart, upcoming: FranchiseUpcoming?) -> some View {
-        let total = part.totalEpisodes
-        let airedFrac = total > 0 ? min(1, Double(part.airedEpisodes) / Double(total)) : 0
-        let seasonLabel = part.label.isEmpty ? part.title : part.label
-        let upShort = (upcoming?.isFutureInstallment == true) ? (upcoming?.cardBadge ?? "") : ""
-
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                airingNowLabel
-                Spacer(minLength: 8)
-                Text(seasonLabel)
-                    .scaledFont(12.5, weight: .medium)
-                    .foregroundStyle(Theme.text50)
-                    .lineLimit(1)
-            }
-
-            if let next = part.nextAiringAt {
-                let countdownText = Formatting.fmtCountdown(target: next, now: now)
-                HStack(alignment: .firstTextBaseline, spacing: 11) {
-                    Text(countdownText)
-                        .scaledFont(40, weight: .semibold, monospacedDigit: true)
-                        .tracking(-0.6)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .layoutPriority(1)
-                        // Digits roll down as the 20s clock ticks instead of snapping.
-                        .contentTransition(.numericText(countsDown: true))
-                        .animation(.snappy(duration: 0.35), value: countdownText)
-                    Text("UNTIL AIR")
-                        .scaledFont(11, weight: .semibold)
-                        .tracking(0.5)
-                        .textCase(.uppercase)
-                        .foregroundStyle(Theme.text36)
-                }
-                .padding(.top, 16)
-
-                (Text("Episode \(part.nextEpisodeNumber.map(String.init) ?? "?")")
-                    .foregroundStyle(Theme.accent)
-                 + Text(" · airs \(Formatting.fmtDay(ts: next, now: now)), \(Formatting.fmtTime(next))")
-                    .foregroundStyle(Theme.text62))
-                    .scaledFont(13.5, weight: .medium)
-                    .padding(.top, 9)
-            }
-
-            if total > 0 {
-                ProgressBar(fraction: airedFrac, height: 5)
-                    .padding(.top, part.nextAiringAt != nil ? 18 : 16)
-            }
-
-            HStack {
-                Text(total > 0 ? "\(part.airedEpisodes) of \(total) aired" : "\(part.airedEpisodes) aired")
-                    .scaledFont(11.5, monospacedDigit: true)
-                    .contentTransition(.numericText())
-                    .animation(.snappy(duration: 0.3), value: part.airedEpisodes)
-                    .foregroundStyle(Theme.text50)
-                Spacer(minLength: 8)
-                if !upShort.isEmpty {
-                    Text(upShort)
-                        .scaledFont(12, weight: .medium)
-                        .foregroundStyle(Theme.text44)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.top, 9)
-        }
-        .releaseBarChrome()
-    }
-
-    /// Not airing, but a future installment is known. A sibling of the live bar: same chrome, with
-    /// the announced installment standing in for the countdown as the prominent line.
-    private func nextUpBar(_ up: FranchiseUpcoming) -> some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                HStack(spacing: 7) {
-                    Image(systemName: "calendar")
-                        .scaledFont(11, weight: .bold)
-                        .foregroundStyle(Theme.accent)
-                    Text(up.tag.uppercased())
-                        .scaledFont(11, weight: .bold)
-                        .tracking(0.6)
-                        .foregroundStyle(Theme.accent)
+            Button(action: onToggleOpen) {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(part.label.isEmpty ? part.title : part.label)
+                            .scaledFont(15, weight: .semibold)
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        subLine
+                    }
+                    Spacer(minLength: 8)
+                    // Mark-all-watched checkbox (its own tap target inside the header button).
+                    // Hidden when there's nothing to mark yet (releasing season, 0 aired) — else
+                    // it's a dead control that still bounces and haptics on tap.
+                    if interactive && !part.isUpcoming && markTarget > 0 {
+                        WatchedControl(watched: seasonWatched, isNext: false, interactive: true) {
+                            onSetProgress(seasonWatched ? 0 : markTarget)
+                        }
+                    } else if !isOpen {
+                        collapsedState
+                    }
+                    Image(systemName: "chevron.right")
+                        .scaledFont(12, weight: .semibold)
+                        .foregroundStyle(Theme.text36)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
                 }
-                Spacer(minLength: 8)
-                Text("NEXT UP")
-                    .scaledFont(10.5, weight: .semibold)
-                    .tracking(0.6)
-                    .foregroundStyle(Theme.text36)
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            // The announced installment is the hero line, echoing the bar's big countdown.
-            Text((up.next?.isEmpty == false) ? up.next! : "New installment")
-                .scaledFont(24, weight: .semibold, monospacedDigit: true)
-                .tracking(-0.4)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 14)
-
-            if !up.displayRelease.isEmpty {
-                Text(up.displayRelease)
-                    .scaledFont(13.5, weight: .medium, monospacedDigit: true)
-                    .foregroundStyle(Theme.accent)
-                    .padding(.top, 8)
-            }
-
-            if let note = up.note, !note.isEmpty {
-                Text(note)
-                    .scaledFont(12.5)
-                    .foregroundStyle(Theme.text50)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 10)
-            }
-        }
-        .releaseBarChrome()
-    }
-
-    private var airingNowLabel: some View {
-        HStack(spacing: 7) {
-            LivePulseDot()
-            Text("AIRING NOW")
-                .scaledFont(11, weight: .bold)
-                .tracking(0.6)
-                .foregroundStyle(Theme.accent)
-        }
-    }
-
-    // MARK: status control — sliding pill via matchedGeometryEffect
-
-    private func statusControl(_ f: Franchise) -> some View {
-        VStack(alignment: .leading, spacing: 11) {
-            Text("Status")
-                .scaledFont(12, weight: .semibold)
-                .tracking(0.6)
-                .textCase(.uppercase)
-                .foregroundStyle(Theme.text40)
-            HStack(spacing: 8) {
-                statusButton(f, .watching, "Watching")
-                statusButton(f, .completed, "Completed")
-                statusButton(f, .planned, "Plan")
-            }
-        }
-    }
-
-    private func statusButton(_ f: Franchise, _ status: WatchStatus, _ label: String) -> some View {
-        let on = f.effectiveStatus == status
-        return Button {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
-                appModel.setStatus(franchiseId: f.id, status: status)
-            }
-        } label: {
-            Text(label)
-                .scaledFont(12.5, weight: .medium)
-                .frame(maxWidth: .infinity).padding(.vertical, 12)
-                .foregroundStyle(on ? Theme.background : Theme.text70)
-        }
-        .background {
-            if on {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.accent)
-                    .matchedGeometryEffect(id: "statusPill", in: statusPillNS)
-            } else {
-                RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.fillSoft)
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairlineStrong, lineWidth: 1))
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: parts sections
-
-    private func partsSections(_ f: Franchise, inLibrary: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            SectionHeader(label: "Parts & Episodes", trailing: partBreakdown(f.partCounts))
-                .padding(.bottom, -10)
-            ForEach(f.sections, id: \.kind) { section in
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(label: section.kind.sectionTitle, trailing: "\(section.parts.count)")
-                    VStack(spacing: 11) {
-                        ForEach(section.parts) { part in
-                            PartCard(part: part,
-                                     inLibrary: inLibrary,
-                                     onSetProgress: { eps in
-                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                            appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: eps)
-                                        }
-                                     })
+            if isOpen {
+                if part.isUpcoming {
+                    Text(part.premiereAt.map { "Premieres \(Formatting.fmtFullDate($0))" } ?? "Release date TBA")
+                        .scaledFont(12.5, weight: .medium)
+                        .foregroundStyle(Theme.accent)
+                        .padding(.bottom, 14)
+                } else if episodeCount > 0 {
+                    LazyVStack(spacing: 0) {
+                        ForEach(1...episodeCount, id: \.self) { n in
+                            EpisodeRow(part: part, index: n, source: source,
+                                       now: now, interactive: interactive, onSetProgress: onSetProgress)
+                                .id("ep-\(part.mediaId)-\(n)")
+                            if n < episodeCount { HairlineDivider(inset: 0) }
                         }
                     }
-                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 10)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .bottom) { HairlineDivider(inset: 0) }
     }
 
-    private func statusLabel(_ s: WatchStatus) -> String {
-        switch s {
-        case .watching: return "Watching"
-        case .completed: return "Completed"
-        case .planned: return "Plan to watch"
+    // Detailed sub-line under the season name.
+    @ViewBuilder
+    private var subLine: some View {
+        switch status {
+        case .airing:
+            HStack(spacing: 6) {
+                Circle().fill(Theme.accent).frame(width: 5, height: 5)
+                Text(part.totalEpisodes > 0
+                     ? "Airing · \(part.airedEpisodes) of \(episodeCount) aired"
+                     : "Airing · \(part.airedEpisodes) aired")
+                    .scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+                    .contentTransition(.numericText())
+            }
+        case .behind:
+            Text("Watching · \(part.progress) / \(episodeCount)")
+                .scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+                .contentTransition(.numericText())
+        case .watching, .caughtUp:
+            Text("Watching · \(part.progress) / \(episodeCount)")
+                .scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+                .contentTransition(.numericText())
+        case .watched:
+            Text("\(episodeCount) episodes").scaledFont(12, weight: .medium).foregroundStyle(Theme.text40)
+        case .upcoming:
+            Text("Announced").scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+        case .notStarted:
+            Text("\(episodeCount) episodes").scaledFont(12, weight: .medium).foregroundStyle(Theme.text40)
+        }
+    }
+
+    // Short state shown at the trailing edge when collapsed.
+    @ViewBuilder
+    private var collapsedState: some View {
+        switch status {
+        case .watched:
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark").scaledFont(9, weight: .bold)
+                Text("Watched").scaledFont(12, weight: .medium)
+            }
+            .foregroundStyle(Theme.text46)
+        case .behind(let n):
+            Text("\(n) \(source == .tmdb ? "unwatched" : "behind")")
+                .scaledFont(11, weight: .semibold)
+                .foregroundStyle(Theme.accent)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Theme.accentChipFill, in: Capsule())
+        case .notStarted:
+            Text("Not started").scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+        case .upcoming:
+            Text("Announced").scaledFont(12, weight: .medium).foregroundStyle(Theme.accent)
+        default:
+            EmptyView()
         }
     }
 }
 
-// A gently pulsing accent dot for the "AIRING NOW" label (mirrors the prototype's livepulse).
+// MARK: - Episode row
+
+// One episode within an expanded season. "E1 · Title" (or "Episode N" when untitled) + a state
+// sub-line, with a trailing watched toggle (aired) or a source-aware date badge (next to air).
+// Tapping the row expands an episode-detail card (still + synopsis + Mark watched) when there's
+// detail to show. Progress is contiguous: tapping marks watched-through-N (or N-1 to unmark).
+private struct EpisodeRow: View {
+    let part: FranchisePart
+    let index: Int
+    let source: MediaSource
+    let now: Int64
+    let interactive: Bool
+    let onSetProgress: (Int) -> Void
+    @State private var expanded = false
+
+    private var episode: Episode? { part.episodes.first { $0.number == index } }
+    private var watched: Bool { index <= part.progress }
+    private var aired: Bool { !part.isReleasing || index <= part.airedEpisodes }
+    private var isNextToAir: Bool {
+        part.isReleasing && index == part.airedEpisodes + 1 && part.nextAiringAt != nil
+    }
+    private var isNextUp: Bool { index == part.progress + 1 && aired }
+    private var dimmed: Bool { !aired && !isNextToAir }
+    private var hasDetail: Bool { (episode?.overview?.isEmpty == false) || episode?.still != nil }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if expanded { detailCard.padding(.bottom, 10) }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            if let still = episode?.still {
+                Thumb(cover: still, width: 58, height: 34, radius: 6)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(titleText)
+                    .scaledFont(13.5, weight: .semibold)
+                    .foregroundStyle(watched ? Theme.text62 : Theme.textPrimary)
+                    .lineLimit(1)
+                if let sub = subLabel {
+                    Text(sub.text).scaledFont(11, weight: .medium).foregroundStyle(sub.color)
+                }
+            }
+            Spacer(minLength: 8)
+            trailing
+        }
+        .padding(.vertical, 9)
+        .opacity(dimmed ? 0.55 : 1)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onRowTap)
+    }
+
+    private var titleText: String {
+        if let t = episode?.title, !t.isEmpty { return "E\(index) · \(t)" }
+        return "Episode \(index)"
+    }
+
+    private var subLabel: (text: String, color: Color)? {
+        if isNextUp { return ("Next up", Theme.accent) }
+        if isNextToAir { return ("New episode", Theme.accent) }
+        if !aired { return ("Upcoming", Theme.text40) }
+        if let d = episode?.airDate { return ("Aired \(Formatting.fmtFullDate(d))", Theme.text46) }
+        return nil
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        if isNextToAir, let next = part.nextAiringAt {
+            DateBadge(ts: next, now: now, source: source)
+        } else if aired {
+            WatchedControl(watched: watched, isNext: isNextUp, interactive: interactive) {
+                onSetProgress(watched ? index - 1 : index)
+            }
+        }
+    }
+
+    private func onRowTap() {
+        if hasDetail {
+            Haptics.selection()
+            withAnimation(.uiSnappy) { expanded.toggle() }
+        } else if interactive, aired {
+            onSetProgress(watched ? index - 1 : index)
+        }
+    }
+
+    // Expanded episode-detail card — a 16:9 still with a play affordance, the runtime/date meta,
+    // the synopsis, and a full-width Mark-watched button.
+    private var detailCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let still = episode?.still {
+                Color.clear
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay { RemoteImageView(url: still).frame(maxWidth: .infinity, maxHeight: .infinity) }
+                    .overlay {
+                        Image(systemName: "play.fill")
+                            .scaledFont(15)
+                            .foregroundStyle(Theme.textPrimary)
+                            .frame(width: 44, height: 44)
+                            .background(Theme.background.opacity(0.5), in: Circle())
+                            .glassChrome(in: Circle())
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            if !detailMeta.isEmpty {
+                Text(detailMeta).scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+            }
+            if let ov = episode?.overview, !ov.isEmpty {
+                Text(ov)
+                    .scaledFont(13)
+                    .foregroundStyle(Theme.text70)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if interactive, aired {
+                Button {
+                    onSetProgress(watched ? index - 1 : index)
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "checkmark").scaledFont(13, weight: .bold)
+                        Text(watched ? "Watched" : "Mark watched").scaledFont(14, weight: .semibold)
+                    }
+                    .frame(maxWidth: .infinity).frame(height: 42)
+                    .foregroundStyle(Theme.background)
+                }
+                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .buttonStyle(SpringPressButtonStyle(scale: 0.98))
+            }
+        }
+        .padding(12)
+        .background(Theme.fillFaint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+    }
+
+    private var detailMeta: String {
+        var parts = ["Episode \(index)"]
+        if let r = episode?.runtime { parts.append("\(r) min") }
+        if let d = episode?.airDate { parts.append(Formatting.fmtFullDate(d)) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+// The per-episode / per-movie watched toggle. Watched = a quiet neutral filled disc + check
+// (recedes); next-up = an accent ring; unwatched = a hairline ring.
+private struct WatchedControl: View {
+    let watched: Bool
+    let isNext: Bool
+    let interactive: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                Circle()
+                    .fill(watched ? Color.white.opacity(0.55) : Color.clear)
+                    .frame(width: 22, height: 22)
+                    .overlay {
+                        if !watched {
+                            Circle().stroke(isNext ? Theme.accent : Theme.hairlineStrong, lineWidth: 1.6)
+                        }
+                    }
+                if watched {
+                    Image(systemName: "checkmark")
+                        .scaledFont(11, weight: .bold)
+                        .foregroundStyle(Theme.background)
+                        // Liquid-Glass "responsive feedback": the check springs in when you mark it,
+                        // so the interaction reads as satisfying without leaning on a heavier haptic.
+                        .symbolEffect(.bounce, value: watched)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .frame(width: 30, height: 30)
+            .contentShape(Circle())
+            .animation(.uiBouncy, value: watched)
+        }
+        .buttonStyle(BounceButtonStyle())
+        .disabled(!interactive)
+        .accessibilityLabel(watched ? "Watched" : "Not watched")
+    }
+}
+
+// MARK: - Movie / special peer row
+
+private struct MovieRow: View {
+    let part: FranchisePart
+    let interactive: Bool
+    let onSetProgress: (Int) -> Void
+
+    private var full: Int { max(part.totalEpisodes, 1) }
+    private var watched: Bool { part.progress >= full }   // whole unit (incl. multi-episode OVAs)
+    private var kindTag: String {
+        switch part.kind {
+        case .movie: return "MOVIE"
+        case .ova: return "OVA"
+        case .ona: return "ONA"
+        case .special: return "SPECIAL"
+        case .music: return "MUSIC"
+        case .season: return "SEASON"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Thumb(cover: part.cover, width: 40, height: 56, radius: 7)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
+                        Text(part.label.isEmpty ? part.title : part.label)
+                            .scaledFont(15, weight: .semibold)
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(1)
+                        Text(kindTag)
+                            .scaledFont(9.5, weight: .bold)
+                            .tracking(0.5)
+                            .foregroundStyle(Theme.text62)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Theme.fillSoft, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(Theme.hairlineStrong, lineWidth: 1))
+                    }
+                    if let fmt = part.format, !fmt.isEmpty {
+                        Text(fmt).scaledFont(12, weight: .medium).foregroundStyle(Theme.text46)
+                    } else if part.isUpcoming {
+                        Text(part.premiereAt.map { "Premieres \(Formatting.fmtFullDate($0))" } ?? "TBA")
+                            .scaledFont(12, weight: .medium).foregroundStyle(Theme.accent)
+                    }
+                }
+                Spacer(minLength: 8)
+                if !part.isUpcoming {
+                    WatchedControl(watched: watched, isNext: false, interactive: interactive) {
+                        onSetProgress(watched ? 0 : full)
+                    }
+                }
+            }
+            .padding(.vertical, 13)
+        }
+        .overlay(alignment: .bottom) { HairlineDivider(inset: 0) }
+    }
+}
+
+// MARK: - Kind group (Movies / OVAs / Specials …)
+
+// A collapsible category group for non-season parts: the kind is the header, its parts (binary
+// watched-toggle rows) sit below. Collapsed by default so supplementary content stays visually
+// distinct from seasons and never clutters the list.
+private struct KindGroup: View {
+    let kind: PartKind
+    let parts: [FranchisePart]
+    let isOpen: Bool
+    let interactive: Bool
+    let onToggleOpen: () -> Void
+    let onSetProgress: (FranchisePart, Int) -> Void
+
+    private var title: String {
+        switch kind {
+        case .movie: return parts.count == 1 ? "Movie" : "Movies"
+        case .ova: return "OVAs"
+        case .ona: return "ONAs"
+        case .special: return "Specials"
+        case .music: return "Music"
+        case .season: return "Seasons"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onToggleOpen) {
+                HStack(spacing: 10) {
+                    Text(title)
+                        .scaledFont(15, weight: .semibold)
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("\(parts.count)")
+                        .scaledFont(12, weight: .medium, monospacedDigit: true)
+                        .foregroundStyle(Theme.text40)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .scaledFont(12, weight: .semibold)
+                        .foregroundStyle(Theme.text36)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0))
+                }
+                .padding(.vertical, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isOpen {
+                VStack(spacing: 0) {
+                    ForEach(parts) { part in
+                        MovieRow(part: part, interactive: interactive) { eps in onSetProgress(part, eps) }
+                    }
+                }
+                .padding(.bottom, 4)
+            }
+        }
+        .overlay(alignment: .bottom) { HairlineDivider(inset: 0) }
+    }
+}
+
+// MARK: - Part status
+
+// The watch state of a single part, used to drive its accordion sub-line and collapsed chip.
+private enum PartStatus {
+    case watched
+    case behind(Int)
+    case caughtUp
+    case airing
+    case watching
+    case upcoming
+    case notStarted
+}
+
+// A gently pulsing accent dot (retained for reuse by airing surfaces).
 private struct LivePulseDot: View {
     @State private var on = false
     var body: some View {
@@ -547,320 +914,20 @@ private struct LivePulseDot: View {
     }
 }
 
-// The watch state of a single part, used to drive its status chip.
-private enum PartStatus {
-    case watched          // movie watched, or a finite part finished to the end
-    case behind(Int)      // releasing & unwatched aired episodes remain
-    case caughtUp         // releasing & up to date with what's aired
-    case airing           // releasing, nothing watched yet
-    case watching         // partially watched, not releasing
-    case upcoming         // announced, not yet aired
-    case notStarted
-
-    var label: String {
-        switch self {
-        case .watched: return "Watched"
-        case .behind(let n): return "\(n) behind"
-        case .caughtUp: return "Caught up"
-        case .airing: return "Airing"
-        case .watching: return "Watching"
-        case .upcoming: return "Announced"
-        case .notStarted: return "Not started"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .watched: return "checkmark"
-        case .behind: return "exclamationmark"
-        case .caughtUp: return "checkmark"
-        case .airing: return "dot.radiowaves.left.and.right"
-        case .watching: return "play.fill"
-        case .upcoming: return "calendar"
-        case .notStarted: return "circle"
-        }
-    }
-
-    /// Behind is the only "filled accent" (highest urgency) status; the rest read as quiet chips.
-    var isUrgent: Bool { if case .behind = self { return true }; return false }
-}
-
-// A single part card: poster + title + status chip header, then a PIPS grid (episodic parts) or a
-// binary "Mark watched" toggle (movies). Behind, releasing parts get an accent-tinted background.
-private struct PartCard: View {
-    let part: FranchisePart
-    let inLibrary: Bool
-    let onSetProgress: (Int) -> Void
-
-    /// Highest watchable episode: aired count while releasing, else the season total.
-    private var cap: Int {
-        if part.isReleasing { return max(part.airedEpisodes, part.progress) }
-        if part.totalEpisodes > 0 { return part.totalEpisodes }
-        return part.progress
-    }
-    private var behind: Int { part.episodesBehind }
-    private var attention: Bool { part.isReleasing && behind > 0 }
-    private var complete: Bool { part.totalEpisodes > 0 && part.progress >= part.totalEpisodes }
-    /// Episodes drawn as pips — total for finite parts, else the aired/progress cap.
-    private var pipCount: Int { part.totalEpisodes > 0 ? part.totalEpisodes : cap }
-
-    private var status: PartStatus {
-        if part.isUpcoming { return .upcoming }
-        if part.isMovie { return part.progress > 0 ? .watched : .notStarted }
-        if part.isReleasing {
-            if part.isBehind { return .behind(part.episodesBehind) }
-            return part.progress > 0 ? .caughtUp : .airing
-        }
-        if part.isFinished { return .watched }
-        return part.progress > 0 ? .watching : .notStarted
-    }
-
-    /// One-tap shortcut: catch up to the latest aired episode while releasing, else finish the season.
-    private var quickAction: (label: String, target: Int)? {
-        if part.isReleasing && behind > 0 { return ("Catch up to \(part.airedEpisodes)", part.airedEpisodes) }
-        if !part.isReleasing && !complete && part.totalEpisodes > 0 { return ("Mark all", part.totalEpisodes) }
-        return nil
-    }
-
-    private var countLabel: String {
-        part.totalEpisodes > 0 ? "\(part.progress) / \(part.totalEpisodes)" : "\(part.progress)"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if inLibrary && !part.isUpcoming {
-                if part.isMovie {
-                    movieToggle.padding(.horizontal, 13).padding(.bottom, 13)
-                } else if pipCount > 0 {
-                    pipsSection.padding(.horizontal, 13).padding(.bottom, 14)
-                }
-            } else if !inLibrary && !part.isUpcoming && !part.isMovie && pipCount > 0 {
-                // Out-of-library: pips are display-only (no quick-action, not tappable).
-                pipsGrid.padding(.horizontal, 13).padding(.bottom, 14)
-            }
-        }
-        .background(
-            (attention ? Theme.accent.opacity(0.06) : Theme.fillSoft),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .stroke(attention ? Color.white.opacity(0.07) : Theme.hairline, lineWidth: 1))
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var header: some View {
-        HStack(spacing: 13) {
-            Thumb(cover: part.cover, width: 44, height: 62, radius: 9)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(part.label.isEmpty ? part.title : part.label)
-                    .scaledFont(14.5, weight: .semibold)
-                    .lineLimit(1)
-                    .foregroundStyle(Theme.textPrimary)
-                HStack(spacing: 8) {
-                    if let fmt = part.format, !fmt.isEmpty {
-                        Text(fmt).scaledFont(11.5).foregroundStyle(Theme.text40)
-                    }
-                    if part.isReleasing {
-                        Text("\(part.airedEpisodes) aired")
-                            .scaledFont(11.5, weight: .medium).foregroundStyle(Theme.accent)
-                    }
-                }
-                if part.isUpcoming {
-                    Text(part.premiereAt.map { "Premieres \(Formatting.fmtFullDate($0))" } ?? "Release date TBA")
-                        .scaledFont(12, weight: .medium)
-                        .foregroundStyle(Theme.accent)
-                }
-            }
-            Spacer(minLength: 8)
-            StatusChip(status: status)
-        }
-        .padding(13)
-    }
-
-    // Binary watched / not-watched control for movies.
-    private var movieToggle: some View {
-        let watched = part.progress > 0
-        return Button {
-            onSetProgress(watched ? 0 : 1)
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: watched ? "checkmark" : "play.fill")
-                    .scaledFont(13, weight: .bold)
-                    // Morph play → checkmark instead of swapping instantly.
-                    .contentTransition(.symbolEffect(.replace))
-                Text(watched ? "Watched" : "Mark watched")
-                    .scaledFont(14, weight: .semibold)
-            }
-            .frame(maxWidth: .infinity).frame(height: 44)
-            .foregroundStyle(watched ? Theme.background : Theme.text90)
-        }
-        .background(
-            (watched ? Theme.accent : Theme.fillSoft),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(watched ? .clear : Theme.hairlineStrong, lineWidth: 1))
-        .buttonStyle(BounceButtonStyle())
-    }
-
-    // Episode pips with the "Episodes / quick-action / count" header above.
-    private var pipsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Episodes")
-                    .scaledFont(10, weight: .semibold)
-                    .tracking(0.7)
-                    .textCase(.uppercase)
-                    .foregroundStyle(Theme.text36)
-                Spacer(minLength: 8)
-                if let qa = quickAction {
-                    Button { onSetProgress(qa.target) } label: {
-                        Text(qa.label).scaledFont(11.5, weight: .semibold).foregroundStyle(Theme.accent)
-                    }
-                    .buttonStyle(.plain)
-                }
-                Text(countLabel)
-                    .scaledFont(11.5, monospacedDigit: true)
-                    .contentTransition(.numericText())
-                    .animation(.snappy(duration: 0.3), value: part.progress)
-                    .foregroundStyle(Theme.text50)
-            }
-            pipsGrid
-        }
-    }
-
-    private var pipsGrid: some View {
-        // 12 equal columns per row, laid out as chunked HStacks. Each pip fills its share via
-        // maxWidth:.infinity, so the grid is exactly the card width and never overflows (a LazyVGrid
-        // of all-.flexible columns inside a ScrollView can mis-size and push the layout wider).
-        let count = max(1, pipCount)
-        let perRow = 12
-        let rows = stride(from: 1, through: count, by: perRow).map { start in
-            Array(start...min(start + perRow - 1, count))
-        }
-        return VStack(spacing: 5) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 5) {
-                    ForEach(row, id: \.self) { i in
-                        Pip(index: i, part: part, attention: attention, interactive: inLibrary) {
-                            pipTap(i)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    // Pad the final row so its pips keep the same width as full rows.
-                    if row.count < perRow {
-                        ForEach(0..<(perRow - row.count), id: \.self) { _ in
-                            Color.clear.frame(maxWidth: .infinity, minHeight: 18, maxHeight: 18)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func pipTap(_ i: Int) {
-        guard inLibrary else { return }
-        if part.isReleasing && i > part.airedEpisodes { return }   // can't watch unaired
-        onSetProgress(i == part.progress ? i - 1 : i)
-    }
-}
-
-// A single episode pip. Filled when watched, glowing+pulsing for the next episode, dashed when
-// unaired (releasing past the aired count).
-private struct Pip: View {
-    let index: Int
-    let part: FranchisePart
-    let attention: Bool
-    let interactive: Bool
-    let onTap: () -> Void
-
-    @State private var pulse = false
-
-    private var watched: Bool { index <= part.progress }
-    private var unaired: Bool { part.isReleasing && index > part.airedEpisodes }
-    private var isNext: Bool {
-        index == part.progress + 1 && (!part.isReleasing || index <= part.airedEpisodes)
-    }
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
-        Button(action: onTap) {
-            shape
-                .fill(fill)
-                .overlay {
-                    if unaired {
-                        shape.strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                            .foregroundStyle(Color.white.opacity(0.12))
-                    } else if isNext {
-                        shape.strokeBorder(Theme.accent, lineWidth: 1.6)
-                            .shadow(color: Theme.accent.opacity(0.5), radius: 5)
-                    }
-                }
-                .frame(height: 18)
-                .scaleEffect(isNext && pulse ? 1.16 : 1)
-                .animation(isNext ? .easeInOut(duration: 0.85).repeatForever(autoreverses: true) : .default, value: pulse)
-        }
-        .buttonStyle(.plain)
-        .disabled(!interactive || unaired)
-        .onAppear { pulse = isNext }
-        .onChange(of: isNext) { _, nowNext in pulse = nowNext }
-        .accessibilityLabel("Episode \(index)")
-        .accessibilityValue(watched ? "watched" : (unaired ? "not aired" : "not watched"))
-    }
-
-    private var fill: Color {
-        if watched { return attention ? Theme.accent : Color(hex: 0xF5F5F7).opacity(0.34) }
-        if unaired || isNext { return .clear }
-        return Color.white.opacity(0.10)
-    }
-}
-
-// A compact per-part status chip. "Behind" is the only filled-accent (urgent) variant; everything
-// else is a quiet outlined chip so the row reads calm until something needs attention.
-private struct StatusChip: View {
-    let status: PartStatus
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: status.systemImage).scaledFont(9, weight: .bold)
-            Text(status.label).scaledFont(11, weight: .semibold)
-        }
-        .foregroundStyle(status.isUrgent ? Theme.background : Theme.text62)
-        .padding(.leading, 7).padding(.trailing, 8).padding(.vertical, 4)
-        .background(
-            status.isUrgent ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.fillSoft),
-            in: shape
-        )
-        .overlay(shape.stroke(status.isUrgent ? .clear : Theme.hairlineStrong, lineWidth: 1))
-        .fixedSize()
-    }
-
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 8, style: .continuous) }
-}
-
 private extension View {
-    /// Shared container for the release bars (live broadcast + next-up): full-width soft card with
-    /// a corner accent glow and a hairline border, so the airing and announced states read as one
-    /// component in two states.
-    func releaseBarChrome() -> some View {
+    /// Frosted-glass chrome for the hero's overlaid controls (status chip, ⋯ button).
+    func frostedChrome<S: Shape>(shape: S, leading: CGFloat = 0, trailing: CGFloat = 0) -> some View {
         self
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
-            .background {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.fillSoft)
-                    // Soft accent glow bleeding from the top-right corner.
-                    RadialGradient(colors: [Theme.accent.opacity(0.16), .clear],
-                                   center: .topTrailing, startRadius: 0, endRadius: 180)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            }
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hairlineStrong, lineWidth: 1))
+            .padding(.leading, leading)
+            .padding(.trailing, trailing)
+            .padding(.vertical, leading == 0 ? 0 : 6)
+            .background(Theme.background.opacity(0.4), in: shape)
+            .glassChrome(in: shape)
+            .overlay(shape.stroke(Theme.hairlineStrong, lineWidth: 1))
     }
 }
 
-// Simple wrapping chip row for genres.
+// Simple wrapping chip row for genres (retained; used by other surfaces).
 struct FlowChips: View {
     let items: [String]
     var body: some View {

@@ -110,6 +110,50 @@ enum Formatting {
         return wdShort[localParts(ts).wd]
     }
 
+    /// Day-only ("date, not time") word for TV/TMDB releases whose clock time is synthesized and
+    /// must never be shown: Today / Tomorrow / Yesterday / <full weekday> within a week, else
+    /// "Mon D" ("May 4"). The long-weekday sibling of `fmtDay`.
+    static func fmtDayLong(ts: Int64, now: Int64) -> String {
+        let diff = Int((Double(localDayKey(ts) - localDayKey(now)) / Double(D)).rounded())
+        if diff == 0 { return "Today" }
+        if diff == 1 { return "Tomorrow" }
+        if diff == -1 { return "Yesterday" }
+        if diff > 1 && diff < 7 { return wdFull[localParts(ts).wd] }
+        return fmtMonthDay(ts)
+    }
+
+    /// Relative day/week/month span for date-only releases — day-precision only, never minutes:
+    /// "today" / "in 3d" / "in 2wk" / "in 2mo". The TV analogue of the anime `fmtCountdown`.
+    static func fmtRelSpan(ts: Int64, now: Int64) -> String {
+        let d = Int((Double(localDayKey(ts) - localDayKey(now)) / Double(D)).rounded())
+        if d <= 0 { return "today" }
+        return "in \(fmtRelSpanShort(ts: ts, now: now))"
+    }
+
+    /// Bare day-precision span with no "in " prefix — "today" / "1d" / "3d" / "2wk" / "2mo".
+    /// For trailing accents that supply their own context.
+    static func fmtRelSpanShort(ts: Int64, now: Int64) -> String {
+        let d = Int((Double(localDayKey(ts) - localDayKey(now)) / Double(D)).rounded())
+        if d <= 0 { return "today" }
+        if d < 7 { return "\(d)d" }
+        if d < 30 { return "\((d + 3) / 7)wk" }
+        return "\(max(1, (d + 15) / 30))mo"
+    }
+
+    /// A compact two-line date badge for a date-only (TV) release: (top day/date, bottom relative
+    /// span) — e.g. ("Sun","in 4d"), ("May 4","2wk"), ("Today","today").
+    static func fmtDayBadge(ts: Int64, now: Int64) -> (top: String, bottom: String) {
+        let diff = Int((Double(localDayKey(ts) - localDayKey(now)) / Double(D)).rounded())
+        // Past dates have no countdown to give — "Jul 29 / today" would be a lie.
+        if diff < 0 { return ("Aired", fmtMonthDay(ts)) }
+        let top: String
+        if diff == 0 { top = "Today" }
+        else if diff == 1 { top = "Tomorrow" }
+        else if diff > 1 && diff < 7 { top = wdShort[localParts(ts).wd] }
+        else { top = fmtMonthDay(ts) }
+        return (top, fmtRelSpan(ts: ts, now: now))
+    }
+
     static func fmtMonthDay(_ ts: Int64) -> String {
         let p = localParts(ts)
         return "\(monShort[p.mo - 1]) \(p.d)"
@@ -139,6 +183,12 @@ enum Formatting {
     static func fmtTodayDate(_ now: Int64) -> String {
         let p = localParts(now)
         return "\(wdFull[p.wd]), \(monFull[p.mo - 1]) \(p.d)"
+    }
+
+    /// Short-month "today" line for the redesigned Today header: "Sunday, Jul 19".
+    static func fmtTodayDateShort(_ now: Int64) -> String {
+        let p = localParts(now)
+        return "\(wdFull[p.wd]), \(monShort[p.mo - 1]) \(p.d)"
     }
 
     static func greetingFor(_ now: Int64) -> String {

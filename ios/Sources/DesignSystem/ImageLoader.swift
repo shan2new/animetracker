@@ -104,11 +104,18 @@ struct CachedAsyncImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: contentMode)
+                    // Bound the (over/under-sized) image to its container and center-crop it. Without
+                    // this a `.fill` image can collapse the cell to zero (posters "vanish") or spill
+                    // past its frame off-center in layouts that don't clip it themselves.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .transition(.opacity)
             } else {
                 GradientPlaceholder()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
         .task(id: url) { await load() }
     }
 
@@ -126,7 +133,7 @@ struct CachedAsyncImage: View {
         didFail = false
         do {
             let loaded = try await ImageLoader.shared.image(for: url, maxPixel: maxPixel)
-            withAnimation(.easeOut(duration: 0.25)) { image = loaded }
+            withAnimation(.uiGentle) { image = loaded }
             loadedURL = url
         } catch {
             if !Task.isCancelled { didFail = true }

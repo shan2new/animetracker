@@ -18,15 +18,16 @@ struct SignInView: View {
 
             VStack(spacing: 0) {
                 Spacer()
-                Text("✦")
-                    .scaledFont(44)
-                    .foregroundStyle(Theme.accent)
+                // The airing pulse dot — the brand atom, and the wordmark's full stop.
+                Circle()
+                    .fill(Theme.accent)
+                    .frame(width: 18, height: 18)
                     .shadow(color: Theme.accent.opacity(0.55), radius: 20)
-                Text("AniTrack")
+                (Text("Previously") + Text(".").foregroundStyle(Theme.accent))
                     .scaledFont(34, weight: .semibold)
                     .tracking(-1)
                     .padding(.top, 14)
-                Text("Your airing-first anime tracker.")
+                Text("Your airing-first TV tracker.")
                     .scaledFont(15)
                     .foregroundStyle(Theme.text52)
                     .padding(.top, 8)
@@ -36,6 +37,7 @@ struct SignInView: View {
                 VStack(spacing: 14) {
                     if AppConfig.isClerkConfigured {
                         Button {
+                            Haptics.impact(.soft)
                             showClerkAuth = true
                         } label: {
                             Text("Sign in")
@@ -103,7 +105,7 @@ private struct DevSignInCard: View {
                 .background(Theme.fillSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
 
-            Button(action: onContinue) {
+            Button { Haptics.impact(.soft); onContinue() } label: {
                 Text("Continue")
                     .scaledFont(15, weight: .semibold)
                     .frame(maxWidth: .infinity)

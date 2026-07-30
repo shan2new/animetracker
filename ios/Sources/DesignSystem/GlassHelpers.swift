@@ -75,6 +75,16 @@ extension View {
             }
         }
     }
+
+    // Prominent (tinted accent) glass button used for primary CTAs in the functional layer.
+    @ViewBuilder
+    func buttonStyleProminentGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.buttonStyle(.glassProminent).tint(Theme.accent)
+        } else {
+            self.buttonStyle(PrimaryButtonStyle())
+        }
+    }
 }
 
 // A glass container wrapper that morphs adjacent glass shapes together on iOS 26.

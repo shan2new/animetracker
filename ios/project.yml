@@ -53,7 +53,7 @@ targets:
     info:
       path: Resources/Info.plist
       properties:
-        CFBundleDisplayName: AniTrack
+        CFBundleDisplayName: "Previously."
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:
@@ -72,7 +72,7 @@ targets:
         # Connecting to a server on the local network by private IP requires this
         # permission string (iOS shows a one-time "find devices on your network" prompt;
         # without the key the connection to a 192.168.x.x address fails silently).
-        NSLocalNetworkUsageDescription: "AniTrack connects to your AniTrack server running on your local network."
+        NSLocalNetworkUsageDescription: "Previously. connects to your self-hosted server running on your local network."
         # Production backend is HTTPS (anime.cognipin.com), so ATS needs no cleartext
         # exception for it. NSAllowsLocalNetworking is kept so pointing API_BASE_URL back
         # at a local/LAN dev server (plain http) still works without re-enabling arbitrary loads.
@@ -114,7 +114,7 @@ targets:
     info:
       path: Widgets/Info.plist
       properties:
-        CFBundleDisplayName: AniTrack
+        CFBundleDisplayName: "Previously."
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:

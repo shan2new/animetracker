@@ -29,6 +29,8 @@ struct PageHeader: View {
 struct SearchField: View {
     @Binding var text: String
     let prompt: String
+    /// Lets a screen react to focus (e.g. Search collapses its large title while typing).
+    var onFocusChange: ((Bool) -> Void)? = nil
     @FocusState private var focused: Bool
 
     private var shape: Capsule { Capsule() }
@@ -64,7 +66,8 @@ struct SearchField: View {
         // .ultraThinMaterial on older systems. An accent ring fades in on focus.
         .glassChrome(in: shape, interactive: true)
         .overlay(shape.stroke(Theme.accentBorder, lineWidth: 1).opacity(focused ? 1 : 0))
-        .animation(.easeInOut(duration: 0.18), value: focused)
-        .animation(.easeInOut(duration: 0.18), value: text.isEmpty)
+        .animation(.uiGentle, value: focused)
+        .animation(.uiGentle, value: text.isEmpty)
+        .onChange(of: focused) { _, isFocused in onFocusChange?(isFocused) }
     }
 }

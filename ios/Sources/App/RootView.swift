@@ -5,17 +5,32 @@ struct RootView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(AppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
+    // Cold-launch splash (the brand beat). Shown once, over everything, then fades to the app.
+    @State private var splashDone = false
 
     var body: some View {
         ZStack {
             AppBackground()
-            if auth.isSignedIn {
-                MainTabView()
-                    .task(id: auth.isSignedIn) { appModel.start() }
-                    .transition(.opacity.animation(.easeOut(duration: 0.3)))
-            } else {
-                SignInView()
-                    .transition(.opacity.animation(.easeOut(duration: 0.3)))
+            // The app settles in from a hair small as the splash leaves — the exit reads as
+            // moving THROUGH the splash into the app, not a fade between two stills.
+            Group {
+                if auth.isSignedIn {
+                    MainTabView()
+                        .task(id: auth.isSignedIn) { appModel.start() }
+                        .transition(.opacity.animation(.uiGentle))
+                } else {
+                    SignInView()
+                        .transition(.opacity.animation(.uiGentle))
+                }
+            }
+            .scaleEffect(splashDone ? 1 : 0.985)
+
+            if !splashDone {
+                // Zoom-through exit: the splash scales up slightly as it dissolves, so the app
+                // appears to emerge from behind it rather than the splash merely vanishing.
+                SplashView { withAnimation(.uiSmooth) { splashDone = true } }
+                    .zIndex(10)
+                    .transition(.opacity.combined(with: .scale(scale: 1.03)))
             }
         }
         // Foreground refresh: a resumed app can be days stale (aired counts, "Out now") — the 20s
@@ -73,35 +88,37 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .today
 
     @State private var detail: DetailRoute?
-    // Shared namespace for the poster → detail zoom transition; cards register themselves via
-    // .zoomSource(...) (surface-scoped ids, see ZoomTransition.swift).
-    @Namespace private var zoomNS
 
     var body: some View {
-        @Bindable var model = appModel
-        return ZStack(alignment: .bottom) {
+        ZStack(alignment: .bottom) {
             TabView(selection: $selectedTab) {
                 Tab(AppTab.today.titleKey, image: AppTab.today.icon, value: AppTab.today) {
-                    NavigationStack { TodayView(onOpenDetail: openDetail) }
-                        .pageInTransition(isActive: selectedTab == .today)
+                    NavigationStack {
+                        TodayView(onOpenDetail: openDetail,
+                                  onSeeAllWatching: { selectedTab = .library })
+                    }
+                    .pageInTransition(isActive: selectedTab == .today)
                 }
                 Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
-                    NavigationStack { ScheduleView(onOpenDetail: openDetail) }
+                    // Schedule rows deep-link to a specific season + episode inside the detail.
+                    NavigationStack { ScheduleView(onOpenDetail: openEpisode) }
                         .pageInTransition(isActive: selectedTab == .schedule)
                 }
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
                     NavigationStack { LibraryView(onOpenDetail: openDetail) }
                         .pageInTransition(isActive: selectedTab == .library)
                 }
+                // NOTE: no `.searchable` here on purpose. The system search island's morph
+                // (tab bar → field + keyboard) dropped frames no matter how it was configured,
+                // and its chrome didn't match the app. DiscoverView owns its own header +
+                // SearchField in the exact Library grammar instead; `role: .search` keeps the
+                // separated magnifier button in the tab bar.
                 Tab(value: AppTab.discover, role: .search) {
                     NavigationStack { DiscoverView(onOpenDetail: openDetail) }
-                        .searchable(text: $model.searchQuery, prompt: "Search anime & TV")
-                        .onSubmit(of: .search) { appModel.recordRecentSearch() }
+                        .pageInTransition(isActive: selectedTab == .discover)
                 }
             }
-            .tabViewSearchActivation(.searchTabSelection)
             .sensoryFeedback(.selection, trigger: selectedTab)
-            .environment(\.zoomNamespace, zoomNS)
 
             // Undo/error toasts float above the tab bar. (The detail sheet mounts its own
             // ToastHost — a sheet presents above this whole ZStack.)
@@ -109,19 +126,27 @@ struct MainTabView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 96)
         }
-        // Detail zooms out of the tapped card (and shrinks back into it on dismiss); the sheet
-        // chrome — rounded corners, grabber, swipe-down — is unchanged. No haptic here: the zoom
-        // motion itself is the feedback, and navigation taps stay silent per the HIG.
-        .sheet(item: $detail) { route in
-            FranchiseDetailView(franchiseId: route.id)
+        // Detail rises as a bottom-up drawer — a large sheet with a grabber and swipe-to-dismiss.
+        // A soft impact fires on open (see openDetail) and on close (onDismiss — covers swipe-down,
+        // the back button, and tap-away alike) for a premium, symmetric confirmation.
+        .sheet(item: $detail, onDismiss: { Haptics.impact(.soft) }) { route in
+            FranchiseDetailView(franchiseId: route.id, focus: route.focus)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
-                .navigationTransition(.zoom(sourceID: route.zoomID, in: zoomNS))
         }
     }
 
     private func openDetail(_ id: String, zoomID: String) {
+        // Premium, subtle taptic as the drawer starts its rise. (`zoomID` is retained on the route
+        // for cards' matched-source ids but no longer drives a zoom transition.)
+        Haptics.impact(.soft)
         detail = DetailRoute(id: id, zoomID: zoomID)
+    }
+
+    /// Schedule variant: same drawer, but lands on a specific season + episode.
+    private func openEpisode(_ id: String, zoomID: String, focus: EpisodeFocus?) {
+        Haptics.impact(.soft)
+        detail = DetailRoute(id: id, zoomID: zoomID, focus: focus)
     }
 }
 
@@ -130,4 +155,5 @@ struct MainTabView: View {
 private struct DetailRoute: Identifiable {
     let id: String
     let zoomID: String
+    var focus: EpisodeFocus? = nil
 }

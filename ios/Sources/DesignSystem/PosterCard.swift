@@ -35,14 +35,14 @@ struct PosterCard: View {
                 // Badge/action swaps (behind → caught up, + → in library) settle in instead of
                 // popping when a card's state changes under the user's thumb.
                 .overlay(alignment: .topLeading) {
-                    badges.animation(.snappy(duration: 0.32), value: badgeKey)
+                    badges.animation(.uiSnappy, value: badgeKey)
                 }
                 .overlay(alignment: .bottomLeading) { titleBlock }
                 .overlay {
                     ZStack {
                         if justCaughtUp { CaughtUpOverlay(size: 52) }
                     }
-                    .animation(.easeOut(duration: 0.22), value: justCaughtUp)
+                    .animation(.uiGentle, value: justCaughtUp)
                 }
                 // Surface backing goes BEFORE the clip so it's rounded with the card — applied
                 // after, it painted a square behind the corners.
@@ -53,7 +53,7 @@ struct PosterCard: View {
                         .stroke(Theme.hairline, lineWidth: 1)
                 )
                 .overlay(alignment: .topTrailing) {
-                    actionButton.animation(.snappy(duration: 0.32), value: badgeKey)
+                    actionButton.animation(.uiSnappy, value: badgeKey)
                 }
         }
         .buttonStyle(SpringPressButtonStyle(scale: 0.96))
@@ -63,7 +63,7 @@ struct PosterCard: View {
     /// animate their swap in the same transaction.
     private var badgeKey: String { "\(vm.isBehind)|\(vm.caughtUp)|\(vm.owned)" }
 
-    // Title + progress (+ subtle airing hint when there's no progress bar), pinned bottom-leading.
+    // Title + a source-led metadata line (+ new-season hint), pinned bottom-leading.
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(vm.title)
@@ -71,23 +71,49 @@ struct PosterCard: View {
                 .tracking(-0.2)
                 .lineLimit(2)
                 .foregroundStyle(Theme.textPrimary)
-            if vm.showProgress {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(vm.progressLabel)
-                        .scaledFont(11, monospacedDigit: true)
-                        .contentTransition(.numericText())
-                        .animation(.snappy(duration: 0.3), value: vm.progressLabel)
-                        .foregroundStyle(Theme.text62)
-                    ProgressBar(fraction: vm.progressFraction, height: 3)
-                }
-                .padding(.top, 8)
-            } else {
-                airingHint.padding(.top, 6)
-            }
+            metaLine
             newSeasonHint
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
+    }
+
+    // The metadata line, always led by the quiet source glyph (redesign rule #1): short progress
+    // "9 / 12" with an accent bar for a library show; a "Anime"/"TV" type label for a discover
+    // card; or an airing hint ("Airs Thu 9:00 PM" anime, "Airs Thursday" TV) when caught-up-airing.
+    @ViewBuilder
+    private var metaLine: some View {
+        if vm.showProgress {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    SourceGlyph(source: vm.source, size: 10)
+                    Text(vm.progressLabel)
+                        .scaledFont(11, monospacedDigit: true)
+                        .contentTransition(.numericText())
+                        .animation(.uiSnappy, value: vm.progressLabel)
+                        .foregroundStyle(Theme.text62)
+                }
+                ProgressBar(fraction: vm.progressFraction, height: 3)
+            }
+            .padding(.top, 8)
+        } else if vm.action == .add {
+            HStack(spacing: 5) {
+                SourceGlyph(source: vm.source, size: 10)
+                Text(vm.year.map { "\(vm.source.shortLabel) · \($0)" } ?? vm.source.shortLabel)
+                    .scaledFont(10.5, weight: .medium)
+                    .foregroundStyle(Theme.text62)
+            }
+            .padding(.top, 6)
+        } else if vm.isAiring && !vm.isBehind && !vm.airingHint.isEmpty {
+            HStack(spacing: 5) {
+                SourceGlyph(source: vm.source, size: 10)
+                Text(vm.airingHint)
+                    .scaledFont(10.5, weight: .medium, monospacedDigit: true)
+                    .foregroundStyle(Theme.text72)
+                    .lineLimit(1)
+            }
+            .padding(.top, 6)
+        }
     }
 
     // A "new season coming" line for franchises with an announced future installment that the
@@ -97,9 +123,7 @@ struct PosterCard: View {
     private var newSeasonHint: some View {
         if !vm.newSeason.isEmpty {
             HStack(spacing: 5) {
-                Image(systemName: "sparkles")
-                    .scaledFont(9, weight: .semibold)
-                    .foregroundStyle(Theme.accent)
+                SourceGlyph(source: vm.source, size: 9, color: Theme.accent)
                 Text(vm.newSeason)
                     .scaledFont(10.5, weight: .semibold)
                     .foregroundStyle(Theme.accent)
@@ -121,6 +145,7 @@ struct PosterCard: View {
                     Text(vm.behindLabel)
                         .scaledFont(11, weight: .semibold)
                         .foregroundStyle(Theme.background)
+                        .contentTransition(.numericText())
                         .padding(.horizontal, 9).padding(.vertical, 4)
                         .background(Theme.accent, in: badgeShape)
                         .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
@@ -137,24 +162,6 @@ struct PosterCard: View {
             Spacer(minLength: 0)
         }
         .padding(9)
-    }
-
-    // DECISION B / task 6 — next-airing hint for cards that are airing but not behind. A clock
-    // glyph + "Airs in {countdown}" framing makes it unambiguous that this is the show's airing
-    // schedule (not the viewer's progress), reading the same on owned and unowned cards.
-    @ViewBuilder
-    private var airingHint: some View {
-        if vm.isAiring && !vm.isBehind && !vm.airingHint.isEmpty {
-            HStack(spacing: 5) {
-                Image(systemName: "clock")
-                    .scaledFont(9, weight: .semibold)
-                    .foregroundStyle(Theme.accent)
-                Text(vm.airingHint)
-                    .scaledFont(10.5, weight: .medium, monospacedDigit: true)
-                    .foregroundStyle(Theme.text72)
-                    .lineLimit(1)
-            }
-        }
     }
 
     @ViewBuilder
@@ -219,12 +226,12 @@ struct ProgressBar: View {
         }
         .frame(height: height)
         .onAppear {
-            withAnimation(.spring(response: 0.55, dampingFraction: 0.8).delay(0.12)) {
+            withAnimation(.uiSmooth.delay(0.12)) {
                 displayed = fraction
             }
         }
         .onChange(of: fraction) { _, newValue in
-            withAnimation(.spring(response: 0.42, dampingFraction: 0.75)) {
+            withAnimation(.uiSmooth) {
                 displayed = newValue
             }
         }

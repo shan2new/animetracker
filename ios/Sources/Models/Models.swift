@@ -50,6 +50,39 @@ enum PartKind: String, Codable, Sendable {
     }
 }
 
+// MARK: - Episode
+
+/// Per-episode metadata (present only on the franchise-detail response). Richness is
+/// source-dependent — TMDB is full; AniList gives best-effort titles/thumbnails and no per-episode
+/// airDate/overview. Everything is optional and decoded defensively.
+struct Episode: Codable, Identifiable, Sendable {
+    let number: Int
+    let title: String?
+    let airDate: Int64?     // ms epoch
+    let overview: String?
+    let still: String?      // thumbnail url
+    let runtime: Int?       // minutes
+
+    var id: Int { number }
+
+    enum CodingKeys: String, CodingKey { case number, title, airDate, overview, still, runtime }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        number = (try? c.decode(Int.self, forKey: .number)) ?? 0
+        title = try? c.decodeIfPresent(String.self, forKey: .title)
+        airDate = try? c.decodeIfPresent(Int64.self, forKey: .airDate)
+        overview = try? c.decodeIfPresent(String.self, forKey: .overview)
+        still = try? c.decodeIfPresent(String.self, forKey: .still)
+        runtime = try? c.decodeIfPresent(Int.self, forKey: .runtime)
+    }
+
+    init(number: Int, title: String?, airDate: Int64?, overview: String?, still: String?, runtime: Int?) {
+        self.number = number; self.title = title; self.airDate = airDate
+        self.overview = overview; self.still = still; self.runtime = runtime
+    }
+}
+
 // MARK: - FranchisePart
 
 struct FranchisePart: Codable, Identifiable, Sendable {
@@ -71,6 +104,10 @@ struct FranchisePart: Codable, Identifiable, Sendable {
     let synopsis: String?
     let genres: [String]
     let progress: Int
+    let year: Int?             // premiere/season year
+    let studios: [String]      // studios (anime) / networks (TV)
+    let nextAiringCount: Int   // episodes sharing the next airing date; > 1 ⇒ a full-season drop
+    let episodes: [Episode]    // detail response only; [] on list/library payloads
 
     var id: Int { mediaId }
 
@@ -79,6 +116,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         case mediaId, kind, sequence, label, title, cover, banner, format, status
         case isReleasing, totalEpisodes, airedEpisodes, nextEpisodeNumber, nextAiringAt
         case lastAiredAt, synopsis, genres, progress
+        case year, studios, nextAiringCount, episodes
     }
 
     init(from decoder: Decoder) throws {
@@ -101,14 +139,20 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         synopsis = try? c.decodeIfPresent(String.self, forKey: .synopsis)
         genres = (try? c.decode([String].self, forKey: .genres)) ?? []
         progress = (try? c.decode(Int.self, forKey: .progress)) ?? 0
+        year = try? c.decodeIfPresent(Int.self, forKey: .year)
+        studios = (try? c.decode([String].self, forKey: .studios)) ?? []
+        nextAiringCount = (try? c.decode(Int.self, forKey: .nextAiringCount)) ?? 0
+        // `Episode.id` is its number, so a malformed/duplicate 0 would collide inside a ForEach.
+        episodes = ((try? c.decode([Episode].self, forKey: .episodes)) ?? []).filter { $0.number > 0 }
     }
 
-    // Memberwise init for previews/tests.
+    // Memberwise init for previews/tests. New fields default so existing call sites keep working.
     init(mediaId: Int, kind: PartKind, sequence: Int, label: String, title: String,
          cover: String?, banner: String?, format: String?, status: String?,
          isReleasing: Bool, totalEpisodes: Int, airedEpisodes: Int,
          nextEpisodeNumber: Int?, nextAiringAt: Int64?, lastAiredAt: Int64?,
-         synopsis: String?, genres: [String], progress: Int) {
+         synopsis: String?, genres: [String], progress: Int,
+         year: Int? = nil, studios: [String] = [], nextAiringCount: Int = 0, episodes: [Episode] = []) {
         self.mediaId = mediaId; self.kind = kind; self.sequence = sequence
         self.label = label; self.title = title; self.cover = cover; self.banner = banner
         self.format = format; self.status = status; self.isReleasing = isReleasing
@@ -116,6 +160,19 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         self.nextEpisodeNumber = nextEpisodeNumber; self.nextAiringAt = nextAiringAt
         self.lastAiredAt = lastAiredAt; self.synopsis = synopsis; self.genres = genres
         self.progress = progress
+        self.year = year; self.studios = studios
+        self.nextAiringCount = nextAiringCount; self.episodes = episodes
+    }
+
+    /// A copy with the episode list replaced — grafts detail-fetched episodes onto the live
+    /// (library) copy, which is loaded without them.
+    func withEpisodes(_ eps: [Episode]) -> FranchisePart {
+        FranchisePart(mediaId: mediaId, kind: kind, sequence: sequence, label: label, title: title,
+                      cover: cover, banner: banner, format: format, status: status,
+                      isReleasing: isReleasing, totalEpisodes: totalEpisodes, airedEpisodes: airedEpisodes,
+                      nextEpisodeNumber: nextEpisodeNumber, nextAiringAt: nextAiringAt, lastAiredAt: lastAiredAt,
+                      synopsis: synopsis, genres: genres, progress: progress,
+                      year: year, studios: studios, nextAiringCount: nextAiringCount, episodes: eps)
     }
 
     /// Unwatched episodes that have already aired (0 unless currently releasing).
@@ -267,6 +324,8 @@ struct Franchise: Codable, Identifiable, Sendable {
     let parts: [FranchisePart]
     let subscription: Subscription?
     let upcoming: FranchiseUpcoming?
+    let year: Int?             // premiere year (earliest dated part)
+    let studios: [String]      // primary installment's studios (anime) / networks (TV)
 
     // Fields present only in /me/library responses (LibraryFranchise extends Franchise).
     let status: WatchStatus?
@@ -275,6 +334,7 @@ struct Franchise: Codable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, source, title, cover, banner, synopsis, genres, isReleasing, partCounts, parts, subscription, upcoming
+        case year, studios
         case status, behind, newParts
     }
 
@@ -292,6 +352,8 @@ struct Franchise: Codable, Identifiable, Sendable {
         parts = (try? c.decode([FranchisePart].self, forKey: .parts)) ?? []
         subscription = try? c.decodeIfPresent(Subscription.self, forKey: .subscription)
         upcoming = try? c.decodeIfPresent(FranchiseUpcoming.self, forKey: .upcoming)
+        year = try? c.decodeIfPresent(Int.self, forKey: .year)
+        studios = (try? c.decode([String].self, forKey: .studios)) ?? []
         status = try? c.decodeIfPresent(WatchStatus.self, forKey: .status)
         behind = try? c.decodeIfPresent(Int.self, forKey: .behind)
         newParts = try? c.decodeIfPresent(Int.self, forKey: .newParts)
@@ -301,11 +363,13 @@ struct Franchise: Codable, Identifiable, Sendable {
     init(id: String, source: MediaSource, title: String, cover: String?, banner: String?, synopsis: String?,
          genres: [String], isReleasing: Bool, partCounts: PartCounts?, parts: [FranchisePart],
          subscription: Subscription?, upcoming: FranchiseUpcoming? = nil,
+         year: Int? = nil, studios: [String] = [],
          status: WatchStatus?, behind: Int?, newParts: Int?) {
         self.id = id; self.source = source; self.title = title; self.cover = cover; self.banner = banner
         self.synopsis = synopsis; self.genres = genres; self.isReleasing = isReleasing
         self.partCounts = partCounts; self.parts = parts; self.subscription = subscription
         self.upcoming = upcoming
+        self.year = year; self.studios = studios
         self.status = status; self.behind = behind; self.newParts = newParts
     }
 
@@ -315,6 +379,7 @@ struct Franchise: Codable, Identifiable, Sendable {
                   synopsis: other.synopsis, genres: other.genres, isReleasing: other.isReleasing,
                   partCounts: other.partCounts, parts: parts, subscription: other.subscription,
                   upcoming: other.upcoming,
+                  year: other.year, studios: other.studios,
                   status: other.status, behind: other.behind, newParts: other.newParts)
     }
 }
@@ -331,6 +396,7 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
     let partCount: Int
     let nextAiringAt: Int64?
     let upcoming: FranchiseUpcoming?
+    let year: Int?
 
     // Present only in /me/library:
     let status: WatchStatus?
@@ -338,7 +404,7 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
     let newParts: Int?
 
     enum CodingKeys: String, CodingKey {
-        case id, source, title, cover, banner, isReleasing, partCount, nextAiringAt, upcoming, status, behind, newParts
+        case id, source, title, cover, banner, isReleasing, partCount, nextAiringAt, upcoming, year, status, behind, newParts
     }
 
     init(from decoder: Decoder) throws {
@@ -352,6 +418,7 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
         partCount = (try? c.decode(Int.self, forKey: .partCount)) ?? 0
         nextAiringAt = try? c.decodeIfPresent(Int64.self, forKey: .nextAiringAt)
         upcoming = try? c.decodeIfPresent(FranchiseUpcoming.self, forKey: .upcoming)
+        year = try? c.decodeIfPresent(Int.self, forKey: .year)
         status = try? c.decodeIfPresent(WatchStatus.self, forKey: .status)
         behind = try? c.decodeIfPresent(Int.self, forKey: .behind)
         newParts = try? c.decodeIfPresent(Int.self, forKey: .newParts)
@@ -418,6 +485,45 @@ extension Franchise {
 
     /// Most-recent airing as a descending sort key — franchises with no aired part sort last.
     var lastAiredSortKey: Int64 { releasingPart?.lastAiredAt ?? 0 }
+
+    /// Episodic parts (a movie is binary, handled elsewhere) in watch order.
+    private var episodicParts: [FranchisePart] {
+        parts
+            .filter { $0.kind == .season || $0.kind == .ona || $0.kind == .ova }
+            .sorted { $0.sequence < $1.sequence }
+    }
+
+    /// Already-available episodes of a part — aired count while releasing, else the finite total.
+    private static func availableEpisodes(_ p: FranchisePart) -> Int {
+        p.airedEpisodes > 0 ? p.airedEpisodes : p.totalEpisodes
+    }
+
+    /// The part the user would actually resume, in watch order: the one they're mid-way through,
+    /// else the first unstarted part *after* everything they finished, else the earliest part with
+    /// anything left. Nil when there's no backlog anywhere.
+    /// Picking by sequence (not by largest backlog) is the point: a max() would resume S3 at 3/10
+    /// into an untouched S5 just because S5 is longer.
+    /// With non-sequential progress (S2 untouched, S3 half-watched) the mid-watch part still wins —
+    /// resuming what you're actively watching beats sending you back to a season you skipped.
+    var resumePart: FranchisePart? {
+        let eps = episodicParts
+        func available(_ p: FranchisePart) -> Int { Franchise.availableEpisodes(p) }
+
+        if let mid = eps.first(where: { $0.progress > 0 && $0.progress < available($0) }) { return mid }
+        // `last` over the ascending list = highest-sequence part watched to completion.
+        if let doneSeq = eps.last(where: { available($0) > 0 && $0.progress >= available($0) })?.sequence,
+           let next = eps.first(where: { $0.sequence > doneSeq && available($0) - $0.progress > 0 }) {
+            return next
+        }
+        return eps.first(where: { available($0) - $0.progress > 0 })
+    }
+
+    /// Unwatched, already-available episodes of the part you'd resume — the "Keep watching" count.
+    /// Zero when nothing is left to watch.
+    var continueBacklog: Int {
+        guard let p = resumePart else { return 0 }
+        return max(0, Franchise.availableEpisodes(p) - p.progress)
+    }
 
     var effectiveStatus: WatchStatus {
         status ?? subscription?.status ?? .planned

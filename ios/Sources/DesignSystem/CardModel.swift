@@ -16,8 +16,15 @@ struct CardModel: Identifiable {
     let title: String
     let cover: String?
     let banner: String?
+    let source: MediaSource // .anilist (per-episode times) | .tmdb (dates only) — gates time copy
+    let partLabel: String   // releasing part label, e.g. "Season 2" — for full-drop / continue copy
+    let sequence: Int?      // releasing part sequence (season number for .season) — nil for summaries
+    let kind: PartKind?     // releasing part kind — nil for summaries
+    let year: Int?          // premiere year (discover "Anime · 2023")
+    let nextAiringCount: Int // episodes sharing the next airing date; > 1 ⇒ a full-season drop
 
     let isBehind: Bool
+    let behindCount: Int
     let behindLabel: String
     let caughtUp: Bool
     let showProgress: Bool
@@ -32,9 +39,11 @@ struct CardModel: Identifiable {
     let airedEpisodes: Int
     let airedAgo: String
     let nextEp: Int?
-    let countdown: String
+    let nextAiringAt: Int64?   // raw next-airing instant (day-word derivation for TV)
+    let now: Int64
+    let countdown: String      // anime only — empty for TV (its clock time is synthesized)
     let countdownIsImminent: Bool
-    let airTime: String
+    let airTime: String        // anime only — empty for TV
     let dayLabel: String
 
     /// Compact "new season coming" hint (e.g. "Season 3 · Jul 5, 2026"), empty when there's no
@@ -52,10 +61,19 @@ struct CardModel: Identifiable {
         self.title = franchise.title
         self.cover = franchise.cover ?? part?.cover
         self.banner = franchise.banner ?? franchise.cover
+        self.source = franchise.source
+        self.partLabel = part?.label ?? ""
+        self.sequence = part?.sequence
+        self.kind = part?.kind
+        self.year = franchise.year
+        self.nextAiringCount = part?.nextAiringCount ?? 0
 
         let behind = part?.episodesBehind ?? (franchise.behind ?? 0)
         self.isBehind = behind > 0
-        self.behindLabel = behind > 0 ? "\(behind) behind" : ""
+        self.behindCount = behind
+        // Same number, source-appropriate word: anime is "behind" (unwatched aired episodes of a
+        // releasing season); TV frames the identical backlog as "unwatched".
+        self.behindLabel = behind > 0 ? (franchise.source == .tmdb ? "\(behind) unwatched" : "\(behind) behind") : ""
         self.caughtUp = (part?.isCaughtUp ?? false)
 
         let total = part?.totalEpisodes ?? 0
@@ -81,12 +99,23 @@ struct CardModel: Identifiable {
         } else {
             self.airedAgo = ""
         }
+        self.now = now
+        self.nextAiringAt = part?.nextAiringAt
         self.nextEp = part?.nextEpisodeNumber
         if let next = part?.nextAiringAt {
-            self.countdown = Formatting.fmtCountdown(target: next, now: now)
-            self.countdownIsImminent = (next - now) <= CardModel.imminentWindow
-            self.airTime = Formatting.fmtTime(next)
             self.dayLabel = Formatting.fmtDay(ts: next, now: now)
+            // Clock time + minute-precise countdown are ANIME-only. TMDB airs on dates (its
+            // `nextAiringAt` is a synthesized 17:00 UTC), so a clock or "2d 4h" there is fabricated;
+            // TV degrades to day words via `dayWordLong` / `dayBadge`.
+            if franchise.source == .anilist {
+                self.countdown = Formatting.fmtCountdown(target: next, now: now)
+                self.countdownIsImminent = (next - now) <= CardModel.imminentWindow
+                self.airTime = Formatting.fmtTime(next)
+            } else {
+                self.countdown = ""
+                self.countdownIsImminent = false
+                self.airTime = ""
+            }
         } else {
             self.countdown = ""
             self.countdownIsImminent = false
@@ -103,7 +132,14 @@ struct CardModel: Identifiable {
         self.title = summary.title
         self.cover = summary.cover
         self.banner = summary.banner ?? summary.cover
+        self.source = summary.source
+        self.partLabel = ""
+        self.sequence = nil
+        self.kind = nil
+        self.year = summary.year
+        self.nextAiringCount = 0
         self.isBehind = false
+        self.behindCount = 0
         self.behindLabel = ""
         self.caughtUp = false
         self.showProgress = false
@@ -115,12 +151,20 @@ struct CardModel: Identifiable {
         self.owned = owned
         self.airedEpisodes = 0
         self.airedAgo = ""
+        self.now = now
+        self.nextAiringAt = summary.nextAiringAt
         self.nextEp = nil
         if let next = summary.nextAiringAt {
-            self.countdown = Formatting.fmtCountdown(target: next, now: now)
-            self.countdownIsImminent = (next - now) <= CardModel.imminentWindow
-            self.airTime = Formatting.fmtTime(next)
             self.dayLabel = Formatting.fmtDay(ts: next, now: now)
+            if summary.source == .anilist {
+                self.countdown = Formatting.fmtCountdown(target: next, now: now)
+                self.countdownIsImminent = (next - now) <= CardModel.imminentWindow
+                self.airTime = Formatting.fmtTime(next)
+            } else {
+                self.countdown = ""
+                self.countdownIsImminent = false
+                self.airTime = ""
+            }
         } else {
             self.countdown = ""
             self.countdownIsImminent = false
@@ -132,8 +176,35 @@ struct CardModel: Identifiable {
 
     var countdownColor: Color { countdownIsImminent ? Theme.accent : Theme.text70 }
 
-    /// A show is "currently airing" if it has a scheduled next episode.
-    var isAiring: Bool { nextEp != nil || !countdown.isEmpty }
+    /// A show is "currently airing" if it has a scheduled next episode. `nextAiringAt` counts on its
+    /// own because TV carries a date without an episode number, and its countdown is always empty.
+    var isAiring: Bool { nextEp != nil || nextAiringAt != nil || !countdown.isEmpty }
+
+    /// Just the season half of the watch context — "S4", or "" when the part isn't a season.
+    func seasonToken() -> String {
+        guard kind == .season, let s = sequence, s >= 1 else { return "" }
+        return "S\(s)"
+    }
+
+    /// Compact watch context for a metadata line: "S4 · E2" / "E2" / "S4" / "".
+    /// The episode half is the next episode to AIR (`nextEp`), matching schedule/airing surfaces.
+    var seasonEpisodeToken: String {
+        let season = seasonToken()
+        let episode = nextEp.map { "E\($0)" } ?? ""
+        if season.isEmpty { return episode }
+        if episode.isEmpty { return season }
+        return "\(season) · \(episode)"
+    }
+
+    /// Source-appropriate relative countdown to the NEXT airing, for trailing accents: anime is
+    /// minute-precise ("2d 4h" / "now"), TV degrades to day precision ("today" / "3d" / "2wk")
+    /// because its clock time is synthesized. Empty when nothing is scheduled.
+    var relClock: String {
+        guard let next = nextAiringAt else { return "" }
+        return source == .anilist
+            ? Formatting.fmtCountdown(target: next, now: now)
+            : Formatting.fmtRelSpanShort(ts: next, now: now)
+    }
 
     /// DECISION C — the next UNWATCHED episode to *watch* = `progress + 1`. This is distinct from
     /// `nextEp` (the next episode to AIR). Only surfaced when the user is mid-watch and that
@@ -156,8 +227,43 @@ struct CardModel: Identifiable {
     /// the viewer's own watch progress. Empty when there's nothing useful to surface.
     var airingHint: String {
         guard isAiring else { return "" }
+        // Anime: "Airs in 2d 4h" (minute-precise). TV: "Airs Thursday" (day word, no clock).
+        if source == .tmdb {
+            let word = dayWordLong
+            return word.isEmpty ? "" : "Airs \(word)"
+        }
         if !countdown.isEmpty { return "Airs in \(countdown)" }
         if let next = nextEp { return "Ep \(next) airing" }
         return "Airing"
+    }
+
+    /// True for a TMDB (general-TV) card — dates only, no per-episode clock time.
+    var isTV: Bool { source == .tmdb }
+
+    /// Unwatched backlog count. For a releasing part this is `behindCount` (unwatched *aired*
+    /// episodes); for a settled/binge backlog (Keep watching) it falls back to aired-or-total
+    /// minus progress. Zero when caught up.
+    var unwatchedCount: Int {
+        if behindCount > 0 { return behindCount }
+        let available = airedEpisodes > 0 ? airedEpisodes : totalEpisodes
+        return max(0, available - progress)
+    }
+
+    /// Source-neutral "N unwatched" headline (Keep watching / TV backlog). Empty when caught up.
+    var unwatchedLabel: String {
+        let n = unwatchedCount
+        return n > 0 ? "\(n) unwatched" : ""
+    }
+
+    /// TV-facing next-airing day word — never a clock time: "Today" / "Thursday" / "May 4".
+    var dayWordLong: String {
+        guard let next = nextAiringAt else { return "" }
+        return Formatting.fmtDayLong(ts: next, now: now)
+    }
+
+    /// Two-line date badge (top day/date, bottom relative span) for date-only (TV) rows.
+    var dayBadge: (top: String, bottom: String)? {
+        guard let next = nextAiringAt else { return nil }
+        return Formatting.fmtDayBadge(ts: next, now: now)
     }
 }

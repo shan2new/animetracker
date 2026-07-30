@@ -28,6 +28,7 @@ struct SectionHeader: View {
                 Text(trailing)
                     .scaledFont(11.5)
                     .foregroundStyle(Theme.text40)
+                    .contentTransition(.numericText())
             }
         }
         .padding(.bottom, 14)
@@ -79,7 +80,7 @@ struct EmptyStateView: View {
                 .frame(maxWidth: 290)
                 .padding(.top, 9)
             if let ctaLabel, let onCta {
-                Button(action: onCta) {
+                Button { Haptics.impact(.soft); onCta() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "plus").scaledFont(14, weight: .bold)
                         Text(ctaLabel).scaledFont(14.5, weight: .semibold)
@@ -97,7 +98,7 @@ struct EmptyStateView: View {
         .padding(.horizontal, 20)
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.93)
-        .animation(.spring(response: 0.5, dampingFraction: 0.78).delay(0.08), value: appeared)
+        .animation(.uiSmooth.delay(0.08), value: appeared)
         .onAppear { appeared = true }
     }
 }
@@ -127,7 +128,7 @@ struct RetryBanner: View {
                 .scaledFont(13)
                 .foregroundStyle(Theme.text72)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Retry", action: onRetry)
+            Button("Retry") { Haptics.impact(.soft); onRetry() }
                 .scaledFont(13, weight: .semibold)
                 .foregroundStyle(Theme.background)
                 .padding(.horizontal, 14)

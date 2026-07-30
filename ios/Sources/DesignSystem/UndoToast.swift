@@ -36,8 +36,8 @@ struct ToastHost: View {
                 UndoToast(state: undo) { appModel.performUndo() }
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appModel.undo?.id)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: appModel.errorToast)
+        .animation(.uiSnappy, value: appModel.undo?.id)
+        .animation(.uiSnappy, value: appModel.errorToast)
     }
 }
 

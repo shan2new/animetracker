@@ -11,6 +11,10 @@ final class AppModel {
     // Windows (ported from App.tsx constants).
     static let soonWindow: Int64 = 48 * Formatting.H  // "Airing soon" lookahead
     static let newLookback: Int64 = 3 * Formatting.D   // default "out now" window with no prior open
+    static let outNowWindow: Int64 = 7 * Formatting.D  // how recent an unwatched drop stays "out now"
+    // Calendar feed span, in local days either side of today.
+    static let scheduleBack = -7
+    static let scheduleAhead = 14
     static let undoSeconds: Double = 5
     static let errorSeconds: Double = 4
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
@@ -42,9 +46,12 @@ final class AppModel {
     var searchError = false
     // Persisted recent search terms, most-recent first — the search surface's empty state.
     var recentSearches: [String] = []
+    // Trending franchises for the search zero-state shelf. Fetched once per session, lazily on
+    // first visit to the search tab; a failure just leaves the shelf out (nothing to retry into).
+    var trending: [FranchiseSummary] = []
+    private var trendingTask: Task<Void, Never>?
 
     // Library filtering.
-    var libFilter: LibFilter = .all
     var libQuery = ""
     // Global anime/TV filter — applies to Today, Schedule, Library, and search results.
     var mediaFilter: MediaFilter = .all
@@ -242,6 +249,17 @@ final class AppModel {
         }
     }
 
+    /// Fetch the zero-state trending shelf, once. Quiet on failure — the launchpad simply shows
+    /// recents alone; the next cold visit (task released only on success) tries again.
+    func loadTrendingIfNeeded() {
+        guard trending.isEmpty, trendingTask == nil else { return }
+        trendingTask = Task { [weak self] in
+            defer { self?.trendingTask = nil }
+            guard let items = try? await self?.api.trending(limit: 10) else { return }
+            self?.trending = items
+        }
+    }
+
     private func nextSeq() -> Int {
         searchSeq += 1
         return searchSeq
@@ -277,13 +295,6 @@ final class AppModel {
         }
     }
 
-    /// True when the library spans both catalogues — the only case the anime/TV chips earn
-    /// their screen space.
-    var libraryHasMixedSources: Bool {
-        let sources = Set(library.map(\.source))
-        return sources.count > 1
-    }
-
     /// All subscribed franchises that have a currently-releasing part (media-filtered).
     var airingFranchises: [Franchise] {
         library.filter { $0.releasingPart != nil && matchesMediaFilter($0.source) }
@@ -295,10 +306,19 @@ final class AppModel {
 
     var effectivePrev: Int64 { prevOpenedAt > 0 ? prevOpenedAt : now - AppModel.newLookback }
 
-    /// "Out now" — releasing parts whose lastAiredAt > prevOpenedAt.
+    /// "Out now" — releasing parts with a RECENTLY aired episode you haven't watched. Keyed on
+    /// unwatched-ness + recency, not on `prevOpenedAt`: the old last-open comparison made a new
+    /// episode vanish from Today the second time you opened the app, watched or not.
     var outNow: [Franchise] {
         airingFranchises
-            .filter { ($0.releasingPart?.lastAiredAt ?? 0) > effectivePrev }
+            .filter {
+                guard let part = $0.releasingPart else { return false }
+                // A just-caught-up row has to survive its celebration: `episodesBehind` drops to 0
+                // the instant progress is written, which would otherwise yank the row (and the
+                // frame CaughtUpOverlay renders on) before the overlay is ever seen.
+                guard part.episodesBehind > 0 || justCaught.contains($0.id) else { return false }
+                return now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow
+            }
             .sorted { $0.lastAiredSortKey > $1.lastAiredSortKey }
     }
 
@@ -321,145 +341,230 @@ final class AppModel {
             .first
     }
 
-    // ----- Schedule (remainder of the local Mon..Sun week, starting today) -----
+    /// "Keep watching" — franchises you're mid-watch with an unwatched backlog NOT already surfaced
+    /// in Out now (a binged TV season, or a show you've fallen behind on off its airing schedule).
+    /// Most backlog first. An airing show can appear here AND in Up next (a new episode still comes).
+    var keepWatching: [Franchise] {
+        let outNowIds = Set(outNow.map(\.id))
+        return Array(
+            library
+                .filter {
+                    matchesMediaFilter($0.source)
+                        && $0.effectiveStatus == .watching
+                        && !outNowIds.contains($0.id)
+                        && $0.resumePart != nil
+                }
+                .sorted {
+                    if $0.continueBacklog != $1.continueBacklog { return $0.continueBacklog > $1.continueBacklog }
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                // Today is a glance, not the whole library — surface the strongest handful.
+                .prefix(8)
+        )
+    }
+
+    // ----- Currently watching shelf (Today redesign) -----
+
+    /// How a franchise earns its place on Today's "Currently watching" shelf — doubles as the
+    /// shelf's sort order (rawValue ascending) and drives each card's caption.
+    enum ShelfState: Int {
+        case newEpisode = 0   // unwatched episode aired recently — NEW badge
+        case backlog          // something to resume ("S3 · E4 · 7 left")
+        case airingWait       // caught up, next episode dated ("Sun · 3d")
+        case premiereSoon     // announced season premiering within the window ("S3 · Oct 12")
+    }
+
+    /// Window inside which an announced-but-unaired season is worth shelf space. A dated premiere
+    /// months out (or TBA) is noise on a "what am I watching" rail — per design, those are dropped.
+    static let premiereShelfWindow: Int64 = 45 * Formatting.D
+
+    /// The state that admits `f` to the shelf, or nil (dormant: caught up with nothing dated).
+    func shelfState(of f: Franchise) -> ShelfState? {
+        if let part = f.releasingPart, part.episodesBehind > 0,
+           now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow { return .newEpisode }
+        if f.resumePart != nil { return .backlog }
+        if let part = f.releasingPart, part.isCaughtUp, part.nextAiringAt != nil { return .airingWait }
+        if let premiere = nextPremiere(of: f), premiere - now <= AppModel.premiereShelfWindow {
+            return .premiereSoon
+        }
+        return nil
+    }
+
+    /// Soonest dated future premiere among a franchise's announced parts.
+    func nextPremiere(of f: Franchise) -> Int64? {
+        f.parts.compactMap { $0.premiereAt }.filter { $0 > now }.min()
+    }
+
+    /// "Currently watching" — every Watching-status show with a live claim on your attention:
+    /// new episode > backlog > caught-up-airing > imminent premiere. Ties break most-actionable
+    /// first (freshest drop / biggest backlog / soonest airing / soonest premiere).
+    var watchingShelf: [Franchise] {
+        library
+            .filter { matchesMediaFilter($0.source) && $0.effectiveStatus == .watching }
+            .compactMap { f in shelfState(of: f).map { (f, $0) } }
+            .sorted { a, b in
+                if a.1 != b.1 { return a.1.rawValue < b.1.rawValue }
+                switch a.1 {
+                case .newEpisode: return a.0.lastAiredSortKey > b.0.lastAiredSortKey
+                case .backlog: return a.0.continueBacklog > b.0.continueBacklog
+                case .airingWait: return a.0.nextAiringSortKey < b.0.nextAiringSortKey
+                case .premiereSoon:
+                    return (nextPremiere(of: a.0) ?? .max) < (nextPremiere(of: b.0) ?? .max)
+                }
+            }
+            .map(\.0)
+    }
+
+    // ----- Schedule (a chronological calendar feed around today) -----
 
     struct ScheduleDay: Identifiable {
+        /// Day offset from today in local days — negative for past days.
         let id: Int
         let label: String
         let isToday: Bool
+        let isPast: Bool
         let dateLabel: String
+        /// Episodes still to air on this day (future days + later today).
         let franchises: [Franchise]
-        /// For today only: parts that already aired earlier today (so an empty upcoming list
-        /// doesn't falsely read as "nothing happened today").
+        /// Episodes that already aired on this day — populated for past days and earlier today.
         let airedToday: [Franchise]
 
         init(id: Int, label: String, isToday: Bool, dateLabel: String,
-             franchises: [Franchise], airedToday: [Franchise] = []) {
+             franchises: [Franchise], airedToday: [Franchise] = [], isPast: Bool = false) {
             self.id = id
             self.label = label
             self.isToday = isToday
+            self.isPast = isPast
             self.dateLabel = dateLabel
             self.franchises = franchises
             self.airedToday = airedToday
         }
     }
 
-    /// Today through the end of the current local week, dropping past days. Empty days are
-    /// omitted (so the list is content-forward) except for today, which is always kept and
-    /// stays highlighted even when nothing airs.
+    /// A week back through two weeks ahead, chronological. Empty days are omitted so the feed stays
+    /// content-forward; today is always kept and stays highlighted even when nothing airs.
+    /// A franchise carries a single `nextAiringAt`, so it lands on at most one future day.
     var scheduleDays: [ScheduleDay] {
-        let todayCol = Formatting.localMondayCol(now)
-        return (todayCol..<7).compactMap { c -> ScheduleDay? in
-            let colDate = now + Int64(c - todayCol) * Formatting.D
-            let colKey = Formatting.localDayKey(colDate)
-            let isToday = c == todayCol
+        // Anchor on local noon so a day step survives DST transitions.
+        let p = Formatting.localParts(now)
+        let noon = now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
+
+        return (AppModel.scheduleBack...AppModel.scheduleAhead).compactMap { offset -> ScheduleDay? in
+            let dayDate = noon + Int64(offset) * Formatting.D
+            let dayKey = Formatting.localDayKey(dayDate)
+            let isToday = offset == 0
+
             let items = airingFranchises
                 .filter {
                     guard let next = $0.releasingPart?.nextAiringAt else { return false }
-                    return Formatting.localDayKey(next) == colKey
+                    return Formatting.localDayKey(next) == dayKey && next > now
                 }
                 .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
-            // Skip empty non-today days to keep the schedule tight.
-            guard isToday || !items.isEmpty else { return nil }
-            // For today, gather parts that already aired earlier today so the day never looks
-            // falsely empty when episodes dropped before now.
-            let airedToday: [Franchise] = isToday
-                ? airingFranchises
-                    .filter {
-                        guard let last = $0.releasingPart?.lastAiredAt else { return false }
-                        return Formatting.localDayKey(last) == colKey && last <= now
-                    }
-                    .sorted { $0.lastAiredSortKey > $1.lastAiredSortKey }
-                : []
+            let aired = airingFranchises
+                .filter {
+                    guard let last = $0.releasingPart?.lastAiredAt else { return false }
+                    return Formatting.localDayKey(last) == dayKey && last <= now
+                }
+                .sorted { $0.lastAiredSortKey > $1.lastAiredSortKey }
+
+            guard isToday || !items.isEmpty || !aired.isEmpty else { return nil }
             return ScheduleDay(
-                id: c,
-                label: Formatting.weekdayNameMonFirst(c),
+                id: offset,
+                label: Formatting.weekdayNameMonFirst(Formatting.localMondayCol(dayDate)),
                 isToday: isToday,
-                dateLabel: Formatting.fmtMonthDay(colDate),
+                dateLabel: Formatting.fmtMonthDay(dayDate),
                 franchises: items,
-                airedToday: airedToday
+                airedToday: aired,
+                isPast: offset < 0
             )
         }
     }
 
-    // ----- Library buckets -----
+    // ----- Library shelves (the "crate" redesign) -----
 
-    func bucket(of f: Franchise) -> LibGroup {
-        let status = f.effectiveStatus
-        if status == .planned { return .planned }
-        if status == .watching, let part = f.releasingPart, part.isReleasing {
-            return part.episodesBehind > 0 ? .behind : .caughtup
+    /// The Library crate's four shelves — grouped by the show's relationship to your FUTURE,
+    /// not by app state: you're in it / it's coming back / you haven't started / it's over.
+    /// Per the urgency pact, none of these carry obligations; "Coming back" carries a return
+    /// date (anticipation, the one kind of state that relaxes instead of nags).
+    // Case order = shelf order on screen: Planned leads (the library is where you browse what
+    // to start next — Today already fronts what you're watching), then Coming back, Watching,
+    // and the Finished archive.
+    enum LibShelf: Int, CaseIterable, Identifiable {
+        case planned, comingBack, watching, finished
+        var id: Int { rawValue }
+        var label: String {
+            switch self {
+            case .watching: return "Watching"
+            case .comingBack: return "Coming back"
+            case .planned: return "Planned"
+            case .finished: return "Finished"
+            }
         }
-        // Not actively airing: a franchise with an announced/upcoming next installment belongs in
-        // "Upcoming", not "Finished" — otherwise a completed show with a confirmed new season
-        // would be buried as if it were done for good.
-        if f.upcoming?.isFutureInstallment == true { return .upcoming }
+    }
+
+    /// One show, one shelf.
+    func libShelf(of f: Franchise) -> LibShelf {
+        if f.effectiveStatus == .planned { return .planned }
+        // In it: a season is live for you, or you have episodes left to continue.
+        if f.effectiveStatus == .watching, f.releasingPart != nil || f.resumePart != nil {
+            return .watching
+        }
+        // Coming back: nothing to watch right now, but a next installment is announced —
+        // dated or TBA alike. This is the "when does it return" lookup made browsable.
+        if f.upcoming?.isFutureInstallment == true || nextPremiere(of: f) != nil {
+            return .comingBack
+        }
         return .finished
     }
 
-    struct LibrarySection: Identifiable {
-        let id: String
-        let label: String
-        let count: Int
+    struct LibShelfSection: Identifiable {
+        let shelf: LibShelf
         let franchises: [Franchise]
+        var id: Int { shelf.id }
     }
 
-    var librarySections: [LibrarySection] {
+    /// The crate, in shelf order, search-filtered; empty shelves are omitted. No other filters —
+    /// the Library is one collection and search is its only control.
+    var libraryShelves: [LibShelfSection] {
         let q = libQuery.lowercased().trimmingCharacters(in: .whitespaces)
-        let filtered = library.filter {
-            (q.isEmpty || $0.title.lowercased().contains(q)) && matchesMediaFilter($0.source)
+        let filtered = library.filter { q.isEmpty || $0.title.lowercased().contains(q) }
+        return LibShelf.allCases.compactMap { shelf in
+            let arr = sortedForShelf(filtered.filter { libShelf(of: $0) == shelf }, shelf: shelf)
+            return arr.isEmpty ? nil : LibShelfSection(shelf: shelf, franchises: arr)
         }
-        return LibGroup.allCases
-            .filter { libFilter == .all || libFilter == .group($0) }
-            .compactMap { group -> LibrarySection? in
-                let arr = sortedForBucket(filtered.filter { bucket(of: $0) == group }, group: group)
-                guard !arr.isEmpty else { return nil }
-                return LibrarySection(id: group.rawValue, label: group.sectionLabel,
-                                      count: arr.count, franchises: arr)
-            }
     }
 
-    /// Orders a bucket's franchises for triage. Power users scan "Behind" by most-behind first;
-    /// "Caught up" reads best by soonest next airing.
-    private func sortedForBucket(_ arr: [Franchise], group: LibGroup) -> [Franchise] {
-        switch group {
-        case .behind:
-            // Most episodes behind first; fall back to `behind` then title for stable ordering.
+    private func sortedForShelf(_ arr: [Franchise], shelf: LibShelf) -> [Franchise] {
+        switch shelf {
+        case .watching:
+            // Recently-active first — the show you're living with floats to the top.
             return arr.sorted { a, b in
-                let ax = a.releasingPart?.episodesBehind ?? a.behind ?? 0
-                let bx = b.releasingPart?.episodesBehind ?? b.behind ?? 0
-                if ax != bx { return ax > bx }
+                if a.lastAiredSortKey != b.lastAiredSortKey { return a.lastAiredSortKey > b.lastAiredSortKey }
                 return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
             }
-        case .caughtup:
-            // Soonest next airing first; shows without a known next airing sort last.
+        case .comingBack:
+            // Soonest return first; TBA/undated last. Ties break by date precision, then title.
             return arr.sorted { a, b in
-                let an = a.nextAiringSortKey
-                let bn = b.nextAiringSortKey
-                if an != bn { return an < bn }
+                let ak = comingBackSortKey(a), bk = comingBackSortKey(b)
+                if ak.value != bk.value { return ak.value < bk.value }
+                if ak.precision != bk.precision { return ak.precision > bk.precision }
                 return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
             }
-        case .upcoming:
-            // Nearest announced date first; unknown dates (TBA / rumored) sort last. Ties break by
-            // precision (a concrete month ahead of a bare year), then title.
-            return arr.sorted { a, b in
-                switch (a.upcoming?.releaseSortKey, b.upcoming?.releaseSortKey) {
-                case let (x?, y?):
-                    if x.value != y.value { return x.value < y.value }
-                    if x.precision != y.precision { return x.precision > y.precision }
-                    return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-                case (.some, nil): return true
-                case (nil, .some): return false
-                case (nil, nil):
-                    return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-                }
-            }
-        case .finished, .planned:
-            // Server order is subscription order — arbitrary to the reader. Alphabetical scans.
+        case .planned, .finished:
             return arr.sorted {
                 $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
         }
+    }
+
+    /// Chronological key for the Coming back shelf: a dated premiere beats the curated release
+    /// window; genuinely unknown dates sort to the very end.
+    private func comingBackSortKey(_ f: Franchise) -> (value: Int, precision: Int) {
+        if let premiere = nextPremiere(of: f) {
+            let p = Formatting.localParts(premiere)
+            return (p.y * 10000 + p.mo * 100 + p.d, 3)
+        }
+        return f.upcoming?.releaseSortKey ?? (Int.max, 0)
     }
 
     // MARK: - Actions
@@ -500,7 +605,8 @@ final class AppModel {
     /// Set explicit progress for a part (detail pips / movie toggle).
     func setProgress(franchiseId: String, mediaId: Int, episodes: Int) {
         let clamped = max(0, episodes)
-        Haptics.impact(.light)
+        // Soft, refined tick for per-episode / movie watched toggles (distinct from catch-up's success).
+        Haptics.impact(.soft)
         let prev = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }?.progress
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
         Task {
@@ -636,35 +742,6 @@ final class AppModel {
     }
 }
 
-// MARK: - Library filter model
-
-enum LibGroup: String, CaseIterable {
-    // Order here drives both the filter-chip order and the section order on screen.
-    case behind, caughtup, upcoming, finished, planned
-
-    var sectionLabel: String {
-        switch self {
-        case .behind: return "Behind"
-        case .caughtup: return "Caught up"
-        case .upcoming: return "Upcoming seasons"
-        case .finished: return "Finished airing"
-        case .planned: return "Plan to watch"
-        }
-    }
-
-    var chipLabel: String {
-        switch self {
-        case .behind: return "Behind"
-        case .caughtup: return "Caught up"
-        case .upcoming: return "Upcoming"
-        case .finished: return "Finished"
-        case .planned: return "Planned"
-        }
-    }
-
-    var cardAction: CardAction { self == .behind ? .mark : .none }
-}
-
 enum MediaFilter: String, CaseIterable {
     case all
     case anime
@@ -675,19 +752,6 @@ enum MediaFilter: String, CaseIterable {
         case .all: return "All"
         case .anime: return "Anime"
         case .tv: return "TV"
-        }
-    }
-}
-
-enum LibFilter: Equatable {
-    case all
-    case group(LibGroup)
-
-    static func == (lhs: LibFilter, rhs: LibFilter) -> Bool {
-        switch (lhs, rhs) {
-        case (.all, .all): return true
-        case let (.group(a), .group(b)): return a == b
-        default: return false
         }
     }
 }
@@ -706,7 +770,9 @@ extension Franchise {
                 status: p.status, isReleasing: p.isReleasing, totalEpisodes: p.totalEpisodes,
                 airedEpisodes: p.airedEpisodes, nextEpisodeNumber: p.nextEpisodeNumber,
                 nextAiringAt: p.nextAiringAt, lastAiredAt: p.lastAiredAt, synopsis: p.synopsis,
-                genres: p.genres, progress: max(0, episodes)
+                genres: p.genres, progress: max(0, episodes),
+                year: p.year, studios: p.studios, nextAiringCount: p.nextAiringCount,
+                episodes: p.episodes
             )
         }
         return Franchise(copying: self, parts: newParts)
@@ -718,6 +784,7 @@ extension Franchise {
         Franchise(id: id, source: source, title: title, cover: cover, banner: banner, synopsis: synopsis,
                   genres: genres, isReleasing: isReleasing, partCounts: partCounts, parts: parts,
                   subscription: Subscription(status: newStatus), upcoming: upcoming,
+                  year: year, studios: studios,
                   status: newStatus, behind: behind, newParts: newParts)
     }
 }

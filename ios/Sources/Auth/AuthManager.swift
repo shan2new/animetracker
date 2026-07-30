@@ -82,6 +82,27 @@ final class AuthManager: TokenProvider {
         }
     }
 
+    // MARK: - Display identity
+
+    /// Best-available human name for the profile UI (Clerk first name → email → mode fallback).
+    var displayName: String {
+        switch mode {
+        case .clerk:
+            if let user = Clerk.shared.user {
+                if let name = user.firstName, !name.isEmpty { return name }
+                if let email = user.emailAddresses.first?.emailAddress, !email.isEmpty { return email }
+            }
+            return "Signed in"
+        case let .dev(clerkId):
+            return clerkId.isEmpty ? "Developer" : clerkId
+        }
+    }
+
+    /// Single-letter avatar initial derived from the display name.
+    var avatarInitial: String {
+        displayName.first.map { String($0).uppercased() } ?? "•"
+    }
+
     // MARK: - TokenProvider
 
     // Token vending is async: Clerk session tokens are fetched on demand, dev tokens are derived
