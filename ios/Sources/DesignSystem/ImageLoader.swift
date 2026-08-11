@@ -32,30 +32,71 @@ func downsampleImage(_ data: Data, maxPixel: CGFloat) throws -> UIImage {
 }
 
 // Thread-safe (NSCache is) store of decoded images, sized by real byte cost so memory stays bounded.
+//
+// Keyed on (url, SIZE BUCKET), not on url alone. Keying on the URL made the FIRST decode win for
+// the whole session: a Library thumb asks for ~207px, so the detail hero that wants 700px got the
+// 207px decode handed back and rendered a blurry upscale until the app restarted.
+//
+// The rule is one-directional. A request is served by any cached decode at least as detailed as it
+// asked for (downscaling at draw time is free and lossless-looking); it is never served a smaller
+// one. Sizes are rounded UP to a fixed ladder and the decode is done at the bucket, not at the
+// caller's exact request — otherwise a 207px decode filed under the 256 bucket would shortchange
+// the next caller who genuinely wants 256. The ladder plus the serve-larger rule keeps entries per
+// URL to a small handful (in practice one or two), and NSCache's byte-cost limit bounds the rest.
 final class ImageCache: @unchecked Sendable {
     static let shared = ImageCache()
-    private let cache = NSCache<NSURL, UIImage>()
+    private let cache = NSCache<NSString, UIImage>()
 
     private init() { cache.totalCostLimit = 96 * 1024 * 1024 } // ~96 MB of decoded posters
 
-    subscript(_ url: URL) -> UIImage? {
-        get { cache.object(forKey: url as NSURL) }
-        set {
-            guard let newValue else { cache.removeObject(forKey: url as NSURL); return }
-            let cost = newValue.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
-            cache.setObject(newValue, forKey: url as NSURL, cost: cost)
+    /// Decode sizes we round up to. Spaced ~1.4x so rounding never wastes much memory, and wide
+    /// enough at the top to cover full-bleed banners on a 3x device.
+    static let buckets: [CGFloat] = [128, 192, 256, 384, 512, 768, 1024, 1536, 2048]
+
+    /// The bucket a request decodes and files itself under — the smallest one that satisfies it.
+    /// A request beyond the ladder keeps its own exact size rather than being silently downgraded.
+    static func bucket(for maxPixel: CGFloat) -> CGFloat {
+        buckets.first { $0 >= maxPixel } ?? maxPixel.rounded(.up)
+    }
+
+    private static func key(_ url: URL, _ bucket: CGFloat) -> NSString {
+        "\(Int(bucket))|\(url.absoluteString)" as NSString
+    }
+
+    /// The best cached decode that is AT LEAST as detailed as `maxPixel`, or nil.
+    /// Never returns a smaller decode — that's the bug this cache exists to prevent.
+    func image(for url: URL, atLeast maxPixel: CGFloat) -> UIImage? {
+        let want = ImageCache.bucket(for: maxPixel)
+        for b in ImageCache.buckets where b >= want {
+            if let hit = cache.object(forKey: ImageCache.key(url, b)) { return hit }
         }
+        // Above the ladder there is no larger bucket to fall back on: only an exact match serves.
+        return want > (ImageCache.buckets.last ?? 0) ? cache.object(forKey: ImageCache.key(url, want)) : nil
+    }
+
+    /// File a decode under the bucket it was decoded at.
+    func store(_ image: UIImage, for url: URL, bucket: CGFloat) {
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        cache.setObject(image, forKey: ImageCache.key(url, bucket), cost: cost)
     }
 }
 
 // Serializes in-flight requests so two cells asking for the same poster share one fetch+decode.
+// De-dup is keyed on (url, bucket) for the same reason the cache is: two surfaces wanting the same
+// poster at different sizes are not the same request, and collapsing them handed the loser a decode
+// too small to render sharply.
 actor ImageLoader {
     static let shared = ImageLoader()
-    private var inFlight: [URL: Task<UIImage, Error>] = [:]
+    private var inFlight: [String: Task<UIImage, Error>] = [:]
 
     func image(for url: URL, maxPixel: CGFloat) async throws -> UIImage {
-        if let cached = ImageCache.shared[url] { return cached }
-        if let existing = inFlight[url] { return try await existing.value }
+        if let cached = ImageCache.shared.image(for: url, atLeast: maxPixel) { return cached }
+
+        // Decode at the bucket, not at the caller's exact request, so the entry honours every
+        // later request that resolves to the same bucket.
+        let bucket = ImageCache.bucket(for: maxPixel)
+        let key = "\(Int(bucket))|\(url.absoluteString)"
+        if let existing = inFlight[key] { return try await existing.value }
 
         let task = Task.detached(priority: .userInitiated) { () throws -> UIImage in
             var request = URLRequest(url: url)
@@ -64,16 +105,16 @@ actor ImageLoader {
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw ImageLoadError.badData
             }
-            return try downsampleImage(data, maxPixel: maxPixel)
+            return try downsampleImage(data, maxPixel: bucket)
         }
-        inFlight[url] = task
+        inFlight[key] = task
         do {
             let image = try await task.value
-            ImageCache.shared[url] = image
-            inFlight[url] = nil
+            ImageCache.shared.store(image, for: url, bucket: bucket)
+            inFlight[key] = nil
             return image
         } catch {
-            inFlight[url] = nil
+            inFlight[key] = nil
             throw error
         }
     }
@@ -94,36 +135,41 @@ struct CachedAsyncImage: View {
         self.url = url
         self.maxPixel = maxPixel
         self.contentMode = contentMode
-        // Synchronous cache hit → first frame already shows the poster, so recycled cells don't flash.
-        _image = State(initialValue: url.flatMap { ImageCache.shared[$0] })
+        // Synchronous cache hit → first frame already shows the poster, so recycled cells don't
+        // flash. `atLeast:` so a hero never inherits a thumbnail-sized decode as its first frame.
+        _image = State(initialValue: url.flatMap { ImageCache.shared.image(for: $0, atLeast: maxPixel) })
     }
 
     var body: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: contentMode)
-                    // Bound the (over/under-sized) image to its container and center-crop it. Without
-                    // this a `.fill` image can collapse the cell to zero (posters "vanish") or spill
-                    // past its frame off-center in layouts that don't clip it themselves.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .transition(.opacity)
-            } else {
-                GradientPlaceholder()
+        // The art hangs off a Color.clear SIZING BOX and is drawn as an overlay. This is load-bearing:
+        // an `Image` reports its pixel dimensions as its ideal size (our decoded UIImages are scale
+        // 1.0, so a 1100px banner claims 1100pt), and `.frame(maxWidth:.infinity)` only clamps that
+        // ideal when the parent proposes a concrete width — during an HStack/ZStack's sizing pass the
+        // proposal is nil, so the ideal leaks out and inflates the whole enclosing layout. (That's
+        // what threw Schedule's rail off-screen: one hero banner widened the ScrollView's content
+        // past the screen and the feed rendered horizontally centred/clipped.) `Color.clear` has no
+        // intrinsic size and an overlay never contributes to its parent's size, so this view now
+        // measures exactly what its container proposes — never more.
+        Color.clear
+            .overlay {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                        .transition(.opacity)
+                } else {
+                    GradientPlaceholder()
+                }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .task(id: url) { await load() }
+            .clipped()
+            .task(id: url) { await load() }
     }
 
     private func load() async {
         if image != nil && loadedURL == url { return } // already showing this exact URL
         guard let url else { image = nil; loadedURL = nil; return }
 
-        if let cached = ImageCache.shared[url] {
+        if let cached = ImageCache.shared.image(for: url, atLeast: maxPixel) {
             image = cached
             loadedURL = url
             return

@@ -5,6 +5,9 @@ struct RootView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(AppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
+    // The splash already honors this; the handoff has to as well, or the motion it suppresses
+    // just moves one layer up.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     // Cold-launch splash (the brand beat). Shown once, over everything, then fades to the app.
     @State private var splashDone = false
 
@@ -23,15 +26,26 @@ struct RootView: View {
                         .transition(.opacity.animation(.uiGentle))
                 }
             }
-            .scaleEffect(splashDone ? 1 : 0.985)
+            // Emerges from inside the ident's light: a hair small and slightly defocused,
+            // settling to sharp as the splash's zoom-through completes. With Reduce Motion on
+            // there is no camera push to emerge from — the splash simply crossfades away.
+            .scaleEffect(splashDone || reduceMotion ? 1 : 0.965)
+            .blur(radius: splashDone || reduceMotion ? 0 : 4)
 
             if !splashDone {
-                // Zoom-through exit: the splash scales up slightly as it dissolves, so the app
-                // appears to emerge from behind it rather than the splash merely vanishing.
+                // The splash animates its own zoom-through exit (the camera push in
+                // SplashView's timeline), so the container just crossfades over it — the
+                // app emerges from inside the icon as it scales past the viewer.
                 SplashView { withAnimation(.uiSmooth) { splashDone = true } }
                     .zIndex(10)
-                    .transition(.opacity.combined(with: .scale(scale: 1.03)))
+                    .transition(.opacity)
             }
+        }
+        // Sign-out (chosen, or forced by an expired session) is the one moment the model outlives
+        // its account: the library, the live clock, pending episode alerts and a running Live
+        // Activity all survive the view tree. Tear them down here so signing in again starts clean.
+        .onChange(of: auth.isSignedIn) { _, signedIn in
+            if !signedIn { appModel.teardown() }
         }
         // Foreground refresh: a resumed app can be days stale (aired counts, "Out now") — the 20s
         // clock task alone can't fix data. AppModel decides how much staleness warrants a reload.

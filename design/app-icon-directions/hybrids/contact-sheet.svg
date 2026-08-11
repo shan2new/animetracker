@@ -1,0 +1,10 @@
+<svg width="2160" height="1780" viewBox="0 0 2160 1780" xmlns="http://www.w3.org/2000/svg">
+  <rect width="2160" height="1780" fill="#18181D"/>
+  <style>text{font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}.title{font-size:33px;font-weight:700;fill:#F5F5F7}.body{font-size:24px;fill:#A6A6AD}.num{font-size:20px;font-weight:700;fill:#F0A24E;letter-spacing:2px}</style>
+  <text x="96" y="110" class="title" font-size="48">Previously. — Bookmark × P. hybrids</text>
+  <text x="96" y="156" class="body">The question: does the P become the bookmark, rather than sit on one?</text>
+  <g transform="translate(96 254)"><image href="01-ribbon-p.svg" width="560" height="560"/><text x="0" y="624" class="num">01</text><text x="0" y="670" class="title">Ribbon P.</text><text x="0" y="710" class="body">Recommended — one silhouette, one idea</text></g>
+  <g transform="translate(1104 254)"><image href="02-folded-p.svg" width="560" height="560"/><text x="0" y="624" class="num">02</text><text x="0" y="670" class="title">Folded P</text><text x="0" y="710" class="body">More literal saved-place cue</text></g>
+  <g transform="translate(96 1010)"><image href="03-track-bookmark.svg" width="560" height="560"/><text x="0" y="624" class="num">03</text><text x="0" y="670" class="title">Track Bookmark</text><text x="0" y="710" class="body">Most expressive, but has more moving parts</text></g>
+  <g transform="translate(1104 1010)"><image href="04-quiet-p.svg" width="560" height="560"/><text x="0" y="624" class="num">04</text><text x="0" y="670" class="title">Quiet P</text><text x="0" y="710" class="body">The most minimal; less tied to the wordmark</text></g>
+</svg>

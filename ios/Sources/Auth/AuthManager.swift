@@ -53,6 +53,8 @@ final class AuthManager: TokenProvider {
     /// Re-derive signed-in state from the current Clerk session.
     func refreshClerkSignInState() {
         isSignedIn = Clerk.shared.session != nil
+        // A fresh session answers whatever the last one failed at.
+        if isSignedIn { lastError = nil }
     }
 
     // MARK: - Dev bypass
@@ -71,6 +73,7 @@ final class AuthManager: TokenProvider {
     }
 
     func signOut() async {
+        lastError = nil
         switch mode {
         case .clerk:
             try? await Clerk.shared.auth.signOut()
@@ -79,6 +82,20 @@ final class AuthManager: TokenProvider {
             UserDefaults.standard.removeObject(forKey: devIdDefaultsKey)
             mode = AppConfig.isClerkConfigured ? .clerk : .dev(clerkId: "")
             isSignedIn = false
+        }
+    }
+
+    /// The backend rejected our credentials (401/403). Sign the session out for real — a token the
+    /// server won't accept is not a network hiccup, and a Retry button against it can never
+    /// succeed — and say so on the sign-in screen instead of letting it read as an outage.
+    func sessionExpired() {
+        guard isSignedIn else { return }
+        Task {
+            await signOut()
+            // A Clerk sign-out that failed locally must not leave us "signed in" against a server
+            // that disagrees; the next sign-in re-authenticates either way.
+            isSignedIn = false
+            lastError = APIError.unauthorized.errorDescription
         }
     }
 

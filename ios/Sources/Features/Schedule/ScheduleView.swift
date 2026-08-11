@@ -11,8 +11,11 @@ struct ScheduleView: View {
     /// Opens the detail drawer deep-linked to the row's season + episode (focus nil = plain open).
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String, _ focus: EpisodeFocus?) -> Void
 
-    // Guards the initial scroll-to-now so it fires once, not on every data refresh.
-    @State private var didAnchor = false
+    // Guards the scroll-to-now so it fires once per local DAY, not once per view lifetime. Tabs
+    // stay mounted for as long as the app lives; a Monday anchor left Tuesday's visit parked on
+    // stale history with NOW below the fold, and the "opens centred on now" promise silently
+    // decayed the longer the app survived.
+    @State private var anchoredDayKey: Int64?
     // Large title scrolled away → compact blurred bar (same grammar as Library/Search).
     @State private var scrolled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -88,6 +91,9 @@ struct ScheduleView: View {
                 if f != focusDay { withAnimation(.uiGentle) { focusDay = f } }
             }
             .overlay(alignment: .top) { compactHeader }
+            // Day rollover while the tab stays mounted: re-centre on the new NOW. The rail has
+            // just re-bucketed every row anyway, so the old scroll position points at nothing.
+            .onChange(of: Formatting.localDayKey(now)) { anchorToNow(proxy) }
         }
         .background(AppBackground())
         .refreshable {
@@ -100,10 +106,12 @@ struct ScheduleView: View {
 
     /// Lands the initial scroll with the NOW marker mid-viewport — past reads upward, upcoming
     /// downward — without animating. `scheduleDays` can be empty while the library is still
-    /// loading, so re-attempt on data arrival.
+    /// loading, so re-attempt on data arrival. Idempotent per day: revisits within the same day
+    /// keep whatever position the user scrolled to.
     private func anchorToNow(_ proxy: ScrollViewProxy) {
-        guard !didAnchor, appModel.scheduleDays.contains(where: \.isToday) else { return }
-        didAnchor = true
+        let today = Formatting.localDayKey(now)
+        guard anchoredDayKey != today, appModel.scheduleDays.contains(where: \.isToday) else { return }
+        anchoredDayKey = today
         proxy.scrollTo("now", anchor: .center)
     }
 
@@ -140,6 +148,27 @@ struct ScheduleView: View {
         }
     }
 
+    // MARK: episode counting
+    //
+    // The rail counts EPISODES, not franchises. One TV franchise can drop a whole season on a
+    // single date (`nextAiringCount`), and its row says so ("Season 2 · 8 episodes") — a day rule
+    // reading "1 EP" above it contradicted the row it introduced, and the week strip inherited the
+    // same undercount. An already-aired row reports a single episode ("Ep 12") — the batch size of
+    // a drop that has landed isn't recoverable from `nextAiringCount`, which has moved on to the
+    // next date — so aired rows count one apiece, exactly as they read.
+
+    /// Episodes a scheduled franchise lands on its day: the whole batch for a season drop, else 1.
+    private func scheduledEpisodeCount(_ f: Franchise) -> Int {
+        max(f.releasingPart?.nextAiringCount ?? 1, 1)
+    }
+
+    /// Episodes on a day — what both the day rule and the week strip report.
+    private func episodeCount(_ day: AppModel.ScheduleDay) -> Int {
+        day.franchises.reduce(0) { $0 + scheduledEpisodeCount($1) } + day.airedToday.count
+    }
+
+    /// Deliberately shows, not episodes — "12 AIRING THIS WEEK" is a count of series you follow.
+    /// The day rule and the strip's dots count episodes; see `episodeCount`.
     private var weekMetaLabel: String {
         let todayCol = Formatting.localMondayCol(now)
         let week = (-todayCol)...(6 - todayCol)
@@ -169,7 +198,7 @@ struct ScheduleView: View {
         let noon = now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
         let todayCol = Formatting.localMondayCol(now)
         let counts = Dictionary(uniqueKeysWithValues: appModel.scheduleDays.map {
-            ($0.id, $0.franchises.count + $0.airedToday.count)
+            ($0.id, episodeCount($0))
         })
         return (0..<7).map { col in
             let offset = col - todayCol
@@ -273,6 +302,10 @@ struct ScheduleView: View {
         var divider = false   // hairline above — only between two adjacent plain episode rows
     }
 
+    /// Flattens `scheduleDays` in emission order — the rail never re-sorts. That makes the
+    /// "one continuous chronological rail" promise a contract on the model: `scheduleDays` is
+    /// ascending by offset, `airedToday` ascending by air time, `franchises` ascending by next
+    /// airing. Today is therefore earliest-aired → NOW → next-to-air, reading straight down.
     private var railRows: [RailRow] {
         var rows: [RailRow] = []
         var prevWasEpisode = false
@@ -460,7 +493,7 @@ struct ScheduleView: View {
     // MARK: day rule — quiet, functional
 
     private func dayRule(_ day: AppModel.ScheduleDay) -> some View {
-        let count = day.franchises.count + day.airedToday.count
+        let count = episodeCount(day)
         let accent = day.isToday
         return HStack(spacing: 10) {
             Text(ruleLabel(day))
@@ -562,9 +595,9 @@ struct ScheduleView: View {
 
     // Metadata line: anime → "Ep 12"; TV → "Season 2 · Ep 7", or "Season 2 · 8 episodes" for a drop.
     private func metaText(_ vm: CardModel, aired: Bool) -> Text {
-        let season = (vm.source == .tmdb && !vm.partLabel.isEmpty) ? "\(vm.partLabel) · " : ""
+        let season = (vm.isTV && !vm.partLabel.isEmpty) ? "\(vm.partLabel) · " : ""
         if aired { return Text("\(season)Ep \(vm.airedEpisodes)") }
-        if vm.source == .tmdb && vm.nextAiringCount > 1 {
+        if vm.isTV && vm.nextAiringCount > 1 {
             return Text("\(season)\(vm.nextAiringCount) episodes")
         }
         return Text("\(season)Ep \(vm.nextEp.map(String.init) ?? "?")")
@@ -578,23 +611,26 @@ struct ScheduleView: View {
                 // Mark this aired episode watched (catch-up through it) without leaving the rail.
                 MarkCaughtUpCircle { appModel.markCaughtUp(f.id) }
             } else {
-                // Anime carries the real clock time it aired at; TV's instant is synthesized, so
-                // the eyebrow stands alone.
+                // The clock comes from the row's own calendar: a real instant for anime, nothing at
+                // all for TV, whose airDate carries no time of day (fmtTime returns "" there — no
+                // source branch needed at the call site).
+                let clock = f.releasingPart?.lastAiredAt
+                    .map { Formatting.fmtTime($0, anchor: vm.timeAnchor) } ?? ""
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("AIRED")
                         .scaledFont(9, weight: .semibold)
                         .tracking(1)
                         .foregroundStyle(Theme.text28)
-                    if vm.source == .anilist, let last = f.releasingPart?.lastAiredAt {
-                        Text(Formatting.fmtTime(last))
+                    if !clock.isEmpty {
+                        Text(clock)
                             .scaledFont(14, weight: .medium, monospacedDigit: true)
                             .foregroundStyle(Theme.text62)
                     }
                 }
             }
-        } else if vm.source == .tmdb {
+        } else if vm.isTV {
             tvLabel(vm)
-        } else if day.isToday {
+        } else if day.isToday && !vm.countdown.isEmpty {
             AirtimeStack(clock: vm.airTime,
                          countdown: vm.countdown == "now" ? "now" : "in \(vm.countdown)")
         } else {
@@ -662,7 +698,9 @@ struct ScheduleView: View {
                             .scaledFont(10, weight: .medium, monospacedDigit: true)
                             .tracking(0.8)
                             .foregroundStyle(Theme.text72)
-                        if vm.source == .anilist && !vm.countdown.isEmpty {
+                        // `countdown` is already empty for TV (no clock exists on a date-only
+                        // airing), so the source never has to be tested here.
+                        if !vm.countdown.isEmpty {
                             HStack(spacing: 6) {
                                 Circle()
                                     .fill(Theme.accent)
@@ -677,7 +715,7 @@ struct ScheduleView: View {
                         }
                     }
                     Spacer(minLength: 8)
-                    heroTrailing(vm, f: f)
+                    heroTrailing(vm)
                         .frame(width: trailW, alignment: .trailing)
                 }
                 .padding(.horizontal, 16)
@@ -695,12 +733,12 @@ struct ScheduleView: View {
     }
 
     @ViewBuilder
-    private func heroTrailing(_ vm: CardModel, f: Franchise) -> some View {
-        if vm.source == .tmdb {
+    private func heroTrailing(_ vm: CardModel) -> some View {
+        if vm.isTV {
             tvLabel(vm)
         } else {
             VStack(alignment: .trailing, spacing: 2) {
-                Text(heroEyebrow(f))
+                Text(heroEyebrow(vm))
                     .scaledFont(9, weight: .bold)
                     .tracking(1.2)
                     .foregroundStyle(Theme.text50)
@@ -714,10 +752,11 @@ struct ScheduleView: View {
     }
 
     /// "TONIGHT" when the episode airs in the evening, "TODAY" before that — keyed to the
-    /// episode's air hour, not the current clock.
-    private func heroEyebrow(_ f: Franchise) -> String {
-        guard let next = f.releasingPart?.nextAiringAt else { return "TODAY" }
-        return Formatting.localParts(next).hour >= 17 ? "TONIGHT" : "TODAY"
+    /// episode's air hour, not the current clock. A date-only airing has no real hour (it is
+    /// synthesized), so it never claims an evening.
+    private func heroEyebrow(_ vm: CardModel) -> String {
+        guard let next = vm.nextAiringAt, !vm.timeAnchor.isDateOnly else { return "TODAY" }
+        return Formatting.isEvening(hour: Formatting.localParts(next, anchor: vm.timeAnchor).hour) ? "TONIGHT" : "TODAY"
     }
 
     // MARK: endcap

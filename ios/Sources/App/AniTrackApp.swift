@@ -14,8 +14,15 @@ struct AniTrackApp: App {
             Clerk.configure(publishableKey: AppConfig.clerkPublishableKey)
         }
         let auth = AuthManager()
+        let model = AppModel(api: APIClient(tokenProvider: auth))
+        // A rejected session is auth's problem, not the loader's: the model hands the 401 back
+        // here rather than rendering it as "the server couldn't be reached".
+        model.onSessionExpired = { [weak auth] in auth?.sessionExpired() }
+        // Delegates must be installed before launch completes, or an alert arriving while the
+        // app is open is dropped without ever being presented.
+        EpisodeNotifications.shared.registerForegroundPresenter()
         _auth = State(initialValue: auth)
-        _appModel = State(initialValue: AppModel(api: APIClient(tokenProvider: auth)))
+        _appModel = State(initialValue: model)
     }
 
     var body: some Scene {

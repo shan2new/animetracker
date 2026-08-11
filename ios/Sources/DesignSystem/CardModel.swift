@@ -39,7 +39,9 @@ struct CardModel: Identifiable {
     let airedEpisodes: Int
     let airedAgo: String
     let nextEp: Int?
-    let nextAiringAt: Int64?   // raw next-airing instant (day-word derivation for TV)
+    /// Next-airing instant (day-word derivation for TV) — nil once it's in the past, so every
+    /// derived accessor below is stale-data-safe. See `FranchisePart.scheduledAiring(now:)`.
+    let nextAiringAt: Int64?
     let now: Int64
     let countdown: String      // anime only — empty for TV (its clock time is synthesized)
     let countdownIsImminent: Bool
@@ -56,6 +58,10 @@ struct CardModel: Identifiable {
     /// From a library/home franchise (operates on its releasing part).
     init(franchise: Franchise, action: CardAction, now: Int64, owned: Bool = true) {
         let part = franchise.releasingPart
+        // Every timestamp on this card is read in its source's calendar — a TMDB instant is a
+        // date-only fact synthesized at 17:00 UTC, so a local breakdown lands a day late in
+        // JST/KST/AEST and keeps yesterday's drop alive as "today".
+        let anchor = franchise.source.timeAnchor
         self.id = franchise.id
         self.mediaId = part?.mediaId
         self.title = franchise.title
@@ -85,7 +91,7 @@ struct CardModel: Identifiable {
         // reached yet. Surface the next-airing countdown instead, which is the useful info once
         // caught up and matches caught-up shows whose total episode count is unknown.
         let caughtUpAndAiring = (part?.isCaughtUp ?? false)
-            && (part?.nextAiringAt != nil || part?.nextEpisodeNumber != nil)
+            && (part?.scheduledAiring(now: now, anchor: anchor) != nil || part?.nextEpisodeNumber != nil)
         self.showProgress = total > 0 && action != .add && !caughtUpAndAiring
         self.progressLabel = "\(progress) / \(total > 0 ? String(total) : "?")"
         self.progressFraction = total > 0 ? min(1, Double(progress) / Double(total)) : 0
@@ -95,22 +101,21 @@ struct CardModel: Identifiable {
 
         self.airedEpisodes = part?.airedEpisodes ?? 0
         if let last = part?.lastAiredAt {
-            self.airedAgo = Formatting.fmtAgo(ts: last, now: now)
+            self.airedAgo = Formatting.fmtAgo(ts: last, now: now, anchor: anchor)
         } else {
             self.airedAgo = ""
         }
         self.now = now
-        self.nextAiringAt = part?.nextAiringAt
+        self.nextAiringAt = part?.scheduledAiring(now: now, anchor: anchor)
         self.nextEp = part?.nextEpisodeNumber
-        if let next = part?.nextAiringAt {
-            self.dayLabel = Formatting.fmtDay(ts: next, now: now)
-            // Clock time + minute-precise countdown are ANIME-only. TMDB airs on dates (its
-            // `nextAiringAt` is a synthesized 17:00 UTC), so a clock or "2d 4h" there is fabricated;
-            // TV degrades to day words via `dayWordLong` / `dayBadge`.
+        if let next = self.nextAiringAt {
+            self.dayLabel = Formatting.fmtDay(ts: next, now: now, anchor: anchor)
+            // Clock time + minute-precise countdown are ANIME-only. TMDB airs on dates, so a clock
+            // or "2d 4h" there is fabricated; TV degrades to day words via `dayWordLong` / `dayBadge`.
             if franchise.source == .anilist {
-                self.countdown = Formatting.fmtCountdown(target: next, now: now)
+                self.countdown = Formatting.fmtCountdown(target: next, now: now, anchor: anchor)
                 self.countdownIsImminent = (next - now) <= CardModel.imminentWindow
-                self.airTime = Formatting.fmtTime(next)
+                self.airTime = Formatting.fmtTime(next, anchor: anchor)
             } else {
                 self.countdown = ""
                 self.countdownIsImminent = false
@@ -152,14 +157,18 @@ struct CardModel: Identifiable {
         self.airedEpisodes = 0
         self.airedAgo = ""
         self.now = now
-        self.nextAiringAt = summary.nextAiringAt
+        let anchor = summary.source.timeAnchor
+        // Same stale-airing rule as the franchise initializer: a past instant is not a schedule.
+        self.nextAiringAt = summary.nextAiringAt.flatMap {
+            Formatting.dayDiff(ts: $0, now: now, anchor: anchor) >= 0 ? $0 : nil
+        }
         self.nextEp = nil
-        if let next = summary.nextAiringAt {
-            self.dayLabel = Formatting.fmtDay(ts: next, now: now)
+        if let next = self.nextAiringAt {
+            self.dayLabel = Formatting.fmtDay(ts: next, now: now, anchor: anchor)
             if summary.source == .anilist {
-                self.countdown = Formatting.fmtCountdown(target: next, now: now)
+                self.countdown = Formatting.fmtCountdown(target: next, now: now, anchor: anchor)
                 self.countdownIsImminent = (next - now) <= CardModel.imminentWindow
-                self.airTime = Formatting.fmtTime(next)
+                self.airTime = Formatting.fmtTime(next, anchor: anchor)
             } else {
                 self.countdown = ""
                 self.countdownIsImminent = false
@@ -196,14 +205,20 @@ struct CardModel: Identifiable {
         return "\(season) · \(episode)"
     }
 
-    /// Source-appropriate relative countdown to the NEXT airing, for trailing accents: anime is
-    /// minute-precise ("2d 4h" / "now"), TV degrades to day precision ("today" / "3d" / "2wk")
-    /// because its clock time is synthesized. Empty when nothing is scheduled.
-    var relClock: String {
-        guard let next = nextAiringAt else { return "" }
-        return source == .anilist
-            ? Formatting.fmtCountdown(target: next, now: now)
-            : Formatting.fmtRelSpanShort(ts: next, now: now)
+    /// Source-appropriate relative countdown to the NEXT airing, for trailing accents. Anime is
+    /// minute-precise ("2d 4h" / "now"); TV degrades to day precision ("3d" / "2wk") because its
+    /// clock time is synthesized.
+    ///
+    /// nil means "add nothing" — nothing is scheduled, or the TV date is TODAY. A same-day TV row
+    /// already says TODAY in its base meta, and appending the span there rendered "· TODAY · IN
+    /// TODAY". The countdown's job is to quantify a WAIT; on the day itself there isn't one.
+    var relClock: String? {
+        guard let next = nextAiringAt else { return nil }
+        if source == .anilist {
+            return Formatting.fmtCountdown(target: next, now: now, anchor: timeAnchor)
+        }
+        let span = Formatting.fmtRelSpanShort(ts: next, now: now, anchor: timeAnchor)
+        return (span.isEmpty || span == "today") ? nil : span
     }
 
     /// DECISION C — the next UNWATCHED episode to *watch* = `progress + 1`. This is distinct from
@@ -240,6 +255,10 @@ struct CardModel: Identifiable {
     /// True for a TMDB (general-TV) card — dates only, no per-episode clock time.
     var isTV: Bool { source == .tmdb }
 
+    /// The calendar this card's timestamps are read in — pass it to any `Formatting` helper a view
+    /// still needs to call directly with `nextAiringAt` / `now`.
+    var timeAnchor: Formatting.TimeAnchor { source.timeAnchor }
+
     /// Unwatched backlog count. For a releasing part this is `behindCount` (unwatched *aired*
     /// episodes); for a settled/binge backlog (Keep watching) it falls back to aired-or-total
     /// minus progress. Zero when caught up.
@@ -258,12 +277,19 @@ struct CardModel: Identifiable {
     /// TV-facing next-airing day word — never a clock time: "Today" / "Thursday" / "May 4".
     var dayWordLong: String {
         guard let next = nextAiringAt else { return "" }
-        return Formatting.fmtDayLong(ts: next, now: now)
+        return Formatting.fmtDayLong(ts: next, now: now, anchor: timeAnchor)
+    }
+
+    /// The "when does it land" label for this card: anime gets day + clock ("Tomorrow 9:00 PM"),
+    /// TV gets the day word alone. Views should use this instead of branching on `source`.
+    var whenLabel: String {
+        guard let next = nextAiringAt else { return "" }
+        return Formatting.fmtWhen(ts: next, now: now, anchor: timeAnchor)
     }
 
     /// Two-line date badge (top day/date, bottom relative span) for date-only (TV) rows.
     var dayBadge: (top: String, bottom: String)? {
         guard let next = nextAiringAt else { return nil }
-        return Formatting.fmtDayBadge(ts: next, now: now)
+        return Formatting.fmtDayBadge(ts: next, now: now, anchor: timeAnchor)
     }
 }

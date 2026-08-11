@@ -17,6 +17,10 @@ keep decoding):
   **Date precision caveat**: TMDB publishes air *dates* only, so `nextAiringAt`/`lastAiredAt`
   for tmdb parts are synthesized at **17:00 UTC** of the air date. Clients must not show
   minute-level countdowns or schedule time-of-day notifications for `source: "tmdb"`.
+  **Announced seasons**: a season with a known future air date ships that premiere as its next
+  slot (`nextEpisodeNumber: 1`, `nextAiringAt` = premiere at 17:00 UTC), matching how AniList
+  announces a season — so clients read the premiere date off `nextAiringAt` for either source.
+  A season with no air date yet has `nextAiringAt: null` and is genuinely undated.
   **Attribution**: any client surface using this data must show the TMDB logo and the line
   "This product uses the TMDB API but is not endorsed or certified by TMDB."
 
@@ -53,8 +57,14 @@ authenticated user's progress.
   "status": "FINISHED",      // raw AniList status
   "isReleasing": false,
   "totalEpisodes": 25,
-  "airedEpisodes": 25,        // latest aired ep number
-  "nextEpisodeNumber": null,
+  "airedEpisodes": 25,        // latest aired ep number; always 0 while status is NOT_YET_RELEASED
+                              // (an announced part has aired nothing, whatever `totalEpisodes` says)
+                              // Derived from catalogue airing data ONLY — never from `progress`:
+                              // `nextEpisodeNumber - 1` when a next slot exists; for a RELEASING
+                              // part with no next slot (the window between a finale airing and the
+                              // source flipping status) the latest episode in `episodes` whose
+                              // `airDate` has passed, or `totalEpisodes` when the list is undated.
+  "nextEpisodeNumber": null,  // 1 on a dated NOT_YET_RELEASED part — the premiere is the next slot
   "nextAiringAt": null,       // ms epoch or null
   "lastAiredAt": 1372000000000, // ms epoch or null
   "synopsis": "…",
@@ -148,6 +158,14 @@ sighting of an upcoming installment (including credible rumors), a status upgrad
 The client computes views exactly like the old app, but per **releasing part**:
 
 - **episodesBehind(part)** = `isReleasing ? max(0, airedEpisodes - progress) : 0`.
+- **availableEpisodes(part)** = `0` when `status == "NOT_YET_RELEASED"`, else `airedEpisodes || totalEpisodes`.
+  Announced parts must never contribute to a "keep watching" backlog.
+- **premiereAt(part)** = `nextAiringAt` while `status == "NOT_YET_RELEASED"` — both sources put a
+  dated announced part's premiere in that slot. `null` there means the date is genuinely unknown
+  (release TBA), never just "the source didn't say".
+- **`nextAiringAt` in the past is stale, not a schedule.** Sources don't advance the slot the
+  instant an episode airs, so clients treat a `nextAiringAt` whose *local day* is already behind
+  today as absent (same-day is kept) rather than rendering it as an upcoming airing.
 - **Today / "Out now"** = releasing parts whose `lastAiredAt > prevOpenedAt`.
 - **Airing soon** = releasing parts with `nextAiringAt` within 48h.
 - **Schedule** = releasing parts bucketed into the IST Mon–Sun week by `nextAiringAt`.

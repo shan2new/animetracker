@@ -6,7 +6,14 @@ import { persistFranchises, type GroupOutcome } from '../grouping/service.js'
 import { upsertMediaRows } from '../services/mediaStore.js'
 import type { EpisodeMeta } from '../types/api.js'
 import { getSeason, getShow } from './client.js'
-import { imageUrl, includedSeasons, tmdbEpisodes, tmdbSeasonToMediaRow, tmdbShowToGroupingResult } from './mapping.js'
+import {
+  imageUrl,
+  includedSeasons,
+  isJapaneseAnimationShow,
+  tmdbEpisodes,
+  tmdbSeasonToMediaRow,
+  tmdbShowToGroupingResult,
+} from './mapping.js'
 import type { TmdbSeason } from './types.js'
 
 /**
@@ -44,6 +51,10 @@ export async function ensureTvFranchise(showId: number): Promise<GroupOutcome | 
 
   const show = await getShow(showId)
   if (!show || includedSeasons(show).length === 0) return null
+  // Source boundary, enforced at the one place that CREATES a TMDB franchise rather than in each
+  // caller. Checked against the full show payload (authoritative) and before the per-season
+  // episode fetches, so a suppressed show costs one request instead of N.
+  if (isJapaneseAnimationShow(show)) return null
 
   const now = Date.now()
   const seasons = includedSeasons(show)

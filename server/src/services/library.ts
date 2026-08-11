@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions, users } from '../db/schema.js'
 import type { WatchStatus } from '../types/api.js'
 import { inArray } from 'drizzle-orm'
+import { deriveAiredEpisodes } from './franchiseView.js'
 
 /** Subscribe to a franchise. Defaults status to `watching` if any part is releasing, else `planned`. */
 export async function subscribe(userId: string, franchiseId: string, status?: WatchStatus): Promise<void> {
@@ -38,7 +39,40 @@ export async function unsubscribe(userId: string, franchiseId: string): Promise<
 }
 
 export async function setProgress(userId: string, mediaId: number, episodes: number): Promise<void> {
-  const clamped = Number.isFinite(episodes) ? Math.max(0, Math.floor(episodes)) : 0
+  let clamped = Number.isFinite(episodes) ? Math.max(0, Math.floor(episodes)) : 0
+  // Ceiling: a part can't be watched past its own SIZE. Belt-and-braces against any client with
+  // an unbounded "+1" control — one such control walked a 10-episode season up to 59 watched, and
+  // a bad value written once stays wrong until something overwrites it.
+  //
+  // Size is `max(episodes, airedEpisodes)`, exactly what the client bounds itself to
+  // (`FranchisePart.progressCeiling`). The two ceilings MUST agree: a RELEASING part whose
+  // catalogue total lags its aired count (a stale `episode_count`, an `episodes: null` season
+  // that derives its aired number from the next slot) let the client legitimately mark caught up
+  // at N while a `media.episodes`-only ceiling silently stored less — the user saw "caught up"
+  // against a server that disagreed and a fresh launch reverted them.
+  // Unsized and un-aired (ongoing AniList shows carry `episodes: null`) stays unbounded.
+  const [row] = await db
+    .select({
+      status: media.status,
+      episodes: media.episodes,
+      next: media.nextAiringEpisode,
+      episodesList: media.episodesList,
+    })
+    .from(media)
+    .where(eq(media.id, mediaId))
+    .limit(1)
+  if (row) {
+    const total = row.episodes ?? 0
+    const aired = deriveAiredEpisodes({
+      status: row.status,
+      totalEpisodes: total,
+      next: row.next && row.next.airingAt > 0 ? row.next : null,
+      episodes: row.episodesList ?? [],
+      nowMs: Date.now(),
+    })
+    const ceiling = Math.max(total, aired)
+    if (ceiling > 0) clamped = Math.min(clamped, ceiling)
+  }
   await db
     .insert(progress)
     .values({ userId, mediaId, episodesWatched: clamped, updatedAt: new Date() })

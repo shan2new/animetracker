@@ -18,15 +18,12 @@ struct SignInView: View {
 
             VStack(spacing: 0) {
                 Spacer()
-                // The airing pulse dot — the brand atom, and the wordmark's full stop.
-                Circle()
-                    .fill(Theme.accent)
-                    .frame(width: 18, height: 18)
-                    .shadow(color: Theme.accent.opacity(0.55), radius: 20)
+                PreviouslyMark(width: 44)
+                    .shadow(color: Theme.accent.opacity(0.30), radius: 16, y: 6)
                 (Text("Previously") + Text(".").foregroundStyle(Theme.accent))
                     .scaledFont(34, weight: .semibold)
                     .tracking(-1)
-                    .padding(.top, 14)
+                    .padding(.top, 12)
                 Text("Your airing-first TV tracker.")
                     .scaledFont(15)
                     .foregroundStyle(Theme.text52)

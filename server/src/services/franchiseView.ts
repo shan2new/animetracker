@@ -2,11 +2,60 @@ import { and, desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions } from '../db/schema.js'
 import type { PartKind } from '../grouping/partKind.js'
-import type { Franchise, FranchisePart, FranchiseSummary, LibraryFranchise, MediaSource, WatchStatus } from '../types/api.js'
+import type {
+  EpisodeMeta,
+  Franchise,
+  FranchisePart,
+  FranchiseSummary,
+  LibraryFranchise,
+  MediaSource,
+  WatchStatus,
+} from '../types/api.js'
 import { stripHtml } from '../util/text.js'
 
 const D = 86_400_000
 const KIND_ORDER: PartKind[] = ['season', 'movie', 'ova', 'ona', 'special', 'music']
+
+/** Latest aired episode number from a dated episode list, or null when the list carries no dates
+ *  at all (AniList `streamingEpisodes` have titles/thumbnails but never air dates). */
+function latestAiredFromEpisodes(episodes: EpisodeMeta[], nowMs: number): number | null {
+  let dated = false
+  let latest = 0
+  for (const e of episodes) {
+    if (e.airDate == null) continue
+    dated = true
+    if (e.airDate <= nowMs && e.number > latest) latest = e.number
+  }
+  return dated ? latest : null
+}
+
+/**
+ * How many episodes of a part are actually out. Pure so it can be unit-tested (see
+ * `franchiseView.test.ts`); everything it needs comes from the media row, never from the user.
+ *
+ * The tricky case is RELEASING with **no** next slot — reachable on both sources: TMDB nulls
+ * `next_episode_to_air.air_date` while the season still derives as RELEASING, and AniList leaves a
+ * window between a finale airing and `status` flipping to FINISHED. The old fallback there was the
+ * user's own `watched` count, which is not evidence of anything: a fresh subscriber saw every
+ * episode as un-aired ("upcoming", progress 0), and a partway viewer got a season header claiming
+ * they were caught up. Derive it from the episode list when it is dated, else from the catalogue's
+ * total — never from progress.
+ */
+export function deriveAiredEpisodes(m: {
+  status: string | null
+  totalEpisodes: number
+  next: { episode: number } | null
+  episodes: EpisodeMeta[]
+  nowMs: number
+}): number {
+  // An announced part has aired NOTHING, whatever episode count the catalogue advertises for it.
+  // TMDB publishes `episode_count` for announced seasons, so a One Piece season that hadn't aired
+  // an episode surfaced as a backlog ("S3 · 1 left") and lost its premiere-date treatment.
+  if (m.status === 'NOT_YET_RELEASED') return 0
+  if (m.next) return Math.max(0, m.next.episode - 1)
+  if (m.status === 'RELEASING') return latestAiredFromEpisodes(m.episodes, m.nowMs) ?? m.totalEpisodes
+  return m.totalEpisodes
+}
 
 type MediaRow = typeof media.$inferSelect
 type MemberRow = typeof franchiseMember.$inferSelect
@@ -19,7 +68,14 @@ function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episod
   const isReleasing = m.status === 'RELEASING'
   const total = m.episodes ?? 0
   const next = m.nextAiringEpisode && m.nextAiringEpisode.airingAt > 0 ? m.nextAiringEpisode : null
-  const airedEpisodes = next ? Math.max(0, next.episode - 1) : isReleasing ? watched : total
+  const eps = m.episodesList ?? []
+  const airedEpisodes = deriveAiredEpisodes({
+    status: m.status,
+    totalEpisodes: total,
+    next,
+    episodes: eps,
+    nowMs: Date.now(),
+  })
   const nextAiringAt = next ? next.airingAt * 1000 : null
   const lastAiredAt =
     m.lastAiredAt != null && m.lastAiredAt > 0
@@ -28,7 +84,6 @@ function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episod
         ? next.airingAt * 1000 - 7 * D
         : null
 
-  const eps = m.episodesList ?? []
   // Episodes sharing the exact next airing instant ⇒ a same-day multi-episode / full-season drop.
   const nextAiringCount = nextAiringAt != null ? eps.filter((e) => e.airDate === nextAiringAt).length : 0
 

@@ -58,6 +58,9 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen:
           UIColorName: LaunchBackground
+        # ProMotion: allow display-linked custom animation (the splash's TimelineView) to run
+        # at up to 120Hz on iPhone — without this key iOS caps custom animation at 60fps.
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UIUserInterfaceStyle: Dark

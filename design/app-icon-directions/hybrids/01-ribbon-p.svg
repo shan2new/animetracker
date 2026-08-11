@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hybrid 01: Ribbon P. The P is a single saved-place ribbon, with a quiet final period. -->
+  <defs>
+    <radialGradient id="glow" cx="68%" cy="25%" r="84%"><stop stop-color="#F0A24E" stop-opacity=".16"/><stop offset="1" stop-color="#F0A24E" stop-opacity="0"/></radialGradient>
+    <linearGradient id="amber" x1="278" y1="160" x2="746" y2="850" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD9A7"/><stop offset=".52" stop-color="#F0A24E"/><stop offset="1" stop-color="#C9702E"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#0B0B0E"/><rect width="1024" height="1024" fill="url(#glow)"/>
+  <path d="M294 184C294 144 326 112 366 112H584C746 112 834 221 834 370C834 516 746 616 584 616H426V824L294 736V184Z" fill="url(#amber)"/>
+  <!-- The counter makes the P readable; no extra internal decorative objects. -->
+  <path d="M426 248H578C654 248 700 295 700 371C700 445 654 484 578 484H426V248Z" fill="#0B0B0E"/>
+  <circle cx="735" cy="794" r="58" fill="#F0A24E"/><circle cx="715" cy="774" r="14" fill="#FFE7C2" fill-opacity=".75"/>
+</svg>

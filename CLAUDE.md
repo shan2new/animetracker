@@ -36,7 +36,10 @@ Franchises carry `source` (`anilist` | `tmdb`); a franchise never mixes sources.
 TV is deterministic — one TMDB show = one franchise, seasons as members (`sequence` =
 season_number), **zero LLM**; all mapping lives in `src/tmdb/mapping.ts` (pure, unit-tested).
 TMDB media rows share the integer `media.id` keyspace via `id = 1e9 + tmdb season id` — never
-change `TMDB_ID_OFFSET`. Search suppresses TMDB hits that are JP animation (AniList owns those).
+change `TMDB_ID_OFFSET`. JP animation belongs to AniList, so its TMDB twin is suppressed — enforced
+inside `ensureTvFranchise` (the only thing that creates a TMDB franchise), *not* in its callers, so
+`npm run tv` and any future call site inherit the rule. Search/trending pre-filter too, to skip the
+`/tv/{id}` fetch.
 TMDB air dates are **date-only**; `airingAt` is synthesized at 17:00 UTC, so iOS gates episode
 notifications/Live Activities to `source == .anilist`. `TMDB_ACCESS_TOKEN` unset = TV disabled
 (anime-only mode; everything still works). Sync jobs must stay source-filtered — never feed

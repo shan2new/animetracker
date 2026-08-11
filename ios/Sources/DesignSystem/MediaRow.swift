@@ -155,6 +155,14 @@ struct AirtimeStack: View {
             }
         }
         .fixedSize()
+        // One spoken fact, not three fragments — the bare "AIRS" eyebrow reads as letters.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(voiceLabel)
+    }
+
+    private var voiceLabel: String {
+        if let countdown, !countdown.isEmpty { return "Airs \(clock), \(countdown)" }
+        return "Airs \(clock)"
     }
 }
 
@@ -185,14 +193,21 @@ struct DateBadge: View {
     let now: Int64
     let source: MediaSource
 
+    /// Which calendar `ts` is read in. A date-only (TV) timestamp is a UTC day, not an instant —
+    /// formatting it locally pushes the badge a day forward east of UTC+7.
+    private var anchor: Formatting.TimeAnchor { source.timeAnchor }
+
     private var imminent: Bool {
-        source == .tmdb ? (ts - now) <= 7 * Formatting.D : (ts - now) <= 24 * Formatting.H
+        // Day precision for a date-only release (there is no hour to compare), hours for an instant.
+        anchor.isDateOnly
+            ? Formatting.dayDiff(ts: ts, now: now, anchor: anchor) <= 7
+            : (ts - now) <= 24 * Formatting.H
     }
     private var lines: (top: String, bottom: String) {
-        if source == .tmdb { return Formatting.fmtDayBadge(ts: ts, now: now) }
+        if anchor.isDateOnly { return Formatting.fmtDayBadge(ts: ts, now: now, anchor: anchor) }
         // fmtCountdown collapses to "now" once imminent/past — "in now" doesn't read.
-        let countdown = Formatting.fmtCountdown(target: ts, now: now)
-        return (Formatting.fmtTime(ts), countdown == "now" ? "now" : "in \(countdown)")
+        let countdown = Formatting.fmtCountdown(target: ts, now: now, anchor: anchor)
+        return (Formatting.fmtTime(ts, anchor: anchor), countdown == "now" ? "now" : "in \(countdown)")
     }
 
     var body: some View {
@@ -211,5 +226,7 @@ struct DateBadge: View {
         .padding(.vertical, 5)
         .background(imminent ? Theme.accentSoft : Theme.fillSoft, in: shape)
         .overlay(shape.stroke(imminent ? Theme.accentBorder : Theme.hairlineStrong, lineWidth: 1))
+        // Two stacked fragments are one fact ("Tomorrow, in 1d"), so speak them together.
+        .accessibilityElement(children: .combine)
     }
 }

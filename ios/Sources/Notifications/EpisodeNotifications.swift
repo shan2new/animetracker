@@ -15,6 +15,15 @@ final class EpisodeNotifications {
     static let maxPending = 48
 
     private let center = UNUserNotificationCenter.current()
+    /// Held strongly here — `center.delegate` is weak, and a deallocated delegate silently
+    /// restores the "drop it" default.
+    private let foregroundPresenter = ForegroundPresenter()
+
+    /// Install the foreground presentation delegate. Called once at launch, before the window
+    /// exists, because iOS only consults a delegate that was set by the end of launch.
+    func registerForegroundPresenter() {
+        center.delegate = foregroundPresenter
+    }
 
     /// Ask for permission the first time it's worth having (an airing show was just added), so
     /// the system prompt lands with obvious context instead of firing at first launch.
@@ -79,5 +88,25 @@ final class EpisodeNotifications {
             )
             try? await center.add(request)
         }
+    }
+
+    /// Drop every alert this app owns — pending and already delivered. Sign-out calls this: the
+    /// schedule is built from one account's library, so leaving it armed would announce the
+    /// previous user's episodes to whoever signs in next (or to nobody at all).
+    func cancelAll() {
+        center.removeAllPendingNotificationRequests()
+        center.removeAllDeliveredNotifications()
+    }
+}
+
+// An episode alert most often fires while you're IN the app — that's what "it's out now" means.
+// Without a delegate iOS suppresses it entirely, so the one notification the app schedules was
+// silently dropped at exactly its most likely moment. Present it like any other alert.
+private final class ForegroundPresenter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound, .list]
     }
 }

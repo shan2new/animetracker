@@ -72,7 +72,8 @@ struct ProfileView: View {
             // Overlaid dismiss control, same as the detail drawer's.
             HStack {
                 GlassCircleButton(systemName: "chevron.down", size: 34, iconSize: 16,
-                                  foreground: Theme.textPrimary) { dismiss() }
+                                  foreground: Theme.textPrimary,
+                                  accessibilityLabel: "Close") { dismiss() }
                 Spacer()
             }
             .padding(.horizontal, 16)

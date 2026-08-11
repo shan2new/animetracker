@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hybrid 04: Quiet P. Most icon-like and least illustrative: a tucked P with a bookmark cut. -->
+  <defs>
+    <radialGradient id="glow" cx="66%" cy="26%" r="85%"><stop stop-color="#F0A24E" stop-opacity=".15"/><stop offset="1" stop-color="#F0A24E" stop-opacity="0"/></radialGradient>
+    <linearGradient id="amber" x1="276" y1="150" x2="752" y2="842" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD9A7"/><stop offset=".55" stop-color="#F0A24E"/><stop offset="1" stop-color="#C9702E"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#0B0B0E"/><rect width="1024" height="1024" fill="url(#glow)"/>
+  <path d="M292 170C292 132 324 100 362 100H572C742 100 830 208 830 368C830 528 742 632 572 632H430V838L292 746V170Z" fill="url(#amber)"/>
+  <path d="M430 238H572C657 238 702 286 702 369C702 452 657 500 572 500H430V238Z" fill="#0B0B0E"/>
+  <!-- A precise bookmark cut replaces a period; quieter but less wordmark-linked. -->
+  <path d="M292 746L430 838V678L292 746Z" fill="#0B0B0E"/>
+</svg>

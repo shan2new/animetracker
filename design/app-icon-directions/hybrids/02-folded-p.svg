@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hybrid 02: Folded P. The lower leg ends as a literal page marker. -->
+  <defs>
+    <radialGradient id="glow" cx="65%" cy="23%" r="86%"><stop stop-color="#F0A24E" stop-opacity=".15"/><stop offset="1" stop-color="#F0A24E" stop-opacity="0"/></radialGradient>
+    <linearGradient id="amber" x1="294" y1="160" x2="738" y2="840" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD9A7"/><stop offset=".55" stop-color="#F0A24E"/><stop offset="1" stop-color="#C9702E"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#0B0B0E"/><rect width="1024" height="1024" fill="url(#glow)"/>
+  <path d="M310 180C310 140 342 108 382 108H570C736 108 820 212 820 362C820 512 736 616 570 616H442V838L310 748V180Z" fill="url(#amber)"/>
+  <path d="M442 242H570C650 242 690 286 690 362C690 438 650 482 570 482H442V242Z" fill="#0B0B0E"/>
+  <!-- Fold seam: a single dark angle implies the saved page without making a second icon. -->
+  <path d="M310 748L442 838V688L310 748Z" fill="#9E4F1D" fill-opacity=".7"/>
+</svg>

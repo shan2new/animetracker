@@ -7,15 +7,17 @@ import SwiftUI
 //  - Watching + Planned as native-ratio thumbnail rows (never crop a poster); Watching rows carry
 //    a tappable progress ring that logs the next episode,
 //  - Finished as a quiet 4-up mini poster grid,
-//  - tapping any show opens a quick sheet (blurred-art header, one primary action, ⋯ menu).
-// The urgency pact still holds: facts, not obligations — the one time-bound accent is an
-// airing-today "Tonight" fact and the Coming back return dates (anticipation relaxes).
+//  - tapping any show opens the full franchise detail sheet directly. (A 292pt "quick sheet" used
+//    to sit between the row and the detail; it was one hop of chrome with no information the
+//    detail doesn't have, so it's gone.)
+// The urgency pact still holds: facts, not obligations — the one time-bound accent is the
+// airing-today fact ("Tonight, 9:00 PM" before the slot, "New episode out" after it) and the
+// Coming back return dates (anticipation relaxes).
 struct LibraryView: View {
     @Environment(AppModel.self) private var appModel
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
     private var now: Int64 { appModel.now }
-    @State private var quickSheet: Franchise?
     @State private var scrolled = false
 
     var body: some View {
@@ -53,20 +55,11 @@ struct LibraryView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
-        .sheet(item: $quickSheet) { f in
-            LibraryQuickSheet(
-                franchise: f,
-                onOpenDetail: { id in
-                    quickSheet = nil
-                    // Let the quick sheet finish dismissing before the full detail rises.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        onOpenDetail(id, "lib/\(id)")
-                    }
-                }
-            )
-            .presentationDetents([.height(292)])
-            .presentationDragIndicator(.visible)
-        }
+    }
+
+    /// Straight to the full detail — the row already names the show; the tap should answer it.
+    private func openDetail(_ f: Franchise) {
+        onOpenDetail(f.id, "lib/\(f.id)")
     }
 
     // Blurred compact bar once the large title scrolls away (Apple large-title pattern).
@@ -157,7 +150,7 @@ struct LibraryView: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(items) { f in
-                        Button { quickSheet = f } label: {
+                        Button { openDetail(f) } label: {
                             VStack(alignment: .leading, spacing: 0) {
                                 Thumb(cover: f.cover, width: 112, height: 168, radius: 12)
                                     .shadow(color: .black.opacity(0.45), radius: 12, y: 6)
@@ -212,11 +205,15 @@ struct LibraryView: View {
         let fact = watchingFact(f)
         return libRow(f, fact: fact.text, accent: fact.accent) {
             if let part = f.releasingPart ?? f.resumePart {
-                ProgressRing(fraction: ringFraction(part)) {
-                    // Log the next episode straight from the row — the v4 ring interaction.
+                // The ring only LOGS while there's an unwatched episode actually out. Once you're
+                // level with what aired it becomes a plain progress indicator — a live "+1" here
+                // has nothing left to count, and tapping on past the end of a season is exactly
+                // how a 10-episode season ended up recorded at 59 watched.
+                let canLog = part.progress < part.availableEpisodes()
+                ProgressRing(fill: WatchProgress(part)?.ringFill ?? .fraction(0), onLog: canLog ? {
                     appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId,
                                          episodes: part.progress + 1)
-                }
+                } : nil)
             }
         }
     }
@@ -230,7 +227,7 @@ struct LibraryView: View {
         _ f: Franchise, fact: String, accent: Bool,
         @ViewBuilder trailing: @escaping () -> Trailing
     ) -> some View {
-        Button { quickSheet = f } label: {
+        Button { openDetail(f) } label: {
             HStack(spacing: 12) {
                 Thumb(cover: f.cover, width: 46, height: 69, radius: 7)
                 VStack(alignment: .leading, spacing: 2) {
@@ -266,7 +263,7 @@ struct LibraryView: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
                       spacing: 10) {
                 ForEach(items) { f in
-                    Button { quickSheet = f } label: {
+                    Button { openDetail(f) } label: {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(Theme.surface)
                             .aspectRatio(2.0 / 3.0, contentMode: .fit)
@@ -287,38 +284,56 @@ struct LibraryView: View {
 
     // MARK: facts
 
-    /// Watching-row fact: accent "Tonight, 9:00 PM · S4 E2" when the next episode airs today
-    /// (day-word only for TV); quiet "S2 · E6 next" otherwise.
+    /// Watching-row fact: accent "Tonight, 9:00 PM · S4 E2" when the next episode is still to land
+    /// today, "New episode out · S4 E2" once that slot has passed (day words only for TV); quiet
+    /// "S2 · E6 next" otherwise.
     private func watchingFact(_ f: Franchise) -> (text: String, accent: Bool) {
-        if let part = f.releasingPart, let next = part.nextAiringAt,
-           Formatting.fmtDay(ts: next, now: now) == "Today" {
+        if let part = f.releasingPart, let next = f.nextAiring(now: now), f.dayDiff(of: next, now: now) == 0 {
             let ep = [seasonToken(part), part.nextEpisodeNumber.map { "E\($0)" }].compactMap { $0 }
                 .joined(separator: " ")
-            let when = f.source == .anilist ? "Tonight, \(Formatting.fmtTime(next))" : "Today"
-            return (ep.isEmpty ? when : "\(when) · \(ep)", true)
+            // A same-day slot is KEPT after it passes (see `scheduledAiring`), so "Tonight, 9:00 AM"
+            // was still being promised at 8pm for an episode out since morning. Once the instant is
+            // behind us the episode is a fact, not a wait — but only for a real instant: a TV date's
+            // 17:00 is synthesized, so it has no moment to be past.
+            if !f.timeAnchor.isDateOnly, next <= now {
+                // Unwatched is judged against the episode that just landed, not `airedEpisodes` —
+                // the aired count trails the hourly sync, so it can still read yesterday's number.
+                let unwatched = part.nextEpisodeNumber.map { part.progress < $0 } ?? part.isBehind
+                if unwatched {
+                    return (ep.isEmpty ? "New episode out" : "New episode out · \(ep)", true)
+                }
+            } else {
+                let when = dayPartLabel(f, at: next)
+                return (ep.isEmpty ? when : "\(when) · \(ep)", true)
+            }
         }
         if let part = f.releasingPart ?? f.resumePart {
             let season = seasonToken(part).map { "\($0) · " } ?? ""
             return ("\(season)E\(part.progress + 1) next", false)
         }
-        return ("", false)
+        // An explicit "Watching" status keeps a show on this shelf even with nothing left to
+        // resume (`libShelf` honours the user's word). Say what IS true rather than nothing —
+        // an announced return if there is one, else the plain shape of the show. No accent:
+        // Library stays calm, Today carries urgency.
+        let comingBack = comingBackFact(f)
+        return (comingBack.text.isEmpty ? quietFact(f) : comingBack.text, false)
     }
 
-    private func seasonToken(_ part: FranchisePart) -> String? {
-        part.kind == .season && part.sequence >= 1 ? "S\(part.sequence)" : nil
-    }
-
-    private func ringFraction(_ part: FranchisePart) -> Double {
-        let total = part.totalEpisodes > 0 ? part.totalEpisodes : part.airedEpisodes
-        guard total > 0 else { return 0 }
-        return min(1, Double(part.progress) / Double(total))
+    /// "Tonight, 9:00 PM" / "Today, 9:00 AM" for a real broadcast instant; the bare day word for a
+    /// date-only (TV) release, which has no clock to name a part of the day with.
+    private func dayPartLabel(_ f: Franchise, at ts: Int64) -> String {
+        guard !f.timeAnchor.isDateOnly else { return f.whenLabel(ts: ts, now: now) }
+        let hour = Formatting.localParts(ts, anchor: f.timeAnchor).hour
+        return "\(Formatting.isEvening(hour: hour) ? "Tonight" : "Today"), \(Formatting.fmtTime(ts, anchor: f.timeAnchor))"
     }
 
     private func comingBackFact(_ f: Franchise) -> (text: String, dated: Bool) {
         if let premiere = appModel.nextPremiere(of: f) {
-            let label = f.parts.first { $0.premiereAt == premiere }
-                .map { $0.label.isEmpty ? "New season" : $0.label } ?? "New season"
-            return ("\(label) · \(Formatting.fmtFullDate(premiere))", true)
+            let part = f.parts.first { $0.premiereAt == premiere }
+            let label = part.map { $0.label.isEmpty ? "New season" : $0.label } ?? "New season"
+            let date = part?.premiereDateLabel(source: f.source)
+                ?? Formatting.fmtFullDate(premiere, anchor: f.timeAnchor)
+            return ("\(label) · \(date)", true)
         }
         if let badge = f.upcoming?.cardBadge, !badge.isEmpty {
             return (badge, f.upcoming?.releaseSortKey != nil)
@@ -327,192 +342,106 @@ struct LibraryView: View {
     }
 }
 
+// MARK: - Shared row facts
+
+private func seasonToken(_ part: FranchisePart) -> String? {
+    part.kind == .season && part.sequence >= 1 ? "S\(part.sequence)" : nil
+}
+
+/// The always-true, never-urgent descriptor for a show with nothing scheduled and nothing queued:
+/// its season count, else source + year. Used wherever a fact line would otherwise be blank.
+private func quietFact(_ f: Franchise) -> String {
+    if let counts = f.partCounts, counts.season > 0 {
+        return "\(counts.season) \(counts.season == 1 ? "season" : "seasons")"
+    }
+    let year = f.year.map { " · \($0)" } ?? ""
+    return "\(f.source.shortLabel)\(year)"
+}
+
+/// What a progress indicator can HONESTLY say about a part you're watching.
+///
+/// A season whose size the catalogue doesn't publish (ongoing AniList shows carry `episodes: null`)
+/// has no completion to express. Measuring progress against the AIRED count instead rendered a
+/// caught-up ongoing show as a closed ring and "100% watched" — an in-progress series presented as
+/// finished. Caught up is its own state, not 100%.
+private enum WatchProgress {
+    /// Known season size: a real fraction of the whole.
+    case ofSeason(watched: Int, total: Int)
+    /// Unknown size, level with everything aired so far.
+    case caughtUp(watched: Int)
+    /// Unknown size, still behind: progress through what has AIRED, and labelled as such.
+    case throughAired(watched: Int, aired: Int)
+
+    init?(_ part: FranchisePart) {
+        if part.totalEpisodes > 0 {
+            self = .ofSeason(watched: part.progress, total: part.totalEpisodes)
+        } else if part.airedEpisodes > 0 {
+            self = part.progress >= part.airedEpisodes
+                ? .caughtUp(watched: part.progress)
+                : .throughAired(watched: part.progress, aired: part.airedEpisodes)
+        } else {
+            return nil
+        }
+    }
+
+    /// How the tappable ring fills. `caughtUp` never closes a circle — a closed ring reads as
+    /// "series complete", and this one is still running.
+    var ringFill: RingFill {
+        switch self {
+        case .ofSeason(let watched, let total): return .fraction(min(1, Double(watched) / Double(total)))
+        case .caughtUp: return .caughtUp
+        // Can't reach 1: this case exists only while watched < aired.
+        case .throughAired(let watched, let aired): return .fraction(min(1, Double(watched) / Double(aired)))
+        }
+    }
+}
+
+/// How much of the Watching ring is filled — or that there is nothing left to fill toward.
+private enum RingFill {
+    case fraction(Double)
+    case caughtUp
+}
+
 // MARK: - Progress ring
 
 /// The v4 Watching-row ring: a conic progress fill you can TAP to log the next episode.
-/// 20pt visual, 34pt tap target. Fills with accent; a small pop on change.
+/// 20pt visual, 34pt tap target. Fills with accent; a small pop on change. A show that's level
+/// with what aired but whose season size is unknown gets the passive ✓ instead of a closed ring
+/// (the ✓ is the app's "Caught up" status mark — DECISION A).
 private struct ProgressRing: View {
-    let fraction: Double
-    let onLog: () -> Void
+    let fill: RingFill
+    /// nil ⇒ nothing left to log: render the ring as a passive indicator, not a dead button that
+    /// still bounces and haptics on every tap.
+    let onLog: (() -> Void)?
 
     var body: some View {
-        Button(action: onLog) {
+        Button(action: { onLog?() }) {
             ZStack {
                 Circle().stroke(Theme.hairlineStrong, lineWidth: 3)
-                Circle()
-                    .trim(from: 0, to: fraction)
-                    .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.uiSnappy, value: fraction)
+                switch fill {
+                case .fraction(let fraction):
+                    Circle()
+                        .trim(from: 0, to: fraction)
+                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.uiSnappy, value: fraction)
+                case .caughtUp:
+                    Image(systemName: "checkmark")
+                        .scaledFont(10, weight: .bold)
+                        .foregroundStyle(Theme.accent)
+                }
             }
             .frame(width: 20, height: 20)
             .frame(width: 34, height: 34)
             .contentShape(Circle())
         }
         .buttonStyle(BounceButtonStyle())
-        .accessibilityLabel("Log next episode")
-    }
-}
-
-// MARK: - Quick sheet
-
-// The v4 quick sheet — a fast half-sheet for a tapped show: ambient blurred-art header with the
-// poster, a status eyebrow, the show's one fact, a progress line for watching shows, and a single
-// primary action + a ⋯ menu. The full FranchiseDetailView stays one tap deeper.
-private struct LibraryQuickSheet: View {
-    @Environment(AppModel.self) private var appModel
-    let franchise: Franchise
-    let onOpenDetail: (String) -> Void
-
-    private var now: Int64 { appModel.now }
-    /// The live copy, so optimistic progress/status changes reflect immediately.
-    private var f: Franchise { appModel.franchise(id: franchise.id) ?? franchise }
-    private var shelf: AppModel.LibShelf? { appModel.libShelf(of: f) }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-            HStack(spacing: 10) {
-                Button {
-                    Haptics.impact(.soft)
-                    primaryAction()
-                } label: {
-                    Text(primaryLabel)
-                        .scaledFont(14.5, weight: .bold)
-                        .foregroundStyle(Theme.background)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 44)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .buttonStyle(SpringPressButtonStyle(scale: 0.97))
-
-                Menu {
-                    FranchiseContextMenu(f: f, appModel: appModel)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .scaledFont(16, weight: .semibold)
-                        .foregroundStyle(Theme.text72)
-                        .frame(width: 44, height: 44)
-                        .background {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(Theme.hairlineStrong, lineWidth: 1)
-                        }
-                }
-            }
-            .padding(.horizontal, Theme.Space.gutter)
-            .padding(.top, 16)
-            Spacer(minLength: 0)
-        }
-        .presentationBackground(Theme.surface)
+        .disabled(onLog == nil)
+        .accessibilityLabel(ringLabel)
     }
 
-    // Ambient header: blurred art behind the uncropped poster (the B-treatment, at sheet scale).
-    private var header: some View {
-        ZStack(alignment: .bottomLeading) {
-            Color.clear
-                .frame(height: 178)
-                .frame(maxWidth: .infinity)
-                .overlay {
-                    RemoteImageView(url: f.cover, maxPixel: 500)
-                        .blur(radius: 26)
-                        .saturation(1.05)
-                        .opacity(0.55)
-                }
-                .overlay { Color.black.opacity(0.30) }
-
-            HStack(alignment: .bottom, spacing: 16) {
-                Thumb(cover: f.cover, width: 92, height: 138, radius: 10)
-                    .shadow(color: .black.opacity(0.5), radius: 14, y: 6)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(statusEyebrow)
-                        .scaledFont(10, weight: .semibold)
-                        .tracking(1.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(Theme.accent)
-                    Text(f.title)
-                        .scaledFont(19, weight: .bold)
-                        .tracking(-0.4)
-                        .lineLimit(2)
-                        .foregroundStyle(Theme.textPrimary)
-                    if !fact.isEmpty {
-                        Text(fact)
-                            .scaledFont(12.5, monospacedDigit: true)
-                            .foregroundStyle(Theme.text72)
-                            .lineLimit(1)
-                    }
-                    if let progress = progressLine {
-                        VStack(alignment: .leading, spacing: 5) {
-                            ProgressBar(fraction: progress.fraction, height: 3)
-                                .frame(maxWidth: 160)
-                            Text(progress.label)
-                                .scaledFont(10.5, monospacedDigit: true)
-                                .foregroundStyle(Theme.text52)
-                        }
-                        .padding(.top, 6)
-                    }
-                }
-                .padding(.bottom, 2)
-            }
-            .padding(.horizontal, Theme.Space.gutter)
-            .padding(.bottom, 18)
-        }
-        .clipped()
-    }
-
-    private var statusEyebrow: String {
-        switch shelf {
-        case .watching: return "Watching"
-        case .comingBack: return "Coming back"
-        case .planned: return "Planned"
-        case .finished, nil: return "Finished"
-        }
-    }
-
-    private var fact: String {
-        switch shelf {
-        case .watching:
-            if let part = f.releasingPart ?? f.resumePart {
-                let season = part.kind == .season ? "S\(part.sequence) · " : ""
-                return "\(season)E\(part.progress + 1) next"
-            }
-            return ""
-        case .comingBack:
-            return f.upcoming?.cardBadge ?? ""
-        case .planned:
-            let year = f.year.map { " · \($0)" } ?? ""
-            return "\(f.source.shortLabel)\(year)"
-        case .finished, nil:
-            if let counts = f.partCounts, counts.season > 0 {
-                return "\(counts.season) \(counts.season == 1 ? "season" : "seasons")"
-            }
-            return ""
-        }
-    }
-
-    private var progressLine: (fraction: Double, label: String)? {
-        guard shelf == .watching, let part = f.releasingPart ?? f.resumePart else { return nil }
-        let total = part.totalEpisodes > 0 ? part.totalEpisodes : part.airedEpisodes
-        guard total > 0 else { return nil }
-        let fraction = min(1, Double(part.progress) / Double(total))
-        return (fraction, "\(Int((fraction * 100).rounded()))% watched")
-    }
-
-    private var primaryLabel: String {
-        switch shelf {
-        case .watching: return "Continue watching"
-        case .planned: return "Start watching"
-        case .comingBack, .finished, nil: return "View details"
-        }
-    }
-
-    private func primaryAction() {
-        switch shelf {
-        case .planned:
-            // "Start watching" genuinely starts it: the show moves to the Watching shelf.
-            appModel.setStatus(franchiseId: f.id, status: .watching)
-            onOpenDetail(f.id)
-        default:
-            onOpenDetail(f.id)
-        }
+    private var ringLabel: String {
+        if case .caughtUp = fill { return "Caught up" }
+        return onLog == nil ? "Watch progress" : "Log next episode"
     }
 }

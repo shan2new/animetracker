@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Direction 03: Chapter. A single episode card with an unmistakable cut corner. -->
+  <defs>
+    <radialGradient id="glow" cx="75%" cy="30%" r="85%"><stop stop-color="#F0A24E" stop-opacity=".12"/><stop offset="1" stop-color="#F0A24E" stop-opacity="0"/></radialGradient>
+    <linearGradient id="paper" x1="246" y1="190" x2="776" y2="834" gradientUnits="userSpaceOnUse"><stop stop-color="#FFF4E3"/><stop offset="1" stop-color="#E9B979"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#0B0B0E"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <path d="M230 222C230 180 264 146 306 146H718C760 146 794 180 794 222V645L606 842H306C264 842 230 808 230 766V222Z" fill="url(#paper)"/>
+  <path d="M606 842V700C606 670 630 645 660 645H794" fill="#F0A24E"/>
+  <path d="M390 337H634M390 512H578" stroke="#0B0B0E" stroke-width="74" stroke-linecap="round"/>
+</svg>

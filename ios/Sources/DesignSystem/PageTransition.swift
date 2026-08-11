@@ -1,13 +1,16 @@
 import SwiftUI
 
-// Smooth, premium "page-in" entrance for a main tab. When a tab becomes the selected one its
-// content settles up into place — a gentle vertical rise paired with a fade — while the floating
-// tab bar stays put, so switching tabs feels like landing on a fresh page rather than a hard cut.
+// Smooth, premium "page-in" entrance for a main tab's FIRST appearance. On cold launch (and each
+// tab's first visit) the content settles up into place — a gentle vertical rise paired with a
+// fade — while the floating tab bar stays put. It runs ONCE per tab: replaying it on every switch
+// turned ordinary tab changes into a 0.42s loading beat, so after the first landing a switch is
+// the instant cut native tabs promise (user call, 2026-08-08).
 //
-// Driven by the *selection* (`isActive`), not by `onAppear`/`onDisappear`. TabView keeps every tab
-// alive and fires those lifecycle callbacks inconsistently, which made an earlier onAppear-based
-// version replay unevenly (or not at all) on Today/Schedule. `onChange(of: isActive)` fires
-// deterministically for every tab whenever the selection changes, so the entrance is uniform.
+// Driven by the *selection* (`isActive`), not by `onAppear`/`onDisappear` alone. TabView keeps
+// every tab alive and fires those lifecycle callbacks inconsistently, which made an earlier
+// onAppear-based version replay unevenly (or not at all) on Today/Schedule. `onChange(of:
+// isActive)` fires deterministically whenever the selection changes, so the one entrance each tab
+// gets is uniform no matter how it was mounted.
 //
 // The franchise detail drawer is a sheet, not a tab, so it never receives this — by design.
 private struct PageInTransition: ViewModifier {
@@ -24,22 +27,18 @@ private struct PageInTransition: ViewModifier {
         content
             .opacity(shown ? 1 : 0)
             .offset(y: shown ? 0 : travel)
+            // `shown` is never reset — that's the once-only guarantee.
             .onChange(of: isActive) { _, active in
-                if active {
-                    withAnimation(entrance) { shown = true }
-                } else {
-                    // Reset instantly while off-screen so the next visit animates from scratch.
-                    shown = false
-                }
+                if active, !shown { withAnimation(entrance) { shown = true } }
             }
             // First launch (and a tab's lazy first appearance): animate the active tab in.
-            .onAppear { if isActive { withAnimation(entrance) { shown = true } } }
+            .onAppear { if isActive, !shown { withAnimation(entrance) { shown = true } } }
     }
 }
 
 extension View {
-    /// Applies the shared page-in entrance to a main tab's content. `isActive` is whether this
-    /// tab is currently selected. See `PageInTransition`.
+    /// Applies the shared page-in entrance to a main tab's content, once per tab. `isActive` is
+    /// whether this tab is currently selected. See `PageInTransition`.
     func pageInTransition(isActive: Bool, travel: CGFloat = 10) -> some View {
         modifier(PageInTransition(isActive: isActive, travel: travel))
     }

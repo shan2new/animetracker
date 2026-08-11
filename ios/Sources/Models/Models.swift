@@ -16,6 +16,13 @@ enum WatchStatus: String, Codable, Sendable, CaseIterable {
 enum MediaSource: String, Codable, Sendable {
     case anilist
     case tmdb
+
+    /// Which calendar this source's timestamps must be read in — the anchor every `Formatting`
+    /// helper takes. TMDB air dates are DATE-ONLY facts the server carries as a synthesized
+    /// 17:00 UTC instant (docs/api-contract.md), so only their UTC calendar day is real; reading
+    /// them locally put every timezone east of UTC+7 a day ahead. AniList ships true instants.
+    /// Never branch on `source` at a formatting call site — pass this.
+    var timeAnchor: Formatting.TimeAnchor { self == .tmdb ? .utcDate : .local }
 }
 
 enum PartKind: String, Codable, Sendable {
@@ -80,6 +87,22 @@ struct Episode: Codable, Identifiable, Sendable {
     init(number: Int, title: String?, airDate: Int64?, overview: String?, still: String?, runtime: Int?) {
         self.number = number; self.title = title; self.airDate = airDate
         self.overview = overview; self.still = still; self.runtime = runtime
+    }
+
+    /// `airDate` only ever comes from TMDB — AniList exposes none (docs/api-contract.md) — so it is
+    /// always a date-only fact and must be read in its own UTC day, never the device's.
+    static let airDateAnchor: Formatting.TimeAnchor = .utcDate
+
+    /// "Jun 24, 2026" for this episode's air date; nil when the source didn't date it.
+    /// Use this instead of `Formatting.fmtFullDate(episode.airDate)`, which reads a day late east
+    /// of UTC+7.
+    var airDateLabel: String? {
+        airDate.map { Formatting.fmtFullDate($0, anchor: Episode.airDateAnchor) }
+    }
+
+    /// Day word for this episode's air date ("Today" / "Thursday" / "May 4"); nil when undated.
+    func airDayLabel(now: Int64) -> String? {
+        airDate.map { Formatting.fmtDayLong(ts: $0, now: now, anchor: Episode.airDateAnchor) }
     }
 }
 
@@ -191,10 +214,59 @@ struct FranchisePart: Codable, Identifiable, Sendable {
 
     /// Announced but not yet aired — nothing is watchable yet, so the UI shows a premiere
     /// date instead of a "Not started" stepper.
-    var isUpcoming: Bool { status == "NOT_YET_RELEASED" && airedEpisodes == 0 }
+    /// Keyed on status ALONE: a catalogue that publishes an announced season's planned episode
+    /// count (TMDB does) would otherwise fail the old `airedEpisodes == 0` test and the season
+    /// would masquerade as released — losing its premiere date and inventing a backlog.
+    var isUpcoming: Bool { status == "NOT_YET_RELEASED" }
 
-    /// Scheduled premiere instant (ms epoch) for an upcoming part, if AniList has dated it.
+    /// Scheduled premiere instant (ms epoch) for an upcoming part, if the source has dated it.
     var premiereAt: Int64? { isUpcoming ? nextAiringAt : nil }
+
+    /// "Jun 24, 2026" premiere date for an announced part, read in its source's calendar.
+    /// A part doesn't know its own source, so the franchise supplies it.
+    func premiereDateLabel(source: MediaSource) -> String? {
+        premiereAt.map { Formatting.fmtFullDate($0, anchor: source.timeAnchor) }
+    }
+
+    /// The next airing you can still count down to, or nil when there isn't one.
+    ///
+    /// A `nextAiringAt` in the past is STALE DATA, not a schedule: the catalogue simply hasn't
+    /// advanced the slot yet (an announced premiere whose date has come and gone, a season that
+    /// ended between syncs). Reading it as a live schedule is what made a week-old timestamp
+    /// render as "today" every day. Same-day is kept — an episode that aired a few hours ago
+    /// still legitimately reads as "today".
+    ///
+    /// `anchor` decides which calendar "same day" means: a TMDB slot must be judged against its
+    /// own UTC date or a JST morning keeps yesterday's drop alive as "today". Prefer
+    /// `Franchise.nextAiring(now:)`, which can't forget to pass it.
+    func scheduledAiring(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int64? {
+        guard let next = nextAiringAt,
+              Formatting.dayDiff(ts: next, now: now, anchor: anchor) >= 0 else { return nil }
+        return next
+    }
+
+    /// Episodes of this part that are actually available to watch right now — aired count while
+    /// releasing, else the finite total. Zero for an announced part: a season that hasn't started
+    /// has nothing to watch, whatever episode count the catalogue advertises for it.
+    func availableEpisodes() -> Int {
+        if isUpcoming { return 0 }
+        return airedEpisodes > 0 ? airedEpisodes : totalEpisodes
+    }
+
+    /// Highest episode number that may be recorded as watched for this part — the season's SIZE.
+    /// A "+1" logging control with no ceiling will happily run progress past the end of a season
+    /// (a 10-episode season sat at 59/10 because every tap incremented and the progress ring
+    /// clamped its *visual* at 100%, so the overrun was invisible).
+    ///
+    /// Deliberately the season size rather than `availableEpisodes()`: aired counts trail the
+    /// catalogue by up to an hour, and blocking a legitimate write on stale sync data is worse
+    /// than allowing a keen viewer to run a few episodes ahead. Unknown size (ongoing AniList
+    /// shows carry `episodes: null`) leaves it unbounded rather than guessing.
+    var progressCeiling: Int {
+        if isUpcoming { return 0 }
+        let size = max(totalEpisodes, airedEpisodes)
+        return size > 0 ? size : Int.max
+    }
 
     /// Has the user watched this part to completion? For movies this is binary (progress > 0);
     /// for finite, non-releasing parts it means progress reached the episode total.
@@ -423,6 +495,9 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
         behind = try? c.decodeIfPresent(Int.self, forKey: .behind)
         newParts = try? c.decodeIfPresent(Int.self, forKey: .newParts)
     }
+
+    /// The calendar this summary's `nextAiringAt` must be read in — see `MediaSource.timeAnchor`.
+    var timeAnchor: Formatting.TimeAnchor { source.timeAnchor }
 }
 
 // MARK: - Endpoint response envelopes
@@ -463,6 +538,32 @@ struct ProgressBody: Encodable, Sendable {
 // MARK: - Franchise derivation helpers
 
 extension Franchise {
+    /// The calendar this franchise's timestamps must be read in — see `MediaSource.timeAnchor`.
+    var timeAnchor: Formatting.TimeAnchor { source.timeAnchor }
+
+    /// The next airing you can still count down to, read in this franchise's own calendar.
+    /// Prefer this over `releasingPart?.scheduledAiring(now:)`, which defaults to `.local` and so
+    /// keeps a TMDB drop alive a day too long east of UTC+7.
+    func nextAiring(now: Int64) -> Int64? {
+        releasingPart?.scheduledAiring(now: now, anchor: timeAnchor)
+    }
+
+    /// Calendar-day bucket key for one of this franchise's timestamps — what day-grouped feeds
+    /// (the Schedule rail, Today's buckets) must group on so a TV row lands on its real date.
+    func dayKey(of ts: Int64) -> Int64 { Formatting.localDayKey(ts, anchor: timeAnchor) }
+
+    /// Whole-day offset of one of this franchise's timestamps from today (0 = today, +1 = tomorrow,
+    /// −1 = yesterday).
+    func dayDiff(of ts: Int64, now: Int64) -> Int {
+        Formatting.dayDiff(ts: ts, now: now, anchor: timeAnchor)
+    }
+
+    /// The one "when does this land" label for this franchise: anime gets day + clock
+    /// ("Tomorrow 9:00 PM"), TV gets a day word alone ("Tomorrow" / "Thursday" / "May 4").
+    func whenLabel(ts: Int64, now: Int64) -> String {
+        Formatting.fmtWhen(ts: ts, now: now, anchor: timeAnchor)
+    }
+
     /// The currently-RELEASING part that Home / Schedule / Library logic operates on.
     /// Mirrors the api-contract "Client-side derivation": pick the releasing part, preferring
     /// the one with the soonest next airing, else the most recently aired.
@@ -493,10 +594,8 @@ extension Franchise {
             .sorted { $0.sequence < $1.sequence }
     }
 
-    /// Already-available episodes of a part — aired count while releasing, else the finite total.
-    private static func availableEpisodes(_ p: FranchisePart) -> Int {
-        p.airedEpisodes > 0 ? p.airedEpisodes : p.totalEpisodes
-    }
+    /// Already-available episodes of a part — see `FranchisePart.availableEpisodes()`.
+    private static func availableEpisodes(_ p: FranchisePart) -> Int { p.availableEpisodes() }
 
     /// The part the user would actually resume, in watch order: the one they're mid-way through,
     /// else the first unstarted part *after* everything they finished, else the earliest part with

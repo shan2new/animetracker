@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, or } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { fetchByIds, fetchLastAired, fetchTrending } from '../anilist/client.js'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, subscriptions } from '../db/schema.js'
@@ -16,10 +16,18 @@ import { mapWithConcurrency } from '../util/concurrency.js'
  * the same table but must never be sent to AniList (their ids are offset TMDB season ids).
  */
 export async function refreshAiring(): Promise<number> {
+  // Announced parts whose premiere instant has already passed are refreshed too. A status-only
+  // filter never looks at them again, so the row freezes at NOT_YET_RELEASED with a premiere date
+  // in the past — which the client then reads as a live airing ("today", every day) instead of the
+  // RELEASING season it has actually become. `airingAt` is stored in SECONDS.
+  const duePremiere = and(
+    eq(media.status, 'NOT_YET_RELEASED'),
+    sql`(${media.nextAiringEpisode} ->> 'airingAt')::bigint <= ${Math.floor(Date.now() / 1000)}`,
+  )
   const rows = await db
     .select({ id: media.id })
     .from(media)
-    .where(and(eq(media.status, 'RELEASING'), eq(media.source, 'anilist')))
+    .where(and(eq(media.source, 'anilist'), or(eq(media.status, 'RELEASING'), duePremiere)))
   const ids = rows.map((r) => r.id)
   if (ids.length === 0) return 0
 

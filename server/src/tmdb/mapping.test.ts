@@ -6,6 +6,7 @@ import {
   deriveSeasonStatus,
   includedSeasons,
   isJapaneseAnimation,
+  isJapaneseAnimationShow,
   tmdbEpisodes,
   tmdbNetworks,
   tmdbSeasonMediaId,
@@ -112,6 +113,33 @@ describe('isJapaneseAnimation', () => {
   })
 })
 
+describe('isJapaneseAnimationShow', () => {
+  // The full-show form is what ensureTvFranchise enforces, so EVERY creator honours the boundary
+  // — not just the search/trending callers that happen to remember to filter.
+  it('suppresses JP animation on the full show payload', () => {
+    expect(isJapaneseAnimationShow(show({ genres: [{ id: 16, name: 'Animation' }], origin_country: ['JP'] }))).toBe(
+      true,
+    )
+  })
+
+  it('keeps western animation, JP live-action, and JP co-productions that are not animated', () => {
+    expect(isJapaneseAnimationShow(show({ genres: [{ id: 16, name: 'Animation' }], origin_country: ['US'] }))).toBe(
+      false,
+    )
+    expect(isJapaneseAnimationShow(show({ genres: [{ id: 18, name: 'Drama' }], origin_country: ['JP'] }))).toBe(false)
+    // Live-action adaptations of manga (e.g. Netflix's One Piece) are legitimately TMDB's.
+    expect(
+      isJapaneseAnimationShow(show({ genres: [{ id: 10759, name: 'Action & Adventure' }], origin_country: ['US', 'JP'] })),
+    ).toBe(false)
+  })
+
+  it('agrees with the search-result form for a multi-genre anime', () => {
+    const genres = [{ id: 16, name: 'Animation' }, { id: 10759, name: 'Action & Adventure' }]
+    expect(isJapaneseAnimationShow(show({ genres, origin_country: ['JP'] }))).toBe(true)
+    expect(isJapaneseAnimation(result({ genre_ids: [16, 10759], origin_country: ['JP'] }))).toBe(true)
+  })
+})
+
 describe('includedSeasons', () => {
   it('keeps numbered seasons even with zero episodes (announced), drops empty Specials', () => {
     const s = show({
@@ -181,6 +209,36 @@ describe('tmdbSeasonToMediaRow', () => {
       airingAt: Math.floor(Date.UTC(2026, 6, 10, 17) / 1000),
     })
     expect(tmdbSeasonToMediaRow(s, season(1), NOW).nextAiringEpisode).toBeNull()
+  })
+
+  it('gives a dated upcoming season its premiere as episode 1', () => {
+    // next_episode_to_air only ever points at the releasing season, so an announced season would
+    // otherwise ship no airing instant at all and read as "release date TBA" on the client.
+    const upcoming = season(3, { air_date: '2026-09-01' })
+    const s = show({
+      seasons: [season(1), season(2), upcoming],
+      next_episode_to_air: { air_date: '2026-07-10', episode_number: 5, season_number: 2 },
+    })
+    const row = tmdbSeasonToMediaRow(s, upcoming, NOW)
+    expect(row.status).toBe('NOT_YET_RELEASED')
+    expect(row.nextAiringEpisode).toEqual({
+      episode: 1,
+      airingAt: Math.floor(Date.UTC(2026, 8, 1, 17) / 1000),
+    })
+    // The releasing season keeps its own real slot.
+    expect(tmdbSeasonToMediaRow(s, season(2), NOW).nextAiringEpisode).toEqual({
+      episode: 5,
+      airingAt: Math.floor(Date.UTC(2026, 6, 10, 17) / 1000),
+    })
+  })
+
+  it('leaves an undated announced season without a next slot', () => {
+    const undated = season(3, { air_date: null })
+    const s = show({ seasons: [season(1), undated] })
+    const row = tmdbSeasonToMediaRow(s, undated, NOW)
+    expect(row.status).toBe('NOT_YET_RELEASED')
+    expect(row.nextAiringEpisode).toBeNull()
+    expect(row.lastAiredAt).toBeNull()
   })
 
   it('takes lastAiredAt from last_episode_to_air for its season, else the season premiere', () => {

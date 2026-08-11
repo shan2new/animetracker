@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hybrid 03: Track Bookmark. The letter P is drawn as a single open track through a ribbon. -->
+  <defs>
+    <radialGradient id="glow" cx="64%" cy="24%" r="86%"><stop stop-color="#F0A24E" stop-opacity=".15"/><stop offset="1" stop-color="#F0A24E" stop-opacity="0"/></radialGradient>
+    <linearGradient id="amber" x1="260" y1="160" x2="760" y2="846" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD9A7"/><stop offset=".54" stop-color="#F0A24E"/><stop offset="1" stop-color="#C9702E"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#0B0B0E"/><rect width="1024" height="1024" fill="url(#glow)"/>
+  <path d="M318 184C318 140 354 104 398 104H574C740 104 822 210 822 360C822 510 740 614 574 614H438V836L318 748V184Z" fill="#F0A24E" fill-opacity=".18"/>
+  <path d="M382 736V280C382 226 426 184 480 184H575C717 184 774 272 774 370C774 470 717 548 575 548H382" fill="none" stroke="url(#amber)" stroke-width="108" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M318 748L438 836V708L318 748Z" fill="#F0A24E"/>
+  <circle cx="736" cy="796" r="52" fill="#F0A24E"/><circle cx="718" cy="778" r="13" fill="#FFE7C2" fill-opacity=".75"/>
+</svg>

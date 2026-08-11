@@ -17,6 +17,9 @@ struct FranchiseContextMenu: View {
             }
         }
 
+        // The ✓ marks the EXPLICIT watch status — the same thing `AppModel.libShelf(of:)` sorts on,
+        // so the shelf and its eyebrow always say what this menu says. Never key it on whether a
+        // part is resumable: a watched-out show is still "Watching" until the user says otherwise.
         let status = f.effectiveStatus
         Button {
             appModel.setStatus(franchiseId: f.id, status: .watching)

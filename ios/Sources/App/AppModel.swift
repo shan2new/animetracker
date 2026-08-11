@@ -53,7 +53,8 @@ final class AppModel {
 
     // Library filtering.
     var libQuery = ""
-    // Global anime/TV filter — applies to Today, Schedule, Library, and search results.
+    // Anime/TV filter — SEARCH ONLY. Today, Schedule and Library are your shows and always show
+    // everything: a filter set once while browsing used to silently hide half of what aired.
     var mediaFilter: MediaFilter = .all
 
     // Live clock for countdowns.
@@ -76,6 +77,30 @@ final class AppModel {
     // Monotonic token: each fired request claims the next value; a response only mutates
     // state if it's still the latest, so out-of-order completions can't clobber fresh results.
     private var searchSeq = 0
+    // Same guard for library reloads: several can be in flight (an add, a pull-to-refresh, a
+    // foreground refresh) and a sign-out invalidates all of them at once.
+    private var reloadSeq = 0
+
+    /// One optimistic progress write, awaiting a server snapshot that confirms it.
+    private struct LocalWrite {
+        var episodes: Int
+        /// `reloadSeq` at the moment the PUT settled (returned, succeeded or failed); nil while
+        /// it is still in flight. Any snapshot fetched by a LATER reload was read after the
+        /// server had its final say, so it is authoritative — see `reconcileLocalProgress`.
+        var settledAtSeq: Int?
+    }
+
+    /// Optimistic progress writes a server snapshot hasn't confirmed yet, keyed by mediaId
+    /// (globally unique). Two jobs: a franchise added seconds ago isn't in `library` until the
+    /// add's reload lands, so the write has nowhere to go; and a reload already in flight when
+    /// the write happened carries a pre-write snapshot that would silently revert it. An entry
+    /// is dropped the moment a fetched library agrees with it — or once the write has settled and
+    /// a snapshot taken afterwards still disagrees, which means the server didn't accept it.
+    private var localProgress: [Int: LocalWrite] = [:]
+
+    /// Invoked when the server rejects our credentials. The auth layer owns the response — a 401
+    /// means the session is gone, which is a sign-in problem, never a connectivity one.
+    var onSessionExpired: (@MainActor () -> Void)?
 
     init(api: APIClient) {
         self.api = api
@@ -111,18 +136,78 @@ final class AppModel {
     }
 
     func reload() async {
+        reloadSeq += 1
+        let seq = reloadSeq
         loading = true
-        defer { loading = false }
         do {
             let res = try await api.library()
-            library = res.franchises
+            // A newer reload — or a sign-out teardown — superseded this request. Its snapshot is
+            // stale by definition; applying it would resurrect state we just tore down.
+            guard seq == reloadSeq else { return }
+            library = reconcileLocalProgress(res.franchises, seq: seq)
             // Keep the larger of the two prevOpenedAt values we may have seen.
             if res.prevOpenedAt > 0 { prevOpenedAt = max(prevOpenedAt, res.prevOpenedAt) }
             loadError = false
+            loading = false
             await syncAmbient()
+        } catch APIError.unauthorized {
+            guard seq == reloadSeq else { return }
+            // NOT a load failure: retrying can never fix a dead session, and "the server couldn't
+            // be reached" would be a lie. Hand it to auth, which returns the user to sign-in.
+            handleSessionExpired()
         } catch {
+            guard seq == reloadSeq else { return }
             loadError = true
+            loading = false
         }
+    }
+
+    /// The session is gone (401/403). Drop every trace of the signed-in account, then let the
+    /// auth layer surface the honest reason on the sign-in screen.
+    private func handleSessionExpired() {
+        teardown()
+        onSessionExpired?()
+    }
+
+    /// Full account teardown, run on every sign-out (voluntary or expired). Anything that outlives
+    /// the view tree has to be dismantled here — the in-memory library, the live clock, in-flight
+    /// requests, and the two ambient layers (pending episode alerts and the airing Live Activity)
+    /// would otherwise keep serving the previous account. Leaves the model in its launch state so
+    /// the next sign-in opens on a loader, never on someone else's shows.
+    func teardown() {
+        clockTask?.cancel(); clockTask = nil
+        searchTask?.cancel(); searchTask = nil
+        trendingTask?.cancel(); trendingTask = nil
+        undoTask?.cancel(); undoTask = nil
+        errorTask?.cancel(); errorTask = nil
+        ccTasks.values.forEach { $0.cancel() }
+        ccTasks = [:]
+        // Invalidate every in-flight response so a late completion can't repopulate the model.
+        searchSeq += 1
+        reloadSeq += 1
+
+        library = []
+        pendingAdds = []
+        localProgress = [:]
+        prevOpenedAt = 0
+        loadError = false
+        loading = true          // the next sign-in mounts on the loader, not on an empty shelf
+        backgroundedAt = nil
+
+        searchQuery = ""        // didSet clears the results/busy/error triad
+        searchResults = []
+        searchBusy = false
+        searchError = false
+        trending = []
+        libQuery = ""
+        mediaFilter = .all
+
+        justCaught = []
+        undo = nil
+        errorToast = nil
+
+        EpisodeNotifications.shared.cancelAll()
+        AiringLiveActivityManager.shared.endAll()
     }
 
     // MARK: - Scene lifecycle (foreground refresh)
@@ -280,12 +365,23 @@ final class AppModel {
 
     func isInLibrary(_ id: String) -> Bool { libraryIds.contains(id) || pendingAdds.contains(id) }
 
-    /// Search results with the anime/TV chip applied (the server interleaves both sources).
+    /// Search results with the anime/TV chip applied (the server interleaves both sources). This
+    /// is the ONLY surface the chip touches — see `mediaFilter`.
     var filteredSearchResults: [FranchiseSummary] {
         searchResults.filter { matchesMediaFilter($0.source) }
     }
 
     func franchise(id: String) -> Franchise? { library.first { $0.id == id } }
+
+    /// Which catalogue a franchise came from, resolved from whatever is loaded — the library, or
+    /// the search/trending results an add can originate from. nil when we genuinely don't know
+    /// (callers should treat that as "not AniList" rather than guess).
+    func source(of franchiseId: String) -> MediaSource? {
+        if let f = franchise(id: franchiseId) { return f.source }
+        if let s = searchResults.first(where: { $0.id == franchiseId }) { return s.source }
+        if let t = trending.first(where: { $0.id == franchiseId }) { return t.source }
+        return nil
+    }
 
     func matchesMediaFilter(_ source: MediaSource) -> Bool {
         switch mediaFilter {
@@ -295,9 +391,10 @@ final class AppModel {
         }
     }
 
-    /// All subscribed franchises that have a currently-releasing part (media-filtered).
+    /// All subscribed franchises that have a currently-releasing part. Never media-filtered: what
+    /// aired today is a fact about your library, not about a chip you last touched in search.
     var airingFranchises: [Franchise] {
-        library.filter { $0.releasingPart != nil && matchesMediaFilter($0.source) }
+        library.filter { $0.releasingPart != nil }
     }
 
     var libraryEmpty: Bool { library.isEmpty }
@@ -333,12 +430,58 @@ final class AppModel {
             .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
     }
 
-    /// Soonest upcoming episode across all airing franchises (not just the 48h window).
+    /// Soonest upcoming episode across all airing franchises (not just the 48h window). This is
+    /// the "waiting" hero and the all-caught-up line, so every slot it yields must still be a
+    /// genuine WAIT.
+    ///
+    /// A date-only TV drop stays "up next" for the whole of its day — its clock time is
+    /// synthesized, so there is no instant for it to be past, and the labels are day-granular.
+    /// An AniList slot is a real instant: once it passes, the episode is out. `scheduledAiring`
+    /// deliberately keeps such a slot alive for the rest of the day (it reads as "today"
+    /// elsewhere), but here it would sort ahead of the genuinely-next episode and be announced as
+    /// a future event — "lands Today 9:00 AM" at 8pm. Keep those strictly future.
     var nextUp: Franchise? {
         airingFranchises
-            .filter { ($0.releasingPart?.nextAiringAt ?? 0) > now }
+            .filter {
+                $0.timeAnchor.isDateOnly
+                    ? $0.nextAiring(now: now) != nil
+                    : ($0.releasingPart?.nextAiringAt ?? 0) > now
+            }
             .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
             .first
+    }
+
+    // MARK: now bar
+
+    /// Today's Now Bar fact — one global answer to "when". Deliberately mirrors the Live
+    /// Activity's "one soonest episode" model (`AiringLiveActivityManager.sync`) so the lock
+    /// screen and Today tell the same story.
+    struct NowBarItem: Equatable {
+        enum State { case live, next }
+        let franchiseId: String
+        let state: State
+        /// The instant the bar is about: the drop (`.live`) or the next airing (`.next`).
+        let at: Int64
+    }
+
+    /// How long a fresh unwatched drop holds the bar's LIVE state. Deliberately tighter than
+    /// `outNowWindow` — the bar answers "what's happening now", not "what's still unwatched".
+    static let nowBarLiveWindow: Int64 = 24 * Formatting.H
+
+    /// LIVE = the freshest unwatched drop within the live window (same-day for date-only TV,
+    /// which has no real instant to measure hours against); else NEXT = the soonest scheduled
+    /// airing; else nil — the bar collapses to nothing (Today must not nag with an idle strip).
+    var nowBarItem: NowBarItem? {
+        if let f = outNow.first, let last = f.releasingPart?.lastAiredAt {
+            let fresh = f.timeAnchor.isDateOnly
+                ? f.dayDiff(of: last, now: now) == 0
+                : now - last <= AppModel.nowBarLiveWindow
+            if fresh { return NowBarItem(franchiseId: f.id, state: .live, at: last) }
+        }
+        if let f = nextUp, let next = f.nextAiring(now: now) {
+            return NowBarItem(franchiseId: f.id, state: .next, at: next)
+        }
+        return nil
     }
 
     /// "Keep watching" — franchises you're mid-watch with an unwatched backlog NOT already surfaced
@@ -349,8 +492,7 @@ final class AppModel {
         return Array(
             library
                 .filter {
-                    matchesMediaFilter($0.source)
-                        && $0.effectiveStatus == .watching
+                    $0.effectiveStatus == .watching
                         && !outNowIds.contains($0.id)
                         && $0.resumePart != nil
                 }
@@ -383,7 +525,12 @@ final class AppModel {
         if let part = f.releasingPart, part.episodesBehind > 0,
            now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow { return .newEpisode }
         if f.resumePart != nil { return .backlog }
-        if let part = f.releasingPart, part.isCaughtUp, part.nextAiringAt != nil { return .airingWait }
+        // A stale airing slot the source hasn't advanced is not a wait — `nextAiring` drops it (in
+        // the franchise's OWN calendar, so a date-only TV slot doesn't expire a day early), so the
+        // card falls through to a premiere date or off the shelf instead of claiming "today" for
+        // days on end.
+        if let part = f.releasingPart, part.isCaughtUp,
+           f.nextAiring(now: now) != nil { return .airingWait }
         if let premiere = nextPremiere(of: f), premiere - now <= AppModel.premiereShelfWindow {
             return .premiereSoon
         }
@@ -400,7 +547,7 @@ final class AppModel {
     /// first (freshest drop / biggest backlog / soonest airing / soonest premiere).
     var watchingShelf: [Franchise] {
         library
-            .filter { matchesMediaFilter($0.source) && $0.effectiveStatus == .watching }
+            .filter { $0.effectiveStatus == .watching }
             .compactMap { f in shelfState(of: f).map { (f, $0) } }
             .sorted { a, b in
                 if a.1 != b.1 { return a.1.rawValue < b.1.rawValue }
@@ -454,18 +601,27 @@ final class AppModel {
             let dayKey = Formatting.localDayKey(dayDate)
             let isToday = offset == 0
 
+            // Each franchise is bucketed by the calendar day IT lives in (`dayKey(of:)`): a TMDB
+            // drop is a date-only fact, so reading its synthesized instant locally filed it a day
+            // late east of UTC+7. Today's cell then splits into "still to come" / "already aired"
+            // — but only anime has a real clock to split on; a date-only row stays ahead of you
+            // for the whole of its day instead of flipping at a fabricated 17:00 UTC.
             let items = airingFranchises
                 .filter {
-                    guard let next = $0.releasingPart?.nextAiringAt else { return false }
-                    return Formatting.localDayKey(next) == dayKey && next > now
+                    guard let next = $0.releasingPart?.nextAiringAt,
+                          $0.dayKey(of: next) == dayKey else { return false }
+                    return $0.timeAnchor.isDateOnly ? offset >= 0 : next > now
                 }
                 .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
+            // Ascending, like `items`: the rail is one continuous time axis, and flipping the
+            // aired half to newest-first ran the morning backwards under the afternoon.
             let aired = airingFranchises
                 .filter {
-                    guard let last = $0.releasingPart?.lastAiredAt else { return false }
-                    return Formatting.localDayKey(last) == dayKey && last <= now
+                    guard let last = $0.releasingPart?.lastAiredAt,
+                          $0.dayKey(of: last) == dayKey else { return false }
+                    return $0.timeAnchor.isDateOnly ? offset <= 0 : last <= now
                 }
-                .sorted { $0.lastAiredSortKey > $1.lastAiredSortKey }
+                .sorted { $0.lastAiredSortKey < $1.lastAiredSortKey }
 
             guard isToday || !items.isEmpty || !aired.isEmpty else { return nil }
             return ScheduleDay(
@@ -505,10 +661,10 @@ final class AppModel {
     /// One show, one shelf.
     func libShelf(of f: Franchise) -> LibShelf {
         if f.effectiveStatus == .planned { return .planned }
-        // In it: a season is live for you, or you have episodes left to continue.
-        if f.effectiveStatus == .watching, f.releasingPart != nil || f.resumePart != nil {
-            return .watching
-        }
+        // In it. The status is the user's own word for the show — it outranks every derived
+        // signal, so a finished series they've marked Watching sits on Watching instead of being
+        // filed under Finished while the context menu shows a tick next to Watching.
+        if f.effectiveStatus == .watching { return .watching }
         // Coming back: nothing to watch right now, but a next installment is announced —
         // dated or TBA alike. This is the "when does it return" lookup made browsable.
         if f.upcoming?.isFutureInstallment == true || nextPremiere(of: f) != nil {
@@ -561,7 +717,8 @@ final class AppModel {
     /// window; genuinely unknown dates sort to the very end.
     private func comingBackSortKey(_ f: Franchise) -> (value: Int, precision: Int) {
         if let premiere = nextPremiere(of: f) {
-            let p = Formatting.localParts(premiere)
+            // Read in the franchise's own calendar — a TMDB premiere is a date, not an instant.
+            let p = Formatting.localParts(premiere, anchor: f.timeAnchor)
             return (p.y * 10000 + p.mo * 100 + p.d, 3)
         }
         return f.upcoming?.releaseSortKey ?? (Int.max, 0)
@@ -574,7 +731,9 @@ final class AppModel {
         guard let f = franchise(id: franchiseId), let part = f.releasingPart else { return }
         Haptics.success()
         let prev = part.progress
-        let aired = part.airedEpisodes
+        // Through the same ceiling `setProgress` uses: asserting a number the server would clamp
+        // shows "caught up" against a server that disagrees, and the next launch silently reverts.
+        let aired = min(part.airedEpisodes, part.progressCeiling)
         applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: aired)
 
         // Preserve the original prev if an undo for this franchise is already pending.
@@ -592,9 +751,11 @@ final class AppModel {
         Task {
             do {
                 _ = try await api.setProgress(mediaId: part.mediaId, episodes: aired)
+                settleLocalProgress(mediaId: part.mediaId, episodes: aired)
             } catch {
                 // Roll back the optimistic write and retract the celebration/undo that now lie.
                 applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: prev)
+                settleLocalProgress(mediaId: part.mediaId, episodes: prev)
                 justCaught.remove(franchiseId)
                 if let cur = undo, !cur.added, cur.franchiseId == franchiseId { undo = nil }
                 showError("Couldn't save progress — check your connection.")
@@ -602,19 +763,29 @@ final class AppModel {
         }
     }
 
-    /// Set explicit progress for a part (detail pips / movie toggle).
+    /// Set explicit progress for a part (detail pips / movie toggle / Library's log-next ring).
+    /// The single choke point where every write is bounded to the part's episode count — an
+    /// unbounded "+1" control otherwise walks progress off the end of a season (see
+    /// `FranchisePart.progressCeiling`).
     func setProgress(franchiseId: String, mediaId: Int, episodes: Int) {
-        let clamped = max(0, episodes)
+        let part = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }
+        let clamped = min(max(0, episodes), part?.progressCeiling ?? .max)
         // Soft, refined tick for per-episode / movie watched toggles (distinct from catch-up's success).
         Haptics.impact(.soft)
-        let prev = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }?.progress
+        let prev = part?.progress
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
         Task {
             do {
                 _ = try await api.setProgress(mediaId: mediaId, episodes: clamped)
+                settleLocalProgress(mediaId: mediaId, episodes: clamped)
             } catch {
                 if let prev {
                     applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: prev)
+                    settleLocalProgress(mediaId: mediaId, episodes: prev)
+                } else {
+                    // Marked on a franchise we hadn't loaded yet (a pending add) — there's no
+                    // previous value to restore, so drop the claim and let the server's win.
+                    forgetLocalProgress(mediaId: mediaId)
                 }
                 showError("Couldn't save progress — check your connection.")
             }
@@ -632,8 +803,10 @@ final class AppModel {
         undo = UndoState(mediaId: nil, franchiseId: franchiseId, prevProgress: 0,
                          title: title, episode: 0, added: true, statusLabel: label)
         scheduleUndoDismissal()
-        // First airing show added: the moment notifications become valuable, so ask now.
-        if isReleasing {
+        // First airing ANIME added: the moment notifications become valuable, so ask now. Both
+        // ambient layers are AniList-only (TMDB air times are synthesized, so an alert would fire
+        // at a fictitious instant) — asking a TV-only user for permission buys them nothing.
+        if isReleasing, source(of: franchiseId) == .anilist {
             Task { _ = await EpisodeNotifications.shared.requestPermissionIfNeeded() }
         }
         Task {
@@ -677,6 +850,9 @@ final class AppModel {
         pendingAdds.remove(franchiseId)
         let idx = library.firstIndex(where: { $0.id == franchiseId })
         let removed = idx.map { library[$0] }
+        // Drop any unconfirmed progress for this show — re-adding it later must not replay a
+        // write against the fresh subscription.
+        removed?.parts.forEach { forgetLocalProgress(mediaId: $0.mediaId) }
         if let idx { library.remove(at: idx) }
         Task {
             do {
@@ -702,8 +878,12 @@ final class AppModel {
             Task {
                 do {
                     _ = try await api.setProgress(mediaId: mediaId, episodes: u.prevProgress)
+                    settleLocalProgress(mediaId: mediaId, episodes: u.prevProgress)
                 } catch {
                     showError("Couldn't undo — check your connection.")
+                    // The undo never reached the server, so there is nothing to defend: drop the
+                    // claim BEFORE reloading or the overlay re-applies it over server truth.
+                    forgetLocalProgress(mediaId: mediaId)
                     await reload()  // converge back to server truth
                 }
             }
@@ -714,10 +894,56 @@ final class AppModel {
 
     // MARK: - Internal mutation helpers
 
-    /// Optimistically rewrite a part's progress in the in-memory library so the UI updates instantly.
+    /// Optimistically rewrite a part's progress in the in-memory library so the UI updates
+    /// instantly. The write is ALSO recorded in `localProgress`, which is what makes it survive
+    /// the two cases the library alone can't express: the franchise isn't loaded yet (a pending
+    /// add), and a reload issued before this write returns a snapshot that predates it.
     private func applyLocalProgress(franchiseId: String, mediaId: Int, episodes: Int) {
+        localProgress[mediaId] = LocalWrite(episodes: episodes, settledAtSeq: nil)
         guard let fi = library.firstIndex(where: { $0.id == franchiseId }) else { return }
         library[fi] = library[fi].withUpdatedProgress(mediaId: mediaId, episodes: episodes)
+    }
+
+    /// The PUT for this part returned — success or failure, both are the end of the story. The
+    /// overlay stops being unconditional from here: the next snapshot fetched after this moment
+    /// decides, so a value the server won't accept (a clamp, a rejected write) can't stay pinned
+    /// for the rest of the session. Superseded by a newer write for the same part.
+    private func settleLocalProgress(mediaId: Int, episodes: Int) {
+        guard var write = localProgress[mediaId], write.episodes == episodes else { return }
+        write.settledAtSeq = reloadSeq
+        localProgress[mediaId] = write
+    }
+
+    /// Forget an optimistic write without asserting a replacement value — used when a failed write
+    /// has no known previous value to roll back to (a part we've never seen). The next snapshot
+    /// then wins outright.
+    private func forgetLocalProgress(mediaId: Int) {
+        localProgress[mediaId] = nil
+    }
+
+    /// Replay unconfirmed local writes over a freshly fetched library (`seq` = the `reloadSeq` of
+    /// the reload that fetched it). An entry retires when the server reports the same number — the
+    /// write has landed and the overlay would only pin a stale value from then on — and also when
+    /// this snapshot was fetched AFTER the write settled and still disagrees: the server had its
+    /// say and said something else (a clamp, or a PUT that never arrived). Without that second
+    /// rule a value the server will not accept is re-applied on every reload forever. Entries for
+    /// franchises still missing from the snapshot (an add mid-flight) are kept for the next one.
+    private func reconcileLocalProgress(_ fetched: [Franchise], seq: Int) -> [Franchise] {
+        guard !localProgress.isEmpty else { return fetched }
+        var result = fetched
+        for (mediaId, write) in localProgress {
+            guard let fi = result.firstIndex(where: { f in
+                f.parts.contains { $0.mediaId == mediaId }
+            }) else { continue }
+            let serverProgress = result[fi].parts.first { $0.mediaId == mediaId }?.progress
+            let settledBeforeFetch = write.settledAtSeq.map { seq > $0 } ?? false
+            if serverProgress == write.episodes || settledBeforeFetch {
+                localProgress[mediaId] = nil
+            } else {
+                result[fi] = result[fi].withUpdatedProgress(mediaId: mediaId, episodes: write.episodes)
+            }
+        }
+        return result
     }
 
     private func celebrate(_ franchiseId: String) {

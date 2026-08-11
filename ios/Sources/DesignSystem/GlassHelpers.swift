@@ -43,6 +43,10 @@ struct GlassCircleButton: View {
     var iconSize: CGFloat = 18
     var tint: Color? = nil
     var foreground: Color = Theme.textPrimary
+    /// What VoiceOver announces. An SF Symbol on its own reads as nothing, so every call site
+    /// should pass the ACTION ("Close", "Add to library", "Mark caught up"). Left nil it falls
+    /// back to a readable form of the symbol name — a safety net, not a substitute.
+    var accessibilityLabel: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -54,6 +58,15 @@ struct GlassCircleButton: View {
         }
         .buttonStyleGlass(tint: tint)
         .clipShape(Circle())
+        .accessibilityLabel(Text(accessibilityLabel ?? GlassCircleButton.fallbackLabel(for: systemName)))
+    }
+
+    /// "chevron.down" -> "chevron down". Better than silence when a call site forgets a label.
+    static func fallbackLabel(for systemName: String) -> String {
+        systemName
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .trimmingCharacters(in: .whitespaces)
     }
 }
 

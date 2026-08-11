@@ -78,4 +78,15 @@ final class AiringLiveActivityManager {
             _ = try? Activity.request(attributes: attributes, content: content)
         }
     }
+
+    /// End every activity this app started, unconditionally. Sign-out calls this — a lock-screen
+    /// countdown for a show in the previous account's library outlives the session that made it,
+    /// and nothing in `sync` can retire it once that library is gone.
+    func endAll() {
+        Task.detached {
+            for activity in Activity<AiringActivityAttributes>.activities {
+                await activity.end(nil, dismissalPolicy: .immediate)
+            }
+        }
+    }
 }

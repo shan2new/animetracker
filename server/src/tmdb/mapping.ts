@@ -42,10 +42,24 @@ export function airDateToMs(date: string | null | undefined): number | null {
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), TMDB_AIR_HOUR_UTC)
 }
 
+const ANIMATION_GENRE_ID = 16
+
 /** Search-boundary rule: Japanese animation belongs to AniList, so its TMDB twin is suppressed. */
 export function isJapaneseAnimation(r: TmdbSearchResult): boolean {
-  const ANIMATION_GENRE_ID = 16
   return (r.genre_ids ?? []).includes(ANIMATION_GENRE_ID) && (r.origin_country ?? []).includes('JP')
+}
+
+/**
+ * The same boundary rule against a FULL show payload (`genres` objects, not `genre_ids`).
+ *
+ * `ensureTvFranchise` enforces this so the rule holds for EVERY caller. Keeping it only in the
+ * callers left it one new call site away from being bypassed — and `npm run tv -- <showId>` was
+ * exactly that gap, which is how a TMDB twin of an AniList-owned anime got materialized.
+ */
+export function isJapaneseAnimationShow(show: TmdbShow): boolean {
+  return (
+    (show.genres ?? []).some((g) => g.id === ANIMATION_GENRE_ID) && (show.origin_country ?? []).includes('JP')
+  )
 }
 
 /**
@@ -98,6 +112,12 @@ export function tmdbSeasonToMediaRow(
   const status = deriveSeasonStatus(show, season, nowMs)
   const next = show.next_episode_to_air
   const nextAirMs = status === 'RELEASING' ? airDateToMs(next?.air_date) : null
+  // A dated-but-unaired season carries its premiere as the next slot (episode 1) — the same shape
+  // AniList gives an announced season. `next_episode_to_air` only ever points at the RELEASING
+  // season, so without this an upcoming season had no airing instant at all: clients read it as
+  // "release date TBA" and it never reached the premiere shelf. deriveSeasonStatus returns
+  // NOT_YET_RELEASED precisely because season.air_date is in the future, so this slot is never past.
+  const premiereMs = status === 'NOT_YET_RELEASED' ? airDateToMs(season.air_date) : null
   const single = includedSeasons(show).length === 1
   const lastEp = show.last_episode_to_air
   const lastAiredAt =
@@ -124,7 +144,9 @@ export function tmdbSeasonToMediaRow(
     nextAiringEpisode:
       next && nextAirMs != null
         ? { episode: next.episode_number, airingAt: Math.floor(nextAirMs / 1000) }
-        : null,
+        : premiereMs != null
+          ? { episode: 1, airingAt: Math.floor(premiereMs / 1000) }
+          : null,
     seasonYear: season.air_date ? Number(season.air_date.slice(0, 4)) : null,
     season: null,
     popularity: Math.round(show.popularity ?? 0),

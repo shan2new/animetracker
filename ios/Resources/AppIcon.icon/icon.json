@@ -6,16 +6,8 @@
     {
       "layers" : [
         {
-          "image-name" : "layer-progress.png",
-          "name" : "layer-progress"
-        },
-        {
-          "image-name" : "layer-card.png",
-          "name" : "layer-card"
-        },
-        {
-          "image-name" : "layer-peek.png",
-          "name" : "layer-peek"
+          "image-name" : "layer-bookmark.png",
+          "name" : "layer-bookmark"
         },
         {
           "image-name" : "layer-ground.png",

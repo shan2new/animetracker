@@ -5,8 +5,13 @@ import SwiftUI
 // morph dropped frames). While search is active (field focused or a query present) the large
 // title eases away and the field docks to the top. Body states:
 //  - empty query  → the launchpad: recent-search chips + a numbered trending shelf,
-//  - searching    → skeletons, then a top-match hero over disambiguation rows, or a no-results state.
-// Adding to library (with undo, via ToastHost) is one tap on any result's circle.
+//  - searching    → skeletons, then a top-match hero over disambiguation rows, or one of the two
+//    empty states (nothing matched at all / the scope chip is hiding everything that did).
+// Every one of those states keys on `results` — the FILTERED list, which is also the only list
+// rendered — so a scope can never leave the screen blank. The chips exist only while a query does,
+// so clearing the query also clears the scope.
+// Adding to library (with undo, via ToastHost) is one tap on any result's — or trending card's —
+// circle; the detail sheet is never required just to add.
 struct DiscoverView: View {
     @Environment(AppModel.self) private var appModel
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
@@ -17,7 +22,16 @@ struct DiscoverView: View {
     private var queryEmpty: Bool {
         appModel.searchQuery.trimmingCharacters(in: .whitespaces).isEmpty
     }
-    private var showSkeletons: Bool { appModel.searchBusy && appModel.searchResults.isEmpty }
+    /// The only list the body ever renders. Every state below keys on THIS — keying on the
+    /// unfiltered `searchResults` while rendering the filtered one is how a scope that excludes
+    /// every match produced a blank screen with no state at all.
+    private var results: [FranchiseSummary] { appModel.filteredSearchResults }
+    private var showSkeletons: Bool { appModel.searchBusy && results.isEmpty }
+    /// The scope chip — not the query — is why nothing is on screen: the server did return
+    /// matches for this query, they're all the other kind.
+    private var scopedEmpty: Bool {
+        appModel.mediaFilter != .all && results.isEmpty && !appModel.searchResults.isEmpty
+    }
     /// Search is "active" the moment the field is focused or a query exists — the large title
     /// collapses and the whole screen eases upward, exactly as the field takes over.
     private var searchActive: Bool { fieldFocused || !queryEmpty }
@@ -62,7 +76,18 @@ struct DiscoverView: View {
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.immediately)
         .background(AppBackground())
-        .task { appModel.loadTrendingIfNeeded() }
+        .task {
+            appModel.loadTrendingIfNeeded()
+            // The scope chips only exist while a query does, so a filter left over from a previous
+            // session/visit would be invisible and unremovable. Arrive unscoped.
+            if queryEmpty { appModel.mediaFilter = .all }
+        }
+        // Same rule on the way out: clearing the box clears the scope, so a stale invisible
+        // filter can never survive into the next search.
+        .onChange(of: queryEmpty) { _, isEmpty in
+            guard isEmpty, appModel.mediaFilter != .all else { return }
+            withAnimation(.uiGentle) { appModel.mediaFilter = .all }
+        }
         .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 64 } action: { _, isPast in
             withAnimation(.uiGentle) { scrolled = isPast }
         }
@@ -121,7 +146,9 @@ struct DiscoverView: View {
     private var searchBody: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Re-query sweep while results are already on screen — keeps the screen feeling live.
-            if appModel.searchBusy && !appModel.searchResults.isEmpty {
+            // Complementary to `showSkeletons`: busy + nothing rendered → skeletons, busy + rows
+            // rendered → this bar. Both read the filtered list, so the two can't both be false.
+            if appModel.searchBusy && !results.isEmpty {
                 IndeterminateBar()
                     .padding(.horizontal, Theme.Space.gutter)
                     .padding(.bottom, 13)
@@ -130,7 +157,7 @@ struct DiscoverView: View {
 
             // A refresh failed while older results are still on screen — say so instead of
             // silently presenting stale results as current.
-            if appModel.searchError && !appModel.searchResults.isEmpty && !queryEmpty {
+            if appModel.searchError && !results.isEmpty && !queryEmpty {
                 staleResultsBanner
                     .padding(.horizontal, Theme.Space.gutter)
                     .padding(.bottom, 13)
@@ -144,7 +171,9 @@ struct DiscoverView: View {
                     skeletonList
                         .padding(.horizontal, Theme.Space.gutter)
                         .transition(.opacity)
-                } else if appModel.searchResults.isEmpty {
+                } else if scopedEmpty {
+                    scopedNoResultsState.transition(.opacity)
+                } else if results.isEmpty {
                     noResultsState.transition(.opacity)
                 } else {
                     resultsList
@@ -155,7 +184,8 @@ struct DiscoverView: View {
         }
         .animation(.uiGentle, value: showSkeletons)
         .animation(.uiGentle, value: appModel.searchBusy)
-        .animation(.uiGentle, value: appModel.searchResults.isEmpty)
+        .animation(.uiGentle, value: results.isEmpty)
+        .animation(.uiGentle, value: appModel.mediaFilter)
         .animation(.uiGentle, value: queryEmpty)
     }
 
@@ -222,29 +252,37 @@ struct DiscoverView: View {
         }
     }
 
+    /// Two SIBLING controls, not one nested inside the other: re-running the search owns the pill,
+    /// removing the term owns a 40pt target laid over the pill's trailing padding. Nested, the tiny
+    /// glyph sat under the chip's own content shape, so a near-miss re-ran the search instead of
+    /// deleting — and VoiceOver read the whole thing out as "xmark".
     private func recentChip(_ term: String) -> some View {
         Button { appModel.searchQuery = term } label: {
-            HStack(spacing: 9) {
-                Text(term)
-                    .scaledFont(14, weight: .medium)
-                    .foregroundStyle(Theme.text90)
-                    .lineLimit(1)
-                Button { appModel.removeRecentSearch(term) } label: {
-                    Image(systemName: "xmark")
-                        .scaledFont(9, weight: .semibold)
-                        .foregroundStyle(Theme.text36)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.leading, 15)
-            .padding(.trailing, 12)
-            .padding(.vertical, 8)
-            .background(Theme.fillSoft, in: Capsule())
-            .contentShape(Capsule())
+            Text(term)
+                .scaledFont(14, weight: .medium)
+                .foregroundStyle(Theme.text90)
+                .lineLimit(1)
+                .padding(.leading, 15)
+                .padding(.trailing, 36)   // room the delete control sits in
+                .padding(.vertical, 8)
+                .background(Theme.fillSoft, in: Capsule())
+                .contentShape(Capsule())
         }
         .buttonStyle(SpringPressButtonStyle(scale: 0.96))
+        .overlay(alignment: .trailing) {
+            Button {
+                Haptics.impact(.soft)
+                withAnimation(.uiGentle) { appModel.removeRecentSearch(term) }
+            } label: {
+                Image(systemName: "xmark")
+                    .scaledFont(10, weight: .semibold)
+                    .foregroundStyle(Theme.text36)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove “\(term)” from recent searches")
+        }
     }
 
     // MARK: trending shelf
@@ -296,6 +334,7 @@ struct DiscoverView: View {
 
     private func trendingCell(rank: Int, _ summary: FranchiseSummary) -> some View {
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        let owned = appModel.isInLibrary(summary.id)
         return Button {
             onOpenDetail(summary.id, "trend/\(summary.id)")
         } label: {
@@ -318,6 +357,14 @@ struct DiscoverView: View {
                 .background(Theme.surface)
                 .clipShape(shape)
                 .overlay(shape.stroke(Theme.hairlineStrong, lineWidth: 1))
+                // This tab's whole job is adding — trending must not be the one shelf where that
+                // takes a detail-sheet round trip. Same circle as the result rows, backed with a
+                // scrim so the ghost fill stays legible over bright art.
+                .overlay(alignment: .topTrailing) {
+                    AddCircle(owned: owned) { add(summary) }
+                        .background(Color.black.opacity(0.42), in: Circle())
+                        .padding(7)
+                }
                 .shadow(color: .black.opacity(0.35), radius: 14, y: 8)
 
                 Text(summary.title)
@@ -349,7 +396,7 @@ struct DiscoverView: View {
     // MARK: search results (top match + disambiguation rows)
 
     private var resultsList: some View {
-        let results = appModel.filteredSearchResults
+        let results = self.results
         return VStack(alignment: .leading, spacing: 0) {
             if let top = results.first {
                 sectionLabel("TOP MATCH")
@@ -368,7 +415,7 @@ struct DiscoverView: View {
                 .padding(.top, 6)
             }
         }
-        .animation(.uiSmooth, value: appModel.searchResults.map(\.id))
+        .animation(.uiSmooth, value: results.map(\.id))
     }
 
     /// The first (most relevant) result, staged: cover art blurred into a backdrop, the poster
@@ -602,6 +649,43 @@ struct DiscoverView: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.accentBorder, lineWidth: 1))
     }
 
+    /// The query DID match — the scope chip is hiding all of it. Name the scope, say how much is
+    /// waiting behind it, and hand back one tap to All.
+    private var scopedNoResultsState: some View {
+        let trimmed = appModel.searchQuery.trimmingCharacters(in: .whitespaces)
+        let scope = appModel.mediaFilter.chipLabel
+        let hidden = appModel.searchResults.count
+        return VStack(spacing: 11) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(.system(size: 33, weight: .light))
+                .foregroundStyle(Theme.text36)
+                .padding(.bottom, 2)
+            Text("No \(scope) matches")
+                .scaledFont(15, weight: .semibold)
+                .foregroundStyle(Theme.text72)
+            Text("Nothing under \(scope) matches “\(trimmed).” \(hidden == 1 ? "1 result is" : "\(hidden) results are") hidden by this filter.")
+                .scaledFont(13)
+                .foregroundStyle(Theme.text40)
+                .multilineTextAlignment(.center)
+            Button {
+                Haptics.selection()
+                withAnimation(.uiSnappy) { appModel.mediaFilter = .all }
+            } label: {
+                Text("Show all results")
+                    .scaledFont(14, weight: .semibold)
+                    .foregroundStyle(Theme.background)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyleProminentGlass()
+            .clipShape(Capsule())
+            .padding(.top, 10)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 72)
+        .padding(.horizontal, 24)
+    }
+
     // Centered fallback while searching — a failed fetch or a query with no matches.
     private var noResultsState: some View {
         let trimmed = appModel.searchQuery.trimmingCharacters(in: .whitespaces)
@@ -641,7 +725,8 @@ struct DiscoverView: View {
 }
 
 /// The one-tap add circle on every search result. `+` (quiet ghost) flips to an accent `✓` the
-/// instant the optimistic add lands — undo lives in the toast, so the ✓ state is inert.
+/// instant the optimistic add lands — undo lives in the toast, so the ✓ is a passive indicator.
+/// Disabled once owned: a control with nothing left to do must not keep bouncing under taps.
 private struct AddCircle: View {
     let owned: Bool
     let action: () -> Void
@@ -661,6 +746,7 @@ private struct AddCircle: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(BounceButtonStyle())
+        .disabled(owned)
         .animation(.uiBouncy, value: owned)
         .accessibilityLabel(owned ? "In library" : "Add to library")
     }

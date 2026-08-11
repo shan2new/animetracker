@@ -1,0 +1,12 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Direction 01: P. Track. A single continuous track becomes the brand's P. -->
+  <defs>
+    <radialGradient id="glow" cx="74%" cy="28%" r="80%"><stop stop-color="#F0A24E" stop-opacity=".13"/><stop offset="1" stop-color="#F0A24E" stop-opacity="0"/></radialGradient>
+    <linearGradient id="amber" x1="360" y1="160" x2="750" y2="825" gradientUnits="userSpaceOnUse"><stop stop-color="#FFD29A"/><stop offset=".52" stop-color="#F0A24E"/><stop offset="1" stop-color="#C9702E"/></linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="#0B0B0E"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+  <path d="M350 792V280C350 220 398 180 458 180H573C730 180 812 281 812 413C812 546 730 638 573 638H350" fill="none" stroke="url(#amber)" stroke-width="124" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="748" cy="792" r="62" fill="#F0A24E"/>
+  <circle cx="727" cy="770" r="15" fill="#FFE2B8" fill-opacity=".72"/>
+</svg>
