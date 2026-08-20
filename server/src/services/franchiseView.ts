@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions } from '../db/schema.js'
 import type { PartKind } from '../grouping/partKind.js'
@@ -94,7 +94,9 @@ function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episod
     label: member.label ?? title,
     title,
     cover: m.cover ?? '',
-    banner: m.banner || m.cover || '',
+    // Keep artwork semantics honest. A portrait cover is not a landscape banner; clients need
+    // the distinction to choose a composition that does not crop the subject into a wide slot.
+    banner: m.banner ?? '',
     format: m.format,
     status: m.status,
     isReleasing,
@@ -169,7 +171,7 @@ function buildFranchise(
     source: (f.source as MediaSource) ?? 'anilist',
     title: f.title,
     cover: f.cover ?? '',
-    banner: f.banner || f.cover || '',
+    banner: f.banner ?? '',
     synopsis: f.description ?? '',
     genres: f.genres ?? [],
     isReleasing: parts.some((p) => p.isReleasing),
@@ -244,7 +246,7 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
         source: (f.source as MediaSource) ?? 'anilist',
         title: f.title,
         cover: f.cover ?? '',
-        banner: f.banner || f.cover || '',
+        banner: f.banner ?? '',
         isReleasing: releasing,
         partCount: mems.length,
         nextAiringAt,
@@ -255,12 +257,26 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
 }
 
-/** Trending franchises, most-recently-grouped first (proxy for hotness for now). */
+/**
+ * Trending franchises ranked by the catalogue's actual trend signal.
+ *
+ * `franchise.updatedAt` is a grouping/cache timestamp, not audience interest. Search lazily
+ * groups catalogue misses, so ordering by it let the most recent query overwrite the zero-state
+ * shelf (for example an "f" search became the next user's "Trending now"). AniList's persisted
+ * `media.trending` score is the correct product fact; popularity is only a deterministic tie-break.
+ */
 export async function getTrendingFranchises(limit: number): Promise<FranchiseSummary[]> {
   const rows = await db
     .select({ id: franchise.id })
     .from(franchise)
-    .orderBy(desc(franchise.updatedAt))
+    .innerJoin(franchiseMember, eq(franchiseMember.franchiseId, franchise.id))
+    .innerJoin(media, eq(media.id, franchiseMember.mediaId))
+    .groupBy(franchise.id)
+    .orderBy(
+      sql`max(${media.trending}) desc nulls last`,
+      sql`max(${media.popularity}) desc nulls last`,
+      sql`max(${franchise.updatedAt}) desc`,
+    )
     .limit(limit)
   return getSummaries(rows.map((r) => r.id))
 }
