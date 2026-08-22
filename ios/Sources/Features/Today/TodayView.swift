@@ -15,6 +15,16 @@ private enum TodayCopy {
     static let whileYouWereAway = "While you were away"
     /// → `Copy.Action.dismiss`
     static let dismissRecap = "Dismiss what you missed"
+    /// → `Copy.Accessibility.opensTheShow`. Already written as a bare literal at two call sites in
+    /// this file and absent from every Today row, which is why VoiceOver read the facts and never
+    /// said what tapping would do. One string, named, until `Copy.Accessibility` carries it.
+    static let opensTheShow = "Opens the show"
+    /// → `Copy.Progress.sinceYourLastVisit(_:)`. "Since 23 Jul" named a date with no anchor —
+    /// since the last visit, the last mark or the last episode? The card can afford the words.
+    static func sinceYourLastVisit(_ phrase: String) -> String {
+        let tail = phrase.hasPrefix("Since ") ? String(phrase.dropFirst(6)) : phrase
+        return "Since your last visit, \(tail)"
+    }
 }
 
 // "Today" — the Focus Stack (spec v8, boards 01–03), rebuilt around a FULL-BLEED HERO.
@@ -40,6 +50,15 @@ struct TodayView: View {
     @Environment(\.scenePhase) private var scenePhase
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
     var onSeeAllWatching: () -> Void = {}
+    /// "View all N updates" — a DIFFERENT destination from the Watching shelf's "See all".
+    ///
+    /// Both used to switch to the Library root shelf, so a link that names a set ("all 40 updates")
+    /// landed on a list that does not show it: the user then had to open All titles → Sort & filter
+    /// → "Most left to watch" → "Unwatched only" by hand. This one belongs on the filtered list;
+    /// "See all" stays on the unfiltered root. Defaults to `onSeeAllWatching` so the screen still
+    /// behaves while `RootView` (a shared file) has not been rewired yet — see the shared-file
+    /// request for `LibraryAllView(initialSort:initialUnwatchedOnly:)`.
+    var onViewAllUpdates: (() -> Void)?
     var onAddShow: () -> Void = {}
 
     private var now: Int64 { appModel.now }
@@ -106,6 +125,14 @@ struct TodayView: View {
     /// grows past `heroFraction` by the copy's overflow rather than holding a fixed fraction and
     /// letting a taller text block spill off the top of its own protection.
     private static let artBand: CGFloat = 210
+    /// What a `MediaRow` already contributes above and below itself.
+    ///
+    /// The row carries `ThemeSpace.x2` of vertical padding INSIDE its own minimum height, so a
+    /// container that then adds a full `labelGap` or `sectionGap` produces 8 pt more than the token
+    /// names — measured at 31 pt under a label whose token says 10, and 51–57 pt between sections
+    /// whose token says 30. Rhythm is what the reader sees, so the container pays the token minus
+    /// what the row already spends.
+    private static let rowOwnInset: CGFloat = ThemeSpace.x2
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
@@ -140,9 +167,21 @@ struct TodayView: View {
                                        value: recapOnStage)
                         }
                     }
-                    .padding(.bottom, ThemeMetrics.tabBarClearance)
                 }
+                // `.contentMargins`, not `.padding(.bottom, …)` inside the stack: padding does
+                // nothing at all when the content is SHORTER than the viewport, so a short Today —
+                // one hero and one row — still came to rest with its last line inside the bottom
+                // ramp. A content margin is an inset on the scroll view and applies either way.
+                .tabBarContentMargin()
                 .scrollIndicators(.hidden)
+                // Type travelling under the wordmark DISAPPEARS rather than half-fading.
+                //
+                // The veil holds a flat coat and then ramps out, so an 88-pt two-line hero title
+                // straddled both regions: line 1 at half ink under the brand mark, line 2 at full
+                // white, 34 pt apart. The inverse of the veil, used as a mask, takes the type to
+                // zero exactly where the veil is fully on — one edge, not two treatments — and the
+                // identity is handed to the header (below) instead of simply dissolving.
+                .mask(alignment: .top) { scrollMask(topInset: topInset) }
                 .onScrollGeometryChange(for: CGFloat.self) { g in
                     g.contentOffset.y + g.contentInsets.top
                 } action: { _, y in
@@ -167,10 +206,23 @@ struct TodayView: View {
             if !loading { evaluateRecap() }
         }
         .onChange(of: appModel.surfaceReady) { _, _ in startRecapClock() }
-        .onAppear { evaluateRecap() }
-        .onDisappear { if recapMode == .strip { acknowledgeRecap() } }
+        .onAppear {
+            evaluateRecap()
+            // The empty state's poster fan is the only identity a first run has. Fetching it here
+            // (not only from Search) is what lets Today's first frame carry the app's subject.
+            if appModel.libraryEmpty { appModel.loadTrendingIfNeeded() }
+        }
+        .onChange(of: appModel.libraryEmpty) { _, empty in
+            if empty { appModel.loadTrendingIfNeeded() }
+        }
+        // A pull-to-refresh is a state change with no visible focus move, so VoiceOver was told
+        // nothing at all while it ran.
+        .onChange(of: appModel.isRefreshing) { _, refreshing in
+            if refreshing { Announce.status(Copy.Accessibility.refreshing) }
+        }
+        .onDisappear { clearRecapStrip() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background, recapMode == .strip { acknowledgeRecap() }
+            if phase == .background { clearRecapStrip() }
         }
         .confirmationDialog(batchPrompt?.title ?? "", isPresented: Binding(get: { batchPrompt != nil }, set: { if !$0 { batchPrompt = nil } }),
                             titleVisibility: .visible, presenting: batchPrompt) { prompt in
@@ -186,17 +238,69 @@ struct TodayView: View {
         Double(min(1, max(0, (scrollY - 16) / 64)))
     }
 
+    /// The inverse of `topVeil`, as a mask on the scrolling content.
+    ///
+    /// At rest it is a plain rectangle and nothing is touched — the hero must keep bleeding into
+    /// the status bar. As the veil comes on, the same band takes the content under it to zero, so
+    /// type crosses ONE edge instead of being caught half-lit between a flat coat and its ramp.
+    private func scrollMask(topInset: CGFloat) -> some View {
+        let f = veilOpacity
+        return VStack(spacing: 0) {
+            LinearGradient(stops: [
+                .init(color: .black.opacity(1 - f), location: 0),
+                .init(color: .black.opacity(1 - f), location: 0.56),
+                .init(color: .black.opacity(1 - f * 0.55), location: 0.80),
+                .init(color: .black, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+            .frame(height: topInset + TodayView.headerBand + 20)
+            Rectangle().fill(.black)
+        }
+        // Up past the scroll view's own top so the status-bar bleed is inside the mask, and well
+        // past its bottom so the mask never becomes a second clip on the content.
+        .padding(.top, -topInset)
+        .padding(.bottom, -400)
+        .allowsHitTesting(false)
+    }
+
+    /// True once the hero's title has travelled up under the wordmark band.
+    private var headerCarriesTitle: Bool {
+        guard showsHero, !recapOnStage, heroFranchise != nil else { return false }
+        return scrollY > 150
+    }
+
     // MARK: - Header
 
     /// Wordmark + account, floating over the hero art. It is not a band with 40 pt of dead air in
     /// it — there is nothing behind it but the show you are about to watch.
     private var header: some View {
         HStack(alignment: .center) {
-            Wordmark()
+            // The identity is HANDED OVER, not dropped. Scrolling used to dissolve the show's name
+            // while the wordmark sat still, so the screen lost the one fact it was about and gained
+            // nothing; a navigation bar's whole job at this moment is to say what you are looking
+            // at. Cross-faded, so only ever one of the two is legible.
+            ZStack(alignment: .leading) {
+                Wordmark()
+                    .opacity(headerCarriesTitle ? 0 : 1)
+                if let title = heroFranchise?.title {
+                    Text(title)
+                        .type(ThemeType.showTitleM)
+                        .foregroundStyle(ThemeColor.textPrimary)
+                        .lineLimit(1)
+                        .shadow(.art)
+                        .opacity(headerCarriesTitle ? 1 : 0)
+                        .accessibilityHidden(!headerCarriesTitle)
+                }
+            }
+            .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion),
+                       value: headerCarriesTitle)
             Spacer(minLength: ThemeSpace.x4)
             Button { showProfile = true } label: {
+                // No `chromeGlass` behind it. `AccountDisc` already carries its own ground
+                // (`accentSoft`) and its own 1-pt `posterEdge` ring; the glass was a SECOND disc
+                // drawn over a finished one, and on artwork it rendered as a flat grey plate with a
+                // hard edge — a smudge on the picture, 12 pt from a wordmark that has the same
+                // problem. A contact shadow is what an object laid on a photograph needs.
                 AccountDisc(identity: auth.identity, diameter: 34)
-                    .chromeGlass(in: Circle())
                     .shadow(.art)
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
@@ -246,19 +350,51 @@ struct TodayView: View {
     /// A state that IS the whole screen — nothing follows it, because both cases that reach here
     /// have an empty library. So it is centred in the space it owns rather than parked under the
     /// wordmark with 600 pt of canvas beneath it, which is what "top-pinned empty state" looks
-    /// like. The height is the visible area minus the band the wordmark floats in and the tab
-    /// bar's clearance, so the screen still does not scroll.
+    /// like.
+    ///
+    /// Centred against the tab bar's VISUAL height, not against `tabBarClearance`. The clearance is
+    /// a scroll inset — it has to clear the whole ramp as well as the bar — and subtracting 152 when
+    /// *centring* put the card at 41 % of the screen: ~81 pt high, which reads as top-pinned, which
+    /// is the exact defect the centring was added to fix. Half of whatever is subtracted is the
+    /// error, so it has to be the bar and nothing else.
     private func stateBlock(_ copy: EmptyStateCopy, contentH: CGFloat,
                             action: (() -> Void)? = nil) -> some View {
         EmptyState(copy, primary: action)
             .padding(.horizontal, ThemeMetrics.gutter)
-            // `minHeight`, never `height`: `EmptyState` drops its own minimum at AX and grows with
-            // the copy, so a fixed frame let the title + two-line body + 48-pt button draw outside
-            // the scrollable region at AX3–AX5 and collide with the tab bar with no way to reach it.
-            .frame(maxWidth: .infinity,
-                   minHeight: max(0, contentH - TodayView.headerBand - ThemeMetrics.tabBarClearance),
-                   alignment: .center)
+            // `minHeight` inside `centredState`, never `height`: `EmptyState` drops its own minimum
+            // at AX and grows with the copy, so a fixed frame let the title + two-line body + 48-pt
+            // button draw outside the scrollable region at AX3–AX5 with no way to reach it.
+            .centredState(contentH: contentH - TodayView.headerBand)
             .padding(.top, TodayView.headerBand)
+            // The identity a first run has no artwork for. `EmptyState`'s own `accentSoft` wash
+            // handles the colour; this is the app's SUBJECT — three real posters from whatever the
+            // account can see (trending, on a genuinely empty account) fanned behind the plate at a
+            // whisper, so the first frame a reviewer sees says "shows" rather than "grey box".
+            .background(alignment: .center) { emptyFan }
+    }
+
+    /// Three fanned posters behind an empty/failed state, at 0.35.
+    ///
+    /// Never a fourth accent object: the plate already spends its one accent on the button. This is
+    /// atmosphere, and it draws nothing at all when there is nothing honest to draw.
+    @ViewBuilder
+    private var emptyFan: some View {
+        let covers = Array(appModel.trending.prefix(3).compactMap(\.cover))
+        if covers.count == 3 {
+            HStack(spacing: -PosterSize.shelfMedium.size.width * 0.42) {
+                ForEach(Array(covers.enumerated()), id: \.offset) { i, url in
+                    PosterSlot(url: url, .shelfMedium)
+                        .rotationEffect(.degrees(Double(i - 1) * 9))
+                        .offset(y: abs(Double(i - 1)) * 10)
+                        .zIndex(i == 1 ? 1 : 0)
+                }
+            }
+            .opacity(0.35)
+            .blur(radius: 1.5)
+            .offset(y: -60)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 
     /// The calm day. No hero, because nothing has happened — a calm screen that opens on a
@@ -329,13 +465,22 @@ struct TodayView: View {
 
     /// The art the hero is made of.
     ///
-    /// **Cover first, banner second** — measured, not assumed. A banner is a 4.75:1 strip; filled
-    /// into a frame this tall it is scaled ~3× and centre-cropped, and what survives is texture:
-    /// the captured hero was a wall of anonymous sword blades with no character and no title art in
-    /// it. A 2:3 cover cropped to the same frame loses ~12 % top and bottom, stays sharp, and is
-    /// still recognisably the show — which is the entire job of identity artwork.
+    /// **Banner first, cover second** — the same order `FranchiseDetailView` uses, because one show
+    /// may not have two hero assets and two crops one tab apart. The reason the order was inverted
+    /// here (a banner filled into a 46 %-of-screen frame is scaled ~3× and survives as texture) is
+    /// real, but it is an argument about *upscaling*, not about which asset is the identity — and
+    /// it applies with far more force to the cover, which was being blown up 2.5× and decapitated.
+    /// `ArtHeader(portraitSource:)` composites a cover instead of magnifying it, so the fallback is
+    /// now honest and the policy can be the app's one policy.
     private func heroArt(_ f: Franchise?) -> String? {
-        f?.cover ?? f?.banner ?? recap?.beats.first?.cover
+        f?.banner ?? f?.cover ?? recap?.beats.first?.cover
+    }
+
+    /// Whether the resolved hero art is a 2:3 COVER rather than a landscape banner. Drives
+    /// `ArtHeader`'s composite path: nothing portrait is ever `.fill`ed into this band.
+    private func heroArtIsPortrait(_ f: Franchise?) -> Bool {
+        if let banner = f?.banner, !banner.isEmpty { return false }
+        return true
     }
 
     @ViewBuilder
@@ -353,13 +498,30 @@ struct TodayView: View {
         // taller, bottom-aligned, so it fills the rubber band the way a stretchy header should.
         let stretch = max(0, -scrollY)
         ZStack(alignment: .bottom) {
+            // The PERSISTENT ground, outside the `.id`/`.transition` above it.
+            //
+            // The handoff finishes the removal before it starts the insertion — which is right, and
+            // which means that for ~80 ms there is a gap with nothing in it. With nothing behind the
+            // transitioning `ArtHeader` a 46 %-of-screen frame rendered bare #09090B in the middle of
+            // the app's signature moment. The ground survives both cards, so the two images trade
+            // places over one continuous surface instead of through a hole.
+            (heroTint ?? PaletteCache.fallback)
+                .frame(height: h)
+                .frame(maxWidth: .infinity)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
             ArtHeader(url: art, height: h + stretch, tint: heroTint,
                       // The TOP protection is drawn by `topVeil` below, in POINTS: `ArtScrim`'s
                       // top stops are fractions of the art's height, so on a 46 %-of-screen frame
                       // they ramp out ~100 pt above the wordmark and leave the clock, Wi-Fi,
                       // battery and the brand mark sitting on bare key art (measured white-on-191,
                       // ≈1.15:1 over the Slime cover). The bottom hand-over stays here.
-                      scrimTop: 0, scrimBottom: recapOnStage ? 1.9 : 1.6) { EmptyView() }
+                      scrimTop: 0, scrimBottom: recapOnStage ? 1.9 : 1.6,
+                      // Faces live in the upper third of a key visual and in the upper half of a
+                      // cover; a centred crop of either is a chin.
+                      focus: .top,
+                      portraitSource: heroArtIsPortrait(f)) { EmptyView() }
                 .frame(height: h, alignment: .bottom)
                 .id(key)
                 .transition(handoff)
@@ -372,7 +534,11 @@ struct TodayView: View {
             Group {
                 if recapOnStage, let recap {
                     RecapArrival(digest: recap, revealed: recapRevealed, now: now,
-                                 reduceMotion: reduceMotion, onContinue: { handoffRecap() })
+                                 reduceMotion: reduceMotion,
+                                 heroArt: art,
+                                 beatLabel: recapBeatLabel,
+                                 onContinue: { handoffRecap() },
+                                 onDismiss: { dismissRecap() })
                         .transition(handoff)
                 } else if let f {
                     heroOverlay(f)
@@ -386,6 +552,17 @@ struct TodayView: View {
         }
         .frame(height: h)
         .frame(maxWidth: .infinity)
+        // Clipped at the BOTTOM only.
+        //
+        // A removing view keeps the frame it had when it left the layout, so during the recap →
+        // focus shrink the outgoing recap card (last laid out at ~880 pt) hung in the space the
+        // hero had just vacated and drew over UPCOMING and the first shelf row — measured on the
+        // recording at frames 133–136, "2 episodes aired" and "Mushoku Tensei" superimposed for
+        // ~130 ms. `.clipped()` cannot be used: the pull-stretched art has to keep drawing ABOVE
+        // this frame. A mask that extends upward and stops at the bottom edge cuts one side only.
+        .mask(alignment: .bottom) {
+            Rectangle().padding(.top, -2000).allowsHitTesting(false)
+        }
         // BEFORE the negative top padding: that padding shifts the layout frame down by the safe
         // inset, and an overlay attached after it would start the veil below the status bar —
         // leaving the clock on bare art with a hard seam under it.
@@ -393,40 +570,43 @@ struct TodayView: View {
         // No `.clipped()` here: `ArtHeader` clips itself, and the stretched art has to be allowed
         // to draw above this frame into the pull. The scroll view is the real clip.
         .padding(.top, -topInset)
+        // The home screen's largest tap target was the one route into Detail that did NOT zoom:
+        // `"focus/…"` was pushed as a zoom id with no source registered anywhere, so the app's
+        // signature navigation fell back to a slide from exactly the object it should grow out of.
+        .zoomSource(f.map { "focus/\($0.id)" } ?? "focus/recap")
         .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: recapOnStage)
         .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: key)
-        .task(id: art) { heroTint = await PaletteCache.shared.resolve(url: art, maxPixel: 360) }
+        .task(id: art) {
+            let resolved = await PaletteCache.shared.resolve(url: art, maxPixel: 360)
+            heroTint = resolved
+            TodayView.rememberTint(resolved)
+        }
     }
 
     /// The handoff. Finish the removal, THEN start the insertion.
     ///
-    /// A plain `.opacity` transition on both branches drew the outgoing card's eyebrow, 34-pt
-    /// title, fact line, footnote and its committed CTA at ~50 % on top of the incoming card's for
-    /// six frames — two show titles superimposed at display size, both posters ghosting through
-    /// each other. The direction's rule for this moment is "one object moving, not two crossfading".
-    private var handoff: AnyTransition {
-        .asymmetric(
-            insertion: .opacity.animation(
-                ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)
-                    .delay(reduceMotion ? 0 : 0.16)),
-            removal: .opacity.animation(
-                ThemeMotion.pick(ThemeMotion.uiDismiss, reduceMotion: reduceMotion)))
-    }
+    /// The design system now owns this curve (`AnyTransition.handoff`) because four surfaces
+    /// replace a card and three of them were crossfading symmetrically — two show titles drawn at
+    /// 50 % on top of each other. Today had the asymmetric version and nobody else did; keeping a
+    /// private copy here is what let them drift.
+    private var handoff: AnyTransition { .handoff(reduceMotion: reduceMotion) }
 
-    /// Flat protection over the status bar and the wordmark band, then a long ramp out.
+    /// Protection over the status bar and the wordmark band, ramping out with no discernible knee.
     ///
-    /// Held flat rather than ramping from the first pixel: a gradient that starts falling at y=0
-    /// is tuned for a dark backdrop and does nothing for bright key art, which is how the clock,
-    /// the battery glyph and "Previously." came to be drawn on clouds.
+    /// The shipped ramp held 0.70 flat for 111 pt and then fell to 0.14 within the next 40 — over
+    /// bright key art that reads as a hard-edged rectangular plate laid on the picture, right where
+    /// the brand mark is. A veil that can be *seen* is not protection, it is a smudge. This holds
+    /// only as far as the wordmark's own baseline and then eases out over the rest of the band on
+    /// enough stops that no single step is visible.
     private func topVeil(topInset: CGFloat) -> some View {
-        // Flat across the STATUS BAR *and* the wordmark band, then a 100-pt ramp out. Ramping
-        // across the wordmark itself left its lower half sitting at ~0.3 of the veil, which is how
-        // "Previously." measured 6.6:1 at its median and 2.5:1 at its worst pixel over pale sky.
-        let band = topInset + TodayView.headerBand + 100
+        let band = topInset + TodayView.headerBand + TodayView.veilRamp
+        let mark = (topInset + TodayView.headerBand) / band
         return LinearGradient(stops: [
-            .init(color: .black.opacity(0.70), location: 0),
-            .init(color: .black.opacity(0.66), location: (topInset + TodayView.headerBand) / band),
-            .init(color: .black.opacity(0.14), location: (topInset + TodayView.headerBand + 40) / band),
+            .init(color: .black.opacity(0.72), location: 0),
+            .init(color: .black.opacity(0.66), location: mark * 0.72),
+            .init(color: .black.opacity(0.52), location: mark),
+            .init(color: .black.opacity(0.30), location: mark + (1 - mark) * 0.30),
+            .init(color: .black.opacity(0.12), location: mark + (1 - mark) * 0.62),
             .init(color: .clear, location: 1),
         ], startPoint: .top, endPoint: .bottom)
         .frame(height: band)
@@ -437,21 +617,45 @@ struct TodayView: View {
 
     /// Protection BEHIND the copy, tracking its measured height at every type size.
     private var heroTextScrim: some View {
-        // Measured at AX1 over the brightest cover in the library: the first stop has to be up at
-        // ~0.55 by the eyebrow's own band, or the top of a three-line 44-pt title sits on pale sky
-        // at under 5:1 while the lines below it clear 16:1.
-        LinearGradient(stops: [
+        // The stops are placed in POINTS off the measured copy height, not as fractions of it.
+        // A fixed fraction is a different physical distance at every type size, which is how AX1
+        // came to set a three-line 44-pt title over a face at ~55 % luminance while the same stops
+        // were comfortable at default size. `lead` is a fixed 24-pt run-in above the eyebrow — the
+        // gradient is already working where the copy starts, and it reaches full protection at the
+        // title's own band rather than two thirds of the way down the block.
+        let lead: CGFloat = 24
+        let h = max(1, heroCopyHeight + lead + 8)
+        return LinearGradient(stops: [
             .init(color: .clear, location: 0),
-            .init(color: ThemeColor.canvas.opacity(0.55), location: 0.30),
-            .init(color: ThemeColor.canvas.opacity(0.86), location: 0.66),
-            .init(color: ThemeColor.canvas.opacity(0.96), location: 1),
+            .init(color: ThemeColor.canvas.opacity(0.34), location: min(0.99, lead * 0.5 / h)),
+            .init(color: ThemeColor.canvas.opacity(0.72), location: min(0.99, lead / h)),
+            .init(color: ThemeColor.canvas.opacity(0.90), location: min(0.995, (lead + 56) / h)),
+            .init(color: ThemeColor.canvas.opacity(0.97), location: 1),
         ], startPoint: .top, endPoint: .bottom)
-        // The measurement already carries the overlay's own bottom padding; + 32 pt of bleed above
-        // the eyebrow so the pill never sits on the very first, faintest stop.
-        .frame(height: heroCopyHeight + 32)
+        .frame(height: h)
         .frame(maxWidth: .infinity)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    // MARK: - Remembered hero tint
+
+    /// The last hero's palette colour, kept across launches.
+    ///
+    /// The loading frame is the first thing a returning user sees, and it has no artwork yet by
+    /// definition — so it was a black rectangle. The tint of whatever was on the hero last time is
+    /// a near-certain match for whatever is coming (the hero rarely changes between two opens), and
+    /// even when it is wrong it is the app's own atmosphere rather than an empty canvas.
+    private static let tintKey = "today.heroTint"
+
+    private static func rememberTint(_ color: Color?) {
+        guard let color, let c = UIColor(color).cgColor.components, c.count >= 3 else { return }
+        UserDefaults.standard.set([Double(c[0]), Double(c[1]), Double(c[2])], forKey: tintKey)
+    }
+
+    static var rememberedTint: Color? {
+        guard let c = UserDefaults.standard.array(forKey: tintKey) as? [Double], c.count >= 3 else { return nil }
+        return Color(.sRGB, red: c[0], green: c[1], blue: c[2])
     }
 
     @ViewBuilder
@@ -485,50 +689,62 @@ struct TodayView: View {
                 onOpen: { onOpenDetail(f.id, "focus/\(f.id)") },
                 onMark: { mark(f) },
                 onMarkThrough: { n in promptBatch(f, part: part, through: n) },
-                onMarkAll: { promptBatch(f, part: part, through: part.progressCeiling) }
+                // `markTarget(now:)`, not `progressCeiling`. The ceiling is `Int.max` for an ongoing
+                // AniList season with no published episode count, and for every other releasing
+                // season it is the season's SIZE — so "Mark all 6" would have written every unaired
+                // episode too. The target is what has actually aired.
+                onMarkAll: { promptBatch(f, part: part, through: part.markTarget(now: now)) }
             )
         }
     }
 
     // MARK: - Below the fold
 
+    /// Everything under the hero.
+    ///
+    /// It is NOT hidden while the recap is on stage. The recap is the hero's contents, not a
+    /// takeover: hiding the rest left ~110 pt of bare canvas above the tab bar with the queue, the
+    /// upcoming row and the whole Watching shelf simply gone, and then re-inserted them on a second
+    /// curve when the recap handed off — the layout shove the handoff is supposed to avoid. The
+    /// sections sit below the recap exactly as they sit below the focus card, and the handoff is
+    /// then one object resizing above content that never moved.
     @ViewBuilder
     private var belowTheFold: some View {
-        if !recapOnStage {
-            let strip = recapMode == .strip && recap != nil
-            let notice = appModel.loadError && !appModel.libraryEmpty
-            let hasQueue = showsHero && (!queue.isEmpty || showsViewAll)
-            // The first block under a hero gets the hero's clearance; every block after it gets a
-            // section gap. One rhythm, decided once, instead of 16 pt between everything.
-            let first = showsHero ? ThemeMetrics.heroClearance : ThemeMetrics.sectionGap
-            let gap = ThemeMetrics.sectionGap
-            VStack(alignment: .leading, spacing: 0) {
-                if strip, let recap {
-                    RecapStrip(text: recapStripText(recap)) { stageRecap() }
-                        .padding(.horizontal, ThemeMetrics.gutter)
-                        .padding(.top, first)
-                        .transition(.opacity)
-                }
-                if notice {
-                    InlineNotice(Copy.Notice.today) { Task { await appModel.reload() } }
-                        .padding(.horizontal, ThemeMetrics.gutter)
-                        .padding(.top, strip ? ThemeMetrics.cardGap : first)
-                }
-                if hasQueue {
-                    queueSection.padding(.top, strip || notice ? gap : first)
-                }
-                if let next = comingNext {
-                    comingNextSection(next)
-                        .padding(.top, strip || notice || hasQueue ? gap : first)
-                }
-                if !shelf.isEmpty {
-                    watchingShelf
-                        .padding(.top, strip || notice || hasQueue || comingNext != nil ? gap : first)
-                }
+        let strip = !recapOnStage && recapMode == .strip && recap != nil
+        let notice = appModel.loadError && !appModel.libraryEmpty
+        let hasQueue = showsHero && (!queue.isEmpty || showsViewAll)
+        // The first block under a hero gets the hero's clearance; every block after it gets a
+        // section gap. One rhythm, decided once, instead of 16 pt between everything.
+        let first = showsHero ? ThemeMetrics.heroClearance : ThemeMetrics.sectionGap
+        let gap = ThemeMetrics.sectionGap
+        // A section that ENDS in a `MediaRow` has already spent `rowOwnInset` below its last row.
+        let gapAfterRow = gap - TodayView.rowOwnInset
+        VStack(alignment: .leading, spacing: 0) {
+            if strip, let recap {
+                RecapLine(text: recapStripText(recap)) { stageRecap() }
+                    .padding(.horizontal, ThemeMetrics.gutter)
+                    .padding(.top, first)
+                    .transition(.opacity)
             }
-            .transition(.opacity)
-            .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: recapMode)
+            if notice {
+                InlineNotice(Copy.Notice.today) { Task { await appModel.reload() } }
+                    .padding(.horizontal, ThemeMetrics.gutter)
+                    .padding(.top, strip ? ThemeMetrics.cardGap : first)
+            }
+            if hasQueue {
+                queueSection.padding(.top, strip || notice ? gap : first)
+            }
+            if let next = comingNext {
+                comingNextSection(next)
+                    .padding(.top, hasQueue ? gapAfterRow : (strip || notice ? gap : first))
+            }
+            if !shelf.isEmpty {
+                let afterRow = hasQueue || comingNext != nil
+                watchingShelf
+                    .padding(.top, afterRow ? gapAfterRow : (strip || notice ? gap : first))
+            }
         }
+        .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: recapMode)
     }
 
     // MARK: - Queue
@@ -539,10 +755,18 @@ struct TodayView: View {
     /// every other block announced itself — and it vanished entirely in the committed state, so
     /// the screen's section structure changed shape between frames.
     private var queueSection: some View {
-        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-            SectionHeaderRow("Up next")
+        VStack(alignment: .leading, spacing: 0) {
+            // `Copy.Label.nextUp` — the one "next" rule. "UP NEXT" and "COMING NEXT" differed by a
+            // single word, in the same token, 60 pt apart, with no rule anyone could infer; the
+            // not-yet-aired block below is now "Upcoming" so there is never a second "next" on one
+            // screen. This is the specific episode you can watch right now.
+            SectionHeaderRow(Copy.Label.nextUp)
                 .padding(.horizontal, ThemeMetrics.gutter)
-            queueRows
+            // The rhythm is built by the CONTAINER, not by a stack spacing that fights the rows'
+            // own padding: measured, label-bottom to first content was 31 pt against a `labelGap`
+            // of 10, because `SectionHeaderRow` draws 12 pt outside its layout rect and `MediaRow`
+            // adds its own vertical padding on top of the spacing.
+            queueRows.padding(.top, ThemeMetrics.labelGap - TodayView.rowOwnInset)
         }
     }
 
@@ -553,16 +777,19 @@ struct TodayView: View {
                          meta: queueMeta(f),
                          lead: queueLead(f),
                          poster: f.cover,
-                         // The same slot `COMING NEXT` uses directly beneath it. A 48×72 row above
-                         // a 44×66 row of the same kind is an art column that does not line up.
-                         slot: .queue,
-                         // No chevron on Today. A row here carries art, a title and a forward fact
-                         // in amber; a 13-pt glyph parked 300 pt away from the text it belongs to
-                         // adds an object and says nothing. (Detail and Library keep theirs — they
-                         // are lists you navigate; this is a queue you act on.)
+                         // `.row` (56×84) at `rowMedia`, not the 44×66 `.queue` slot. A logotype
+                         // cover — Game of Thrones, Attack on Titan — is an unreadable smear at
+                         // 44 pt, and it sat beside ~300 pt of empty row. Apple TV's Up Next never
+                         // goes below a slot you can recognise the show from. `Upcoming` below
+                         // keeps `.queue`: it is the quieter block and is allowed to be smaller.
+                         slot: .row,
+                         // No chevron: this row has a trailing CONTROL. A disclosure indicator and
+                         // a mark ring in the same column is two trailing affordances on one row.
                          chevron: false,
                          separator: index < queue.count - 1 || showsViewAll,
-                         zoomID: "queue/\(f.id)") {
+                         hint: TodayCopy.opensTheShow,
+                         zoomID: "queue/\(f.id)",
+                         trailing: { queueMark(f) }) {
                     onOpenDetail(f.id, "queue/\(f.id)")
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
@@ -570,7 +797,7 @@ struct TodayView: View {
             }
             if showsViewAll {
                 Button {
-                    onSeeAllWatching()
+                    (onViewAllUpdates ?? onSeeAllWatching)()
                 } label: {
                     HStack(spacing: 6) {
                         Text(Copy.Action.viewAllUpdates(updateCount))
@@ -584,6 +811,39 @@ struct TodayView: View {
             }
         }
         .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: queue.map(\.id))
+    }
+
+    /// The queue row's own mark control.
+    ///
+    /// The comment above this section called Today "a queue you act on" while the rows carried no
+    /// action at all: clearing an evening was one tap for the hero and four taps per row for
+    /// everything under it (row → Detail → season → episode). It is the same `MarkRing` Schedule's
+    /// rows use, so the gesture, the target and the drawn check are the app's one mark, not a
+    /// second dialect. Rows with nothing to mark (a show that is only waiting) get no control.
+    @ViewBuilder
+    private func queueMark(_ f: Franchise) -> some View {
+        if let (kind, part) = kind(of: f), queueIsMarkable(kind) {
+            MarkRing(marked: false,
+                     style: .quiet,
+                     label: "\(Copy.Action.markAsWatched), \(watchLabel(f, part: part, episode: part.progress + 1)) of \(f.title)") {
+                markQueueRow(f)
+            }
+        }
+    }
+
+    private func queueIsMarkable(_ kind: FocusKind) -> Bool {
+        switch kind {
+        case .fresh, .backlog: return true
+        case .caughtUp, .waiting: return false
+        }
+    }
+
+    /// One transaction, one haptic (fired inside the write), one toast. Unlike the hero there is no
+    /// card handing over here, so the toast is presented immediately rather than deferred.
+    private func markQueueRow(_ f: Franchise) {
+        guard let undo = appModel.markNext(franchiseId: f.id) else { return }
+        appModel.presentUndo(undo)
+        Announce.status(Copy.Progress.episodeWatched(undo.episode))
     }
 
     // One grammar for the two-colour row, decided once and obeyed by every row on this screen:
@@ -612,11 +872,21 @@ struct TodayView: View {
     private func queueMeta(_ f: Franchise) -> String? {
         guard let (kind, part) = kind(of: f) else { return nil }
         let ep = watchLabel(f, part: part, episode: part.progress + 1)
+        // The row DROPS a fact rather than wrapping one.
+        //
+        // "Season 7 · Episode 5 · 3 / episodes left" put a numeral on one line and its noun on the
+        // next, on the first row of the first section. The direction's own rule is to drop a fact
+        // when the line will not hold, and the count is the droppable one: the episode identity is
+        // what the row is for, the hero's eyebrow carries the count when it matters, and the row's
+        // own `MarkRing` is the action. Always at accessibility sizes; at default sizes only when
+        // the identity is already long enough to fill the line on its own ("OVA 2: No Regrets ·
+        // Episode 1" is 28 characters before the count is even appended).
+        let roomForCount = !isAX && ep.count <= 22
         switch kind {
         case .fresh(let behind):
-            return behind > 1 ? "\(ep) · \(Copy.Progress.behind(behind))" : ep
+            return behind > 1 && roomForCount ? "\(ep) · \(Copy.Progress.behind(behind))" : ep
         case .backlog(let left):
-            return left > 1 ? "\(ep) · \(Copy.Progress.left(left))" : ep
+            return left > 1 && roomForCount ? "\(ep) · \(Copy.Progress.left(left))" : ep
         case .caughtUp: return Copy.Progress.caughtUp
         case .waiting:
             return watchLabel(f, part: part, episode: part.nextEpisodeNumber ?? part.airedEpisodes + 1)
@@ -626,20 +896,28 @@ struct TodayView: View {
     // MARK: - Coming next
 
     private func comingNextSection(_ f: Franchise) -> some View {
-        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-            SectionHeaderRow("Coming next")
+        VStack(alignment: .leading, spacing: 0) {
+            // `Copy.Label.upcoming`, not "Coming next". Never a second "next" on one screen — and
+            // this block is defined by NOT having aired, which "upcoming" says and "coming next"
+            // only implies against a neighbour that also says "next".
+            SectionHeaderRow(Copy.Label.upcoming)
                 .padding(.horizontal, ThemeMetrics.gutter)
             MediaRow(title: f.title,
                      meta: f.releasingPart.map { watchLabel(f, part: $0, episode: $0.nextEpisodeNumber ?? $0.airedEpisodes + 1) },
                      lead: f.nextAiring(now: now).map { TemporalCopy.airs(at: $0, now: now, source: f.source) },
                      poster: f.cover,
+                     // The quieter block keeps the smaller slot: nothing here is actionable, and a
+                     // 56×84 poster under a 56×84 poster with no control beside it would give an
+                     // un-actionable row the same weight as the queue above it.
                      slot: .queue,
                      chevron: false,
                      separator: false,
+                     hint: TodayCopy.opensTheShow,
                      zoomID: "next/\(f.id)") {
                 onOpenDetail(f.id, "next/\(f.id)")
             }
             .padding(.horizontal, ThemeMetrics.gutter)
+            .padding(.top, ThemeMetrics.labelGap - TodayView.rowOwnInset)
         }
     }
 
@@ -817,7 +1095,16 @@ struct TodayView: View {
         guard left > 0 else {
             // The button already says "Episode 19 watched"; the footnote says what comes next
             // instead of saying it twice.
-            let next = part.nextAiringAt.flatMap { $0 > now ? TemporalCopy.airs(at: $0, now: now, source: f.source) : nil }
+            //
+            // And it NAMES the episode it belongs to. A bare "Friday at 7:30 PM" printed directly
+            // under "Season 4 · Episode 19" is the identical grammar this screen uses for a future
+            // airing, so the line read as "Episode 19 airs Friday" — about an episode the user has
+            // just told the app they already watched. The clock is a fact about episode 20.
+            let next = part.nextAiringAt.flatMap { at -> String? in
+                guard at > now else { return nil }
+                let when = TemporalCopy.airs(at: at, now: now, source: f.source)
+                return "\(Copy.episode(episode + 1)) airs \(TodayView.midSentence(when))"
+            }
             return (Copy.Progress.caughtUp,
                     Copy.watchContext(part: part.label, episode: episode),
                     next)
@@ -831,6 +1118,17 @@ struct TodayView: View {
                 left == 1 ? Copy.Progress.caughtUpAfterThisEpisode : nil)
     }
 
+    /// A `TemporalCopy` phrase set INSIDE a sentence rather than at the head of one.
+    ///
+    /// Only the words that are ordinary adverbs are re-cased. "friday", "aug 28" and "sun" are
+    /// proper nouns and a sentence does not get to lower-case them — the same rule `sinceFragment`
+    /// below already applies to month abbreviations, written once here so the two cannot drift.
+    private static func midSentence(_ phrase: String) -> String {
+        let head = phrase.prefix(while: { !$0.isWhitespace })
+        guard ["Today", "Tomorrow", "Yesterday"].contains(String(head)) else { return phrase }
+        return head.lowercased() + phrase.dropFirst(head.count)
+    }
+
     /// "Season 7 · Episode 5" on a multi-part franchise, "Episode 5" on a single one. The queue
     /// used a bare `Copy.episode` while the recap card, on the same tab, printed the same fact with
     /// its season — so a seven-season show said "Episode 5 next" in one block and
@@ -841,8 +1139,15 @@ struct TodayView: View {
 
     // MARK: - Skeleton
 
-    /// The shape the hero will fill, not a generic card. A skeleton that stands in for a 440-pt
-    /// full-bleed frame with a 212-pt box makes the swap land as a layout jump.
+    /// The shape the hero will fill, not a generic card.
+    ///
+    /// What it looked like before: ~110 pt of empty canvas, four small bars floating in the middle
+    /// of the frame, and a hard full-width tonal seam where the plate stopped — at normal screen
+    /// brightness, a frame that reads as "the app failed to load", on the first thing a returning
+    /// user sees. The loaded state opens with full-bleed art at y = 0, so the skeleton does too:
+    /// the hero band is an OPAQUE ground carrying the last hero's remembered palette colour, it
+    /// bleeds under the status bar, and it hands over to the canvas through the same kind of long
+    /// fade `ArtScrim` uses — never on a line.
     private func skeleton(screenH: CGFloat, topInset: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
@@ -856,12 +1161,25 @@ struct TodayView: View {
             .padding(.bottom, ThemeSpace.x5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: heroHeight(screenH), alignment: .bottom)
-            .surface(.plate, radius: 0)
-            // The real hero hands over to the canvas through `ArtScrim`; a plate that stops on a
-            // hard horizontal edge announces the swap 300 ms before it happens.
+            // The remembered tint, not `surfacePlate`. There is no artwork yet by definition, and
+            // the hero's colour rarely changes between two opens — so the frame opens on the app's
+            // own atmosphere instead of on a grey slab four shades off the canvas.
+            .background {
+                ZStack {
+                    TodayView.rememberedTint ?? PaletteCache.fallback
+                    // A little tone off the top so the band is not one flat rectangle: this is the
+                    // shape of a photograph under a scrim, and a photograph is never uniform.
+                    LinearGradient(colors: [.white.opacity(0.05), .clear],
+                                   startPoint: .top, endPoint: .center)
+                }
+            }
+            // Long, like `ArtScrim`'s bottom hand-over. The old mask held solid to 0.86 and then
+            // dropped inside 14 %, which at 440 pt is a 60-pt cliff — measured as a hard seam.
             .mask(LinearGradient(stops: [
                 .init(color: .black, location: 0),
-                .init(color: .black, location: 0.86),
+                .init(color: .black, location: 0.52),
+                .init(color: .black.opacity(0.72), location: 0.74),
+                .init(color: .black.opacity(0.26), location: 0.90),
                 .init(color: .black.opacity(0), location: 1),
             ], startPoint: .top, endPoint: .bottom))
             .padding(.top, -topInset)
@@ -870,10 +1188,11 @@ struct TodayView: View {
                 SkeletonLine(width: 62, height: 10)
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(0..<2, id: \.self) { _ in
-                        // The slot the queue actually uses. A 48×72 stand-in for a 44×66 row moves
-                        // every title 4 pt sideways and every row 6 pt down at the swap.
-                        SkeletonRow(poster: PosterSize.queue.size, lines: [180, 110],
-                                    posterRadius: PosterSize.queue.radius)
+                        // The slot the queue actually uses — now `.row`, matching the promotion of
+                        // the queue to `rowMedia`. A stand-in of the wrong size moves every title
+                        // sideways and every row down at the swap.
+                        SkeletonRow(poster: PosterSize.row.size, lines: [180, 110],
+                                    posterRadius: PosterSize.row.radius)
                     }
                 }
             }
@@ -916,7 +1235,7 @@ struct TodayView: View {
             committedEpisode = undo.episode
         }
         Announce.status(Copy.Progress.episodeWatched(undo.episode))
-        if recapMode == .strip { acknowledgeRecap() }
+        clearRecapStrip()
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(650))
             let settle = ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)
@@ -943,17 +1262,25 @@ struct TodayView: View {
         let perform: () -> Void
     }
 
+    /// The batch write behind the hero's chevron.
+    ///
+    /// Both branches now go through `markThrough`, which captures the prior progress, writes once,
+    /// and presents ONE undo carrying the true count and a restoring action. What they did before:
+    /// "Mark through episode N" called `setProgress`, which mints no `UndoState` at all — so the
+    /// app's most-used multi-episode control had no toast and no undo, and recovery was Detail →
+    /// season → episode list → confirm an unmark. "Mark all N" called `markCaughtUp`, which left
+    /// `UndoState.count` at its default 1, so a six-episode batch reported "Episode 19 marked as
+    /// watched". A write that will not say what it did is not reversible in any useful sense.
     private func promptBatch(_ f: Franchise, part: FranchisePart, through: Int) {
         let count = through - part.progress
         guard count > 0 else { return }
-        let all = through >= part.progressCeiling
         batchPrompt = BatchPrompt(
             title: Copy.Confirm.batchMarkTitle(count),
             message: "\(f.title) · \(part.label). \(Copy.Confirm.batchMarkMessage(from: part.progress + 1, to: through))",
             confirm: Copy.Confirm.batchMarkConfirm(count),
             perform: {
-                if all { appModel.markCaughtUp(f.id) }
-                else { appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: through) }
+                appModel.markThrough(franchiseId: f.id, mediaId: part.mediaId, episode: through)
+                Announce.status(Copy.Confirm.batchMarkConfirm(count))
             }
         )
     }
@@ -970,8 +1297,15 @@ struct TodayView: View {
         // The demo window is wide on purpose: the recap now only carries genuine CHANGES (the
         // "where you stopped" filler beat is gone), so a four-day window on a small library
         // produces nothing to look at during a capture pass.
-        let since = demo ? now - 30 * Formatting.D : appModel.prevOpenedAt
-        guard let digest = RecapDigest.build(library: appModel.library, since: since, now: now) else {
+        // 30 days was not wide enough to guarantee a digest on a library whose latest change is
+        // older than that, so `-recapDemo 1` — documented as "forces the full recap" — silently did
+        // nothing and the arrival could not be reviewed at all. A year always finds the beats that
+        // exist, and the flag is DEBUG-only, so nothing a user sees depends on this number.
+        let since = demo ? now - 400 * Formatting.D : appModel.prevOpenedAt
+        let built = demo
+            ? RecapDigest.demoDigest(library: appModel.library, since: since, now: now)
+            : RecapDigest.build(library: appModel.library, since: since, now: now)
+        guard let digest = built else {
             recap = nil; recapMode = .none; return
         }
         let mode = demo ? .full : digest.presentation(absence: now - since, lastFullRecapAt: RecapState.lastFullRecapAt,
@@ -1011,38 +1345,90 @@ struct TodayView: View {
             // The stage changed under the user without a navigation.
             Announce.screenChanged(recap.map(recapSpokenSummary))
             guard !voiceOver else { return }
-            try? await Task.sleep(for: .milliseconds(reduceMotion ? 2600 : 2000))
+            try? await Task.sleep(for: .milliseconds(holdMilliseconds))
             handoffRecap()
         }
+    }
+
+    /// How long the recap holds, measured from the LAST beat's reveal.
+    ///
+    /// It was a constant (2,000 / 2,600 ms) while the beats reveal on a 0.12 s stagger, so a
+    /// one-beat digest sat still for 1.9 s after it had finished and a four-beat digest gave the
+    /// reader ~1.5 s for four titles. The hold now scales with what there is to read and is still
+    /// capped, and Reduce Motion keeps its surcharge: less movement is not less reading time.
+    private var holdMilliseconds: Int {
+        let beats = max(1, recap?.beats.count ?? 1)
+        let reveal = reduceMotion ? 0 : Int(120 * Double(beats + 1))
+        return reveal + min(4500, 1400 + 300 * beats) + (reduceMotion ? 600 : 0)
+    }
+
+    /// A recap beat's meta line, in the SAME grammar as the queue below it.
+    ///
+    /// `RecapBeat.label` prints "Episode 19 aired" with no season, while the hero for that exact
+    /// episode said "Season 4 · Episode 19" 200 pt above it — one screen, two ways of naming one
+    /// thing. Routed through `watchLabel`, so a multi-season show gets its season and a single-part
+    /// one does not (which is the rule, not an exception).
+    private func recapBeatLabel(_ beat: RecapBeat) -> String {
+        guard case .episodesAired(let n, let latest) = beat.kind, n == 1, let latest,
+              let f = appModel.library.first(where: { $0.id == beat.franchiseId }),
+              let part = f.releasingPart ?? f.resumePart
+        else { return beat.label(now: now) }
+        return "\(watchLabel(f, part: part, episode: latest)) aired"
     }
 
     private func recapSpokenSummary(_ recap: RecapDigest) -> String {
         "\(TodayCopy.whileYouWereAway). \(recapStripText(recap))."
     }
 
+    /// Recap → focus, in ONE move.
+    ///
+    /// It used to be two: the hero shrank and settled (460 ms), and only in that animation's
+    /// `completion:` did `acknowledgeRecap()` set `recapMode = .strip` inside a *second*
+    /// `withAnimation`, inserting a 44-pt strip that shoved everything under it down ~60 pt on
+    /// another 220 ms curve. The screen appeared to finish and then jumped. The mode change belongs
+    /// in the same transaction as the shrink; only the persistence — which animates nothing — is
+    /// left for afterwards.
     private func handoffRecap() {
         guard recapOnStage else { return }
+        let next: RecapDigest.Presentation = recapMode == .full ? .strip : .none
         withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
             recapOnStage = false
+            recapMode = next
         } completion: {
-            acknowledgeRecap()
+            persistRecapAcknowledgement()
         }
     }
 
-    /// A full recap DEMOTES to the strip rather than disappearing.
+    /// The recap's explicit ✕.
     ///
-    /// It used to go straight to `.none`, which also removed the `RecapStrip` that is the only way
-    /// back in — a user returning after a week to 300 titles got a list they could not physically
-    /// read, once, and then it was gone. The strip is the standing way back; it is what leaving
-    /// the screen finally clears.
-    private func acknowledgeRecap() {
-        guard let recap else { return }
-        if !RecapState.demo {
-            RecapState.acknowledgedID = recap.digestID
-            if recapMode == .full { RecapState.lastFullRecapAt = now }
+    /// It used to call `onContinue()` — the same thing "Continue" does — so the dismiss control
+    /// demoted the card to the strip and it reappeared 460 ms later, which is the opposite of what
+    /// a ✕ promises. Dismiss means gone: no strip, nothing to come back to on this visit.
+    private func dismissRecap() {
+        guard recapOnStage else { return }
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
+            recapOnStage = false
+            recapMode = .none
+        } completion: {
+            persistRecapAcknowledgement()
         }
-        let next: RecapDigest.Presentation = recapMode == .full ? .strip : .none
-        withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) { recapMode = next }
+    }
+
+    /// Persistence only — it animates nothing, so it may run in a completion handler without
+    /// splitting the handoff into two moves. (The full recap DEMOTES to the strip rather than
+    /// disappearing: the strip is the standing way back in, and it is what leaving the screen
+    /// finally clears.)
+    private func persistRecapAcknowledgement() {
+        guard let recap, !RecapState.demo else { return }
+        RecapState.acknowledgedID = recap.digestID
+        RecapState.lastFullRecapAt = now
+    }
+
+    /// Leaving the screen clears the strip.
+    private func clearRecapStrip() {
+        guard recapMode == .strip else { return }
+        persistRecapAcknowledgement()
+        recapMode = .none
     }
 
     /// "since 23 Jul" — the sentence-internal form of `TemporalCopy.since`.
@@ -1171,10 +1557,21 @@ private struct HeroFocus: View {
         .allowsHitTesting(interactive)
     }
 
+    /// The action pair.
+    ///
+    /// **A capsule never degrades into bare text across a size class.** At AX1 `Details` fell back
+    /// to `InlineLinkButtonStyle` — two amber objects on the card, neither reading as secondary, a
+    /// control that stopped looking like a control, and (before SYS-9) a target under 44 pt. It
+    /// keeps `SecondaryButtonStyle2` at every size and simply stacks full-width, which is the
+    /// pattern `LibraryView.viewAsRow` already uses for the same problem.
+    ///
+    /// **Once the mark is committed, `Details` is the primary.** The confirmation capsule has
+    /// dropped to a soft tint and has nothing left to do; leaving the card with no primary action
+    /// at all is what made the committed frame read as a dead end.
     @ViewBuilder
     private var actions: some View {
         let layout = isAX
-            ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x2))
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeMetrics.cardGap))
             : AnyLayout(HStackLayout(spacing: ThemeSpace.x2))
         layout {
             if let ctaEpisode {
@@ -1186,20 +1583,29 @@ private struct HeroFocus: View {
                                 onMarkThrough: onMarkThrough,
                                 onMarkAll: onMarkAll)
             }
-            if isAX {
-                // Stacked, the two filled capsules were near-equal in weight and the one-primary
-                // rule collapsed: two full-width buttons, no hero. `Details` is a link at every
-                // size where it cannot sit beside the primary.
-                Button(TodayCopy.details, action: onOpen)
-                    .buttonStyle(InlineLinkButtonStyle())
-                    .padding(.leading, -12)
-            } else {
-                Button(TodayCopy.details, action: onOpen)
-                    .buttonStyle(SecondaryButtonStyle2())
-                    // The style stretches to fill (it is written for full-width sheets); beside a
-                    // primary it has to hug its own label instead of claiming half the row.
-                    .fixedSize(horizontal: true, vertical: false)
-            }
+            detailsButton
+        }
+    }
+
+    @ViewBuilder
+    private var detailsButton: some View {
+        let button = Button(TodayCopy.details, action: onOpen)
+        if committed {
+            // Hugging, not 200 pt wide: the confirmation capsule beside it is the longer label
+            // ("Episode 5 watched" plus its drawn check), and giving `Details` a fixed half of the
+            // row wrapped that label onto two lines — measured on the recording at frames 43-56.
+            // Colour is what makes this the primary now, not width.
+            button.buttonStyle(PrimaryButtonStyle2())
+                .fixedSize(horizontal: !isAX, vertical: false)
+                .frame(maxWidth: isAX ? .infinity : nil)
+        } else if isAX {
+            button.buttonStyle(SecondaryButtonStyle2())
+                .frame(maxWidth: .infinity)
+        } else {
+            button.buttonStyle(SecondaryButtonStyle2())
+                // The style stretches to fill (it is written for full-width sheets); beside a
+                // primary it has to hug its own label instead of claiming half the row.
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 }
@@ -1220,7 +1626,14 @@ private struct RecapArrival: View {
     let revealed: Bool
     let now: Int64
     let reduceMotion: Bool
+    /// The photograph the recap is laid on. A beat whose cover IS this art gets no poster — see
+    /// `showsPoster`.
+    let heroArt: String?
+    /// The beat's meta line, resolved against the library so it can carry the season the hero
+    /// carries. `RecapBeat` knows only a franchise id and a title.
+    let beatLabel: (RecapBeat) -> String
     let onContinue: () -> Void
+    let onDismiss: () -> Void
 
     @State private var tint: Color?
 
@@ -1233,14 +1646,16 @@ private struct RecapArrival: View {
         return aired > 0 ? "\(Copy.episodes(aired)) aired" : "\(Copy.updates(total)) waiting"
     }
 
-    /// A beat's line. When the whole digest is one aired episode the headline above has already
-    /// said "aired", so the row names the episode instead of repeating the verb.
-    private func beatMeta(_ beat: RecapBeat) -> String {
-        if digest.beats.count == 1, digest.hiddenBeatCount == 0,
-           case .episodesAired(let n, let latest) = beat.kind, n == 1, let latest {
-            return Copy.episode(latest)
-        }
-        return beat.label(now: now)
+    /// Whether the beat rows carry artwork at all.
+    ///
+    /// A single-title recap laid on that title's own key visual at 440 pt printed the SAME image
+    /// again at 34×51 about 200 pt below it — a postage stamp of the picture above it, inside a box,
+    /// under a cinematic frame. When the only thing on the card is the show the hero is already
+    /// showing, the title line carries the row. Two or more distinct titles still need identifying.
+    private var showsPoster: Bool {
+        guard digest.beats.count == 1, digest.hiddenBeatCount == 0 else { return true }
+        guard let cover = digest.beats.first?.cover, let heroArt else { return true }
+        return cover != heroArt
     }
 
     var body: some View {
@@ -1248,17 +1663,26 @@ private struct RecapArrival: View {
             HStack(alignment: .top) {
                 OverArtLabel(text: TodayCopy.whileYouWereAway)
                 Spacer(minLength: ThemeSpace.x3)
-                Button(action: onContinue) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(ThemeColor.textTertiary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Circle())
+                // A real dismiss. 22 pt of low-contrast glyph was the only way out of a full-screen
+                // takeover, and it called `onContinue` — so ✕ and "Continue" did the same thing and
+                // the card came back as the strip 460 ms later. 30 pt on its own ground, ringed, in
+                // a 44-pt target, wired to a dismissal that dismisses.
+                Button(action: onDismiss) {
+                    ZStack {
+                        Circle().fill(ThemeColor.scrimStrong)
+                        Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: 1)
+                        Image(systemName: "xmark")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ThemeColor.textPrimary)
+                    }
+                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
                 }
                 .buttonStyle(OverArtPressStyle())
                 .accessibilityLabel(TodayCopy.dismissRecap)
                 .padding(.trailing, -10)
-                .padding(.top, -10)
+                .padding(.top, -8)
             }
             Text(headline)
                 .type(ThemeType.displayL)
@@ -1267,54 +1691,63 @@ private struct RecapArrival: View {
                 .minimumScaleFactor(0.85)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, ThemeSpace.x3)
-            Text(TemporalCopy.since(digest.since, now: now))
+            // "Since 23 Jul" named a date with no anchor — since what? The last visit is what the
+            // digest is actually built from, so the card says so. The strip below stays terse.
+            Text(TodayCopy.sinceYourLastVisit(TemporalCopy.since(digest.since, now: now)))
                 .type(ThemeType.metadata)
                 .foregroundStyle(ThemeColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, ThemeSpace.x0_5)
 
+            // The WHOLE card is the button, and the chevron sits on the title row.
+            //
+            // "Continue ›" used to be a 15-pt amber link stranded on the card's floor with a
+            // ~150×60 pt hole beside it, in a 110-pt box whose only art was the smallest in the
+            // app. The card is now the target it always was, the forward affordance is beside the
+            // words it belongs to, and the box is the height of its content.
             Button(action: onContinue) {
                 VStack(alignment: .leading, spacing: ThemeSpace.x3) {
                     ForEach(Array(digest.beats.enumerated()), id: \.element.id) { i, beat in
                         HStack(spacing: ThemeSpace.x3) {
-                            PosterSlot(url: beat.cover, .beat)
+                            if showsPoster { PosterSlot(url: beat.cover, .beat) }
                             VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
-                                Text(beat.title)
-                                    .type(ThemeType.rowTitle)
-                                    // BOTH rows at `textPrimary`. The second used to be
-                                    // `textSecondary`, so it read as disabled; the aired-vs-
-                                    // upcoming distinction lives in the meta line, where it belongs.
-                                    .foregroundStyle(ThemeColor.textPrimary)
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Text(beatMeta(beat))
+                                HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+                                    Text(beat.title)
+                                        .type(ThemeType.rowTitle)
+                                        // BOTH rows at `textPrimary`. The second used to be
+                                        // `textSecondary`, so it read as disabled; the aired-vs-
+                                        // upcoming distinction lives in the meta line.
+                                        .foregroundStyle(ThemeColor.textPrimary)
+                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: ThemeSpace.x2)
+                                    if i == 0 {
+                                        Image(systemName: "chevron.forward")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(ThemeColor.textDisabled)
+                                            .accessibilityHidden(true)
+                                    }
+                                }
+                                Text(beatLabel(beat))
                                     .type(ThemeType.rowMeta)
                                     .foregroundStyle(ThemeColor.textSecondary)
                                     .lineLimit(1)
                             }
-                            Spacer(minLength: 0)
                         }
                         .opacity(revealed ? 1 : 0)
                         .offset(y: revealed || reduceMotion ? 0 : 6)
                         .animation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)
                             .delay(reduceMotion ? 0 : 0.12 * Double(i + 1)), value: revealed)
                     }
-                    HStack(spacing: ThemeSpace.x2) {
-                        if digest.hiddenBeatCount > 0 {
-                            Text("and \(digest.hiddenBeatCount) more")
-                                .type(ThemeType.metadata)
-                                .foregroundStyle(ThemeColor.textTertiary)
-                        }
-                        Spacer(minLength: ThemeSpace.x3)
-                        Text(TodayCopy.continueAction)
-                            .type(ThemeType.listAction)
-                            .foregroundStyle(ThemeColor.accent)
-                        Image(systemName: "chevron.forward")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(ThemeColor.accent)
+                    if digest.hiddenBeatCount > 0 {
+                        Text("and \(digest.hiddenBeatCount) more")
+                            .type(ThemeType.metadata)
+                            .foregroundStyle(ThemeColor.textTertiary)
+                            .opacity(revealed ? 1 : 0)
+                            .animation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)
+                                .delay(reduceMotion ? 0 : 0.12 * Double(digest.beats.count + 1)),
+                                       value: revealed)
                     }
-                    .opacity(revealed ? 1 : 0)
-                    .animation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)
-                        .delay(reduceMotion ? 0 : 0.12 * Double(digest.beats.count + 1)), value: revealed)
                 }
                 .padding(ThemeSpace.x4)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1326,12 +1759,48 @@ private struct RecapArrival: View {
             .buttonStyle(OverArtPressStyle())
             .padding(.top, ThemeSpace.x5)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(digest.beats.map { "\($0.title), \($0.label(now: now))" }.joined(separator: ". "))
+            .accessibilityLabel(digest.beats.map { "\($0.title), \(beatLabel($0))" }.joined(separator: ". "))
             .accessibilityHint("Continues to what is next")
         }
         .shadow(.art)
         .task(id: digest.beats.first?.cover) {
             tint = await PaletteCache.shared.resolve(url: digest.beats.first?.cover, maxPixel: 360)
         }
+    }
+}
+
+// MARK: - Recap line
+
+/// The compact recap, on the CANVAS.
+///
+/// It used to be a 16-pt-radius filled box — the only boxed container on the screen — with its
+/// chevron 200–270 pt from the text it belongs to and nothing in between: exactly the pattern the
+/// direction had already removed from the queue rows a section below it. Same grammar as every
+/// other row here: art, a line, and the forward glyph immediately after the words.
+private struct RecapLine: View {
+    let text: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+                Text(text)
+                    .type(ThemeType.metadataEmphasis)
+                    .foregroundStyle(ThemeColor.textPrimary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ThemeColor.textDisabled)
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 44, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(RowPressStyle())
+        .accessibilityLabel(text)
+        .accessibilityHint("Opens what you missed")
     }
 }

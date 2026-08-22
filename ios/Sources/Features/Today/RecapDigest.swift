@@ -93,6 +93,28 @@ struct RecapDigest: Equatable {
         return RecapDigest(since: since, beats: Array(ordered.prefix(3)), hiddenBeatCount: max(0, ordered.count - 3), score: score)
     }
 
+    /// A digest built for `-recapDemo 1` when the account's real data yields none.
+    ///
+    /// The launch argument is documented as *forcing* the full recap so the arrival can be
+    /// reviewed and captured, and it silently did nothing whenever the signed-in library happened
+    /// to have no unwatched new episodes — which is most of the time on a well-kept account, and
+    /// was the case for the whole of this round. The beats are real rows from the real library
+    /// (title, artwork, source); only the "aired since" window is manufactured, and only in this
+    /// DEBUG-only path. Nothing a user can reach calls it.
+    static func demoDigest(library: [Franchise], since: Int64, now: Int64) -> RecapDigest? {
+        if let real = build(library: library, since: since, now: now) { return real }
+        let candidates = library.filter { $0.effectiveStatus == .watching }
+        guard !candidates.isEmpty else { return nil }
+        let beats = candidates.prefix(2).enumerated().map { i, f in
+            RecapBeat(franchiseId: f.id, title: f.title, cover: f.cover, source: f.source,
+                      kind: .episodesAired(count: 1, latest: f.resumePart.map { $0.progress + 1 } ?? 1),
+                      score: 5 - i)
+        }
+        return RecapDigest(since: since, beats: Array(beats),
+                           hiddenBeatCount: max(0, candidates.count - beats.count),
+                           score: 9)
+    }
+
     /// Fire rules. `absence` = now − last acknowledged visit.
     func presentation(absence: Int64, lastFullRecapAt: Int64?, acknowledgedID: String?, now: Int64, enteredByDeepLink: Bool) -> Presentation {
         guard !enteredByDeepLink, acknowledgedID != digestID, beats.count >= 2 else { return .none }
