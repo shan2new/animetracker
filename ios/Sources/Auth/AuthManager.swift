@@ -85,9 +85,13 @@ final class AuthManager: TokenProvider {
         }
     }
 
-    /// The backend rejected our credentials (401/403). Sign the session out for real — a token the
-    /// server won't accept is not a network hiccup, and a Retry button against it can never
-    /// succeed — and say so on the sign-in screen instead of letting it read as an outage.
+    /// The backend rejected our credentials with a **401 that survived a forced token refresh**.
+    /// That, and only that, ends a session.
+    ///
+    /// A 403 must never reach here: a Cloudflare/WAF challenge says nothing about the user's
+    /// session, and signing them out on it is the exact regression observed on 2026-08-22.
+    /// `APIClient` classifies it as `.infrastructure` and the surface keeps its content —
+    /// `APIError.isSessionEnding` is the only predicate a caller may branch on.
     func sessionExpired() {
         guard isSignedIn else { return }
         Task {
@@ -128,9 +132,31 @@ final class AuthManager: TokenProvider {
         await resolveToken()
     }
 
+    /// A forced refresh, bypassing Clerk's token cache. Called once per request by
+    /// `APIClient` when a 401 comes back, so an expired-but-renewable session recovers invisibly.
+    ///
+    /// Dev mode returns nil on purpose: `dev:<id>` is not a JWT and has nothing to renew, so a
+    /// 401 against it is final and the retry would only repeat the same rejection.
+    nonisolated func refreshedToken() async -> String? {
+        await forceRefreshToken()
+    }
+
+    private func forceRefreshToken() async -> String? {
+        switch mode {
+        case .dev:
+            return nil
+        case .clerk:
+            return try? await Clerk.shared.auth.getToken(.init(skipCache: true))
+        }
+    }
+
     private func resolveToken() async -> String? {
         switch mode {
         case let .dev(clerkId):
+            // A dev token is only ever accepted by a non-production server, so it must never be
+            // sent toward one. In a Release build pointed at production this is what guarantees a
+            // stored dev id cannot leak, even if one survived from a Debug run.
+            guard AppConfig.isLocalBackend else { return nil }
             return clerkId.isEmpty ? nil : "dev:\(clerkId)"
         case .clerk:
             // `auth.getToken()` returns a fresh session JWT (or nil if signed out).

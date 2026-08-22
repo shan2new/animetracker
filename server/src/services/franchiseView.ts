@@ -9,6 +9,7 @@ import type {
   FranchiseSummary,
   LibraryFranchise,
   MediaSource,
+  ReleasePrecision,
   WatchStatus,
 } from '../types/api.js'
 import { stripHtml } from '../util/text.js'
@@ -61,9 +62,28 @@ type MediaRow = typeof media.$inferSelect
 type MemberRow = typeof franchiseMember.$inferSelect
 type FranchiseRow = typeof franchise.$inferSelect
 
+/**
+ * State the precision of a next-release instant instead of leaving the client to infer it from
+ * `source`. AniList publishes a real broadcast instant; TMDB publishes a calendar date that the TV
+ * sync synthesizes to 17:00 UTC, so its clock half is not a fact and must never be rendered.
+ */
+function releasePrecision(nextAiringAt: number | null, source: MediaSource): ReleasePrecision {
+  if (nextAiringAt == null) return { precision: 'unknown', at: null, date: null }
+  if (source === 'tmdb') {
+    return { precision: 'date_only', at: nextAiringAt, date: new Date(nextAiringAt).toISOString().slice(0, 10) }
+  }
+  return { precision: 'exact', at: nextAiringAt, date: null }
+}
+
 /** Derive a FranchisePart's airing fields from a media row + the user's progress. Mirrors legacy `toShow`.
  *  `opts.episodes` includes the full per-episode list (detail only; omitted from lean list payloads). */
-function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episodes?: boolean }): FranchisePart {
+function toPart(
+  m: MediaRow,
+  member: MemberRow,
+  watched: number,
+  source: MediaSource,
+  opts?: { episodes?: boolean },
+): FranchisePart {
   const title = m.titleEnglish || m.titleRomaji || `Anime #${m.id}`
   const isReleasing = m.status === 'RELEASING'
   const total = m.episodes ?? 0
@@ -77,6 +97,7 @@ function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episod
     nowMs: Date.now(),
   })
   const nextAiringAt = next ? next.airingAt * 1000 : null
+  const release = releasePrecision(nextAiringAt, source)
   const lastAiredAt =
     m.lastAiredAt != null && m.lastAiredAt > 0
       ? m.lastAiredAt
@@ -104,6 +125,7 @@ function toPart(m: MediaRow, member: MemberRow, watched: number, opts?: { episod
     airedEpisodes,
     nextEpisodeNumber: next?.episode ?? null,
     nextAiringAt,
+    release,
     lastAiredAt,
     synopsis: stripHtml(m.description),
     genres: (m.genres ?? []).slice(0, 4),
@@ -144,14 +166,15 @@ function buildFranchise(
   mems: MemberRow[],
   mediaById: Map<number, MediaRow>,
   watchedById: Map<number, number>,
-  sub: { status: WatchStatus } | null,
+  sub: { status: WatchStatus; addedAt: number } | null,
   opts?: { episodes?: boolean },
 ): Franchise {
+  const source: MediaSource = (f.source as MediaSource) ?? 'anilist'
   const parts = sortParts(
     mems
       .map((mem) => {
         const m = mediaById.get(mem.mediaId)
-        return m ? toPart(m, mem, watchedById.get(mem.mediaId) ?? 0, opts) : null
+        return m ? toPart(m, mem, watchedById.get(mem.mediaId) ?? 0, source, opts) : null
       })
       .filter((p): p is FranchisePart => p !== null),
   )
@@ -168,7 +191,7 @@ function buildFranchise(
 
   return {
     id: f.id,
-    source: (f.source as MediaSource) ?? 'anilist',
+    source,
     title: f.title,
     cover: f.cover ?? '',
     banner: f.banner ?? '',
@@ -195,14 +218,14 @@ export async function getFranchise(franchiseId: string, userId?: string): Promis
   const mediaById = new Map(mediaRows.map((m) => [m.id, m]))
   const watchedById = await loadProgressMap(userId, mediaIds)
 
-  let sub: { status: WatchStatus } | null = null
+  let sub: { status: WatchStatus; addedAt: number } | null = null
   if (userId) {
     const [s] = await db
       .select()
       .from(subscriptions)
       .where(and(eq(subscriptions.userId, userId), eq(subscriptions.franchiseId, franchiseId)))
       .limit(1)
-    if (s) sub = { status: s.status as WatchStatus }
+    if (s) sub = { status: s.status as WatchStatus, addedAt: s.createdAt.getTime() }
   }
 
   // Detail is the only response that ships the full per-episode list.
@@ -312,7 +335,7 @@ export async function getLibrary(userId: string, lastOpenedAt: number): Promise<
     if (!f) continue
     const mems = membersByFranchise.get(s.franchiseId) ?? []
     const status = statusById.get(s.franchiseId) ?? 'planned'
-    const fr = buildFranchise(f, mems, mediaById, watchedById, { status })
+    const fr = buildFranchise(f, mems, mediaById, watchedById, { status, addedAt: s.createdAt.getTime() })
     const behind = fr.parts.reduce((acc, p) => acc + episodesBehind(p), 0)
     // newParts: members added since the user last opened the app.
     const newParts = mems.filter((m) => m.addedAt.getTime() > lastOpenedAt).length

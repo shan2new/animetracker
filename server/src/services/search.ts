@@ -8,7 +8,7 @@ import { groupKnownComponent } from '../grouping/service.js'
 import { searchTv, tmdbEnabled } from '../tmdb/client.js'
 import { isJapaneseAnimation } from '../tmdb/mapping.js'
 import { ensureTvFranchise } from '../tmdb/service.js'
-import type { FranchiseSummary } from '../types/api.js'
+import type { FranchiseListResponse, SourceOutcome } from '../types/api.js'
 import { mapWithConcurrency } from '../util/concurrency.js'
 import { getSummaries, getTrendingFranchises } from './franchiseView.js'
 import { makeAniListFetcher, upsertMedia } from './mediaStore.js'
@@ -30,19 +30,50 @@ const TV_CONCURRENCY = 4
  * franchises via lazy relation-graph grouping; TMDB TV hits (minus Japanese animation, which
  * AniList owns) are materialized deterministically via ensureTvFranchise. Results interleave
  * anime and TV in each source's relevance order.
+ *
+ * The response is honest about two things the caller cannot see otherwise: whether the query it
+ * sent was silently spell-corrected (`correctedQuery`), and whether a catalogue failed or is
+ * switched off rather than simply having no matches (`sources`). `opts.exact` opts out of the
+ * correction, so a caller can insist on the literal query.
  */
-export async function searchFranchises(query: string, limit = 30): Promise<FranchiseSummary[]> {
-  if (!query.trim()) return getTrendingFranchises(limit)
+export async function searchFranchises(
+  query: string,
+  limit = 30,
+  opts: { exact?: boolean } = {},
+): Promise<FranchiseListResponse> {
+  // A catalogue that threw is not a catalogue with no results — record which is which.
+  const sources: { anilist: SourceOutcome; tmdb: SourceOutcome } = { anilist: 'ok', tmdb: 'ok' }
+  if (!query.trim()) return { franchises: await getTrendingFranchises(limit), sources }
 
-  const searchTvSafe = (q: string) => (tmdbEnabled() ? searchTv(q).catch(() => []) : Promise.resolve([]))
+  const searchAniListSafe = (q: string) =>
+    searchMedia(q).catch(() => {
+      sources.anilist = 'failed'
+      return []
+    })
+  const searchTvSafe = (q: string) => {
+    if (!tmdbEnabled()) {
+      sources.tmdb = 'disabled'
+      return Promise.resolve([])
+    }
+    return searchTv(q).catch(() => {
+      sources.tmdb = 'failed'
+      return []
+    })
+  }
 
-  let [hits, tvHitsRaw] = await Promise.all([searchMedia(query), searchTvSafe(query)])
+  let [hits, tvHitsRaw] = await Promise.all([searchAniListSafe(query), searchTvSafe(query)])
   // AniList ANDs the query's whitespace tokens with no typo tolerance, so one misspelled word
   // ("Mushuko" for "Mushoku") returns nothing at all. When both sources whiff, spell-correct the
   // query via Cerebras and search once more with the fixed query before giving up.
-  if (hits.length === 0 && tvHitsRaw.length === 0) {
+  let correctedQuery: string | undefined
+  if (hits.length === 0 && tvHitsRaw.length === 0 && !opts.exact) {
     const corrected = await correctSearchQuery(query)
-    if (corrected) [hits, tvHitsRaw] = await Promise.all([searchMedia(corrected), searchTvSafe(corrected)])
+    if (corrected) {
+      ;[hits, tvHitsRaw] = await Promise.all([searchAniListSafe(corrected), searchTvSafe(corrected)])
+      // Only claim a correction that actually changed the outcome — otherwise the client would
+      // apologise for a rewrite that found nothing either.
+      if (hits.length > 0 || tvHitsRaw.length > 0) correctedQuery = corrected
+    }
   }
 
   // Materialize TV franchises concurrently with the anime grouping below. Japanese animation is
@@ -126,7 +157,11 @@ export async function searchFranchises(query: string, limit = 30): Promise<Franc
     if (tvIds[i]) merged.push(tvIds[i]!)
   }
 
-  return getSummaries(merged.slice(0, limit))
+  return {
+    franchises: await getSummaries(merged.slice(0, limit)),
+    ...(correctedQuery ? { correctedQuery, originalQuery: query } : {}),
+    sources,
+  }
 }
 
 interface ExpandedComponent {

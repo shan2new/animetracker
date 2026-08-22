@@ -10,12 +10,19 @@ const envBool = (def: boolean) =>
     .transform((v) => (v == null ? def : ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase())))
 
 const schema = z.object({
+  // Which deployment this process is. It gates the non-production `dev:` bearer issuer, so an
+  // unset APP_ENV is treated as development — the boot guard (auth/authConfig.ts) is what makes a
+  // production host fail loudly instead of quietly accepting a dev token.
+  APP_ENV: z.enum(['development', 'test', 'production']).default('development'),
+
   PORT: z.coerce.number().default(8787),
   CORS_ORIGIN: z.string().default('*'),
   DATABASE_URL: z.string().default('postgres://localhost:5432/anitrack'),
 
   CLERK_JWT_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),
+  // Accept `Authorization: Bearer dev:<clerkId>`. Read ONLY by auth/authConfig.ts, which refuses
+  // it outright when APP_ENV=production. Never branch on this anywhere else.
   DEV_AUTH_BYPASS: envBool(false),
 
   OPENROUTER_API_KEY: z.string().optional(),

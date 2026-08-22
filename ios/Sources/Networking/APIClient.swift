@@ -5,24 +5,71 @@ import os
 // (Clerk session token, or a `dev:<clerkId>` token for local DEV_AUTH_BYPASS testing).
 protocol TokenProvider: Sendable {
     func currentToken() async -> String?
+    /// A FRESH token, skipping any cache. `nil` when this issuer cannot mint one (a `dev:` token
+    /// is not refreshable — a 401 against it is final).
+    func refreshedToken() async -> String?
 }
 
+/// What the transport layer learned about a failed request. The distinction that matters is
+/// `isSessionEnding`: exactly one case ends the session, and a Cloudflare 403 is not it.
 enum APIError: LocalizedError {
     case invalidURL
+    /// A 401 that survived a forced token refresh. The session is gone.
     case unauthorized
+    /// 403, a WAF/captive-portal HTML body at any status, or a non-JSON payload. The credentials
+    /// were never the problem, so the SESSION IS KEPT and the surface shows stale / no-cache.
+    case infrastructure(Int, String)
+    /// 429 that outlived the retry budget.
+    case rateLimited(retryAfter: TimeInterval?)
     case http(Int, String)
     case decoding(Error)
     case transport(Error)
 
+    /// Diagnostic text, for logs and for the one case that is genuinely a message to the user
+    /// (`.unauthorized`). **Nothing else here is user-facing copy** — a surface renders
+    /// `failureReason` or a `Copy.Notice` string, never a status code or a MIME type (board 14).
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "Invalid URL."
-        case .unauthorized: return "You're signed out. Please sign in again."
+        // Verbatim board 09. Post-A2 this reads `Copy.State.signedOut` — see the report.
+        case .unauthorized: return "You\u{2019}re signed out. Sign in again to continue."
+        case let .infrastructure(code, kind): return "The server returned \(kind) (\(code))."
+        case let .rateLimited(after): return "Too many requests.\(after.map { " Retry in \(Int($0))s." } ?? "")"
         case let .http(code, body): return "Server error (\(code)). \(body)"
         case let .decoding(err): return "Couldn't read the server response. \(err.localizedDescription)"
         case let .transport(err): return "Network error. \(err.localizedDescription)"
         }
     }
+
+    /// The ONLY predicate any caller may use to decide whether to sign the user out.
+    var isSessionEnding: Bool {
+        if case .unauthorized = self { return true }
+        return false
+    }
+
+    /// The short, non-technical reason a Sync-status row renders. Never a status code (board 14).
+    var failureReason: String {
+        switch self {
+        case .unauthorized: return "Signed out"
+        case .rateLimited: return "Rate limited"
+        case let .transport(err):
+            switch (err as? URLError)?.code {
+            case .timedOut: return "Timed out"
+            default: return "No connection"
+            }
+        case .infrastructure, .http, .decoding, .invalidURL: return "Server error"
+        }
+    }
+}
+
+/// The search route's full response: results plus the two honesty fields board 07 needs.
+struct SearchResponse: Sendable {
+    let franchises: [FranchiseSummary]
+    /// The query the server actually searched, when it silently corrected ours.
+    let correctedQuery: String?
+    /// Per-catalogue outcome — `ok` / `failed` / `disabled`. A catalogue that FAILED is not a
+    /// catalogue with no matches.
+    let sources: [String: String]?
 }
 
 extension CharacterSet {
@@ -36,158 +83,334 @@ extension CharacterSet {
     }()
 }
 
+/// Coalesces concurrent token refreshes into ONE network call, and reuses its result for a short
+/// window afterwards so a burst of 401s (six parallel requests on a cold launch) cannot become a
+/// refresh storm.
+actor TokenRefresher {
+    /// Long enough to cover one screen's fan-out, short enough that a genuinely new 401 refetches.
+    private static let reuseWindow: TimeInterval = 3
+
+    private var inFlight: Task<String?, Never>?
+    private var lastToken: String?
+    private var lastAt: Date?
+
+    func token(from provider: TokenProvider) async -> String? {
+        if let lastAt, Date().timeIntervalSince(lastAt) < TokenRefresher.reuseWindow { return lastToken }
+        if let inFlight { return await inFlight.value }
+        let task = Task { await provider.refreshedToken() }
+        inFlight = task
+        let value = await task.value
+        inFlight = nil
+        lastToken = value
+        lastAt = Date()
+        return value
+    }
+}
+
+/// Bounded, jittered backoff. Two retries add at most ~1.6 s to a failing request, so a skeleton
+/// can never hang on a flaky upstream — and a request that will fail, fails inside the 15 s budget.
+enum RetryPolicy {
+    static let maxRetries = 2
+    private static let base: [TimeInterval] = [0.4, 1.2]
+
+    /// `attempt` is 1-based (the delay BEFORE retry #1). ±20 % jitter de-synchronises a fan-out.
+    static func delay(attempt: Int) -> TimeInterval {
+        let d = base[min(max(attempt, 1), base.count) - 1]
+        return d * Double.random(in: 0.8...1.2)
+    }
+
+    /// `Retry-After` in seconds or as an HTTP-date, clamped so a hostile header cannot stall the UI.
+    static func retryAfter(_ header: String?) -> TimeInterval? {
+        guard let header = header?.trimmingCharacters(in: .whitespaces), !header.isEmpty else { return nil }
+        if let seconds = TimeInterval(header) { return min(max(seconds, 0), 8) }
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone(identifier: "GMT")
+        fmt.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = fmt.date(from: header) else { return nil }
+        return min(max(date.timeIntervalSinceNow, 0), 8)
+    }
+}
+
 // URLSession-backed client implementing every endpoint in the API contract.
 final class APIClient: @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let tokenProvider: TokenProvider
+    private let refresher = TokenRefresher()
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
+    /// Owned, not `.shared`: the default 60 s request timeout means a black-holed upstream leaves a
+    /// skeleton on screen for a minute. 15 s bounds the failure; the frame moves on.
+    private static func makeSession() -> URLSession {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
+        config.waitsForConnectivity = false
+        config.httpAdditionalHeaders = ["Accept": "application/json"]
+        return URLSession(configuration: config)
+    }
+
     init(baseURL: URL = AppConfig.apiBaseURL,
          tokenProvider: TokenProvider,
-         session: URLSession = .shared) {
+         session: URLSession? = nil) {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
-        self.session = session
+        self.session = session ?? APIClient.makeSession()
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
     }
 
     // MARK: - Endpoints
+    //
+    // Every call states its own retryability. It is a required argument, not a default, because
+    // exactly one endpoint in this app is unsafe to replay (`/me/opened`) and the next endpoint
+    // someone adds must make that decision consciously.
 
     func health() async throws -> OKResponse {
-        try await request("/health", auth: false)
+        try await request("/health", auth: false, idempotent: true)
     }
 
     func trending(limit: Int = 30) async throws -> [FranchiseSummary] {
-        let res: FranchiseListResponse = try await request("/franchises/trending?limit=\(limit)")
+        let res: FranchiseListResponse = try await request("/franchises/trending?limit=\(limit)", idempotent: true)
         return res.franchises
     }
 
-    func search(query: String) async throws -> [FranchiseSummary] {
+    /// The full search response, including what the server corrected and which catalogue failed.
+    /// `exact` opts out of the server's spell-correction.
+    func search(query: String, exact: Bool = false) async throws -> SearchResponse {
         // .urlQueryAllowed leaves `&`, `+`, and `=` unescaped, which corrupts the q parameter
         // (searching "X & Y" truncated at the ampersand). Escape the value strictly.
         let q = query.addingPercentEncoding(withAllowedCharacters: .strictQueryValueAllowed) ?? ""
-        let res: FranchiseListResponse = try await request("/search?q=\(q)")
-        return res.franchises
+        let res: SearchEnvelope = try await request("/search?q=\(q)" + (exact ? "&exact=1" : ""), idempotent: true)
+        return SearchResponse(franchises: res.franchises, correctedQuery: res.correctedQuery, sources: res.sources)
+    }
+
+    /// Results-only convenience for callers that do not render the honesty fields.
+    ///
+    /// A bare `search(query:)` resolves to THIS overload (Swift prefers the candidate that needs no
+    /// defaulted arguments). To get the full `SearchResponse`, pass `exact:` explicitly or annotate
+    /// the result — `let res: SearchResponse = try await api.search(query: q, exact: false)`.
+    func search(query: String) async throws -> [FranchiseSummary] {
+        try await search(query: query, exact: false).franchises
     }
 
     func franchise(id: String) async throws -> Franchise {
         let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        return try await request("/franchises/\(encoded)")
+        return try await request("/franchises/\(encoded)", idempotent: true)
     }
 
     func library() async throws -> LibraryResponse {
-        try await request("/me/library")
+        try await request("/me/library", idempotent: true)
     }
 
     @discardableResult
     func subscribe(franchiseId: String, status: WatchStatus? = nil) async throws -> OKResponse {
+        // A server-side upsert: replaying it lands on the same row with the same status.
         try await request("/me/subscriptions", method: "POST",
-                          body: SubscribeBody(franchiseId: franchiseId, status: status))
+                          body: SubscribeBody(franchiseId: franchiseId, status: status),
+                          idempotent: true)
     }
 
     @discardableResult
     func setStatus(franchiseId: String, status: WatchStatus) async throws -> OKResponse {
         let encoded = franchiseId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? franchiseId
         return try await request("/me/subscriptions/\(encoded)", method: "PATCH",
-                                 body: StatusBody(status: status))
+                                 body: StatusBody(status: status), idempotent: true)
     }
 
     @discardableResult
     func unsubscribe(franchiseId: String) async throws -> OKResponse {
         let encoded = franchiseId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? franchiseId
-        return try await request("/me/subscriptions/\(encoded)", method: "DELETE")
+        return try await request("/me/subscriptions/\(encoded)", method: "DELETE", idempotent: true)
     }
 
     @discardableResult
     func setProgress(mediaId: Int, episodes: Int) async throws -> OKResponse {
+        // Absolute value, not a delta — replaying it is a no-op.
         try await request("/me/progress", method: "PUT",
-                          body: ProgressBody(mediaId: mediaId, episodes: episodes))
+                          body: ProgressBody(mediaId: mediaId, episodes: episodes), idempotent: true)
     }
 
     @discardableResult
     func markOpened() async throws -> OpenedResponse {
-        try await request("/me/opened", method: "POST")
+        // NOT retryable: it stamps `lastOpenedAt` and returns the PREVIOUS value. A replay would
+        // return "now" and destroy "since you were last here" — the recap's whole premise.
+        try await request("/me/opened", method: "POST", idempotent: false)
     }
 
     // MARK: - Core request machinery
 
+    /// Decoded shape of `/search`. Mirrors the server's `FranchiseListResponse`; every honesty
+    /// field is optional so an older server still decodes.
+    private struct SearchEnvelope: Decodable {
+        let franchises: [FranchiseSummary]
+        let correctedQuery: String?
+        let originalQuery: String?
+        let sources: [String: String]?
+    }
+
     private func request<Response: Decodable>(
         _ path: String,
         method: String = "GET",
-        auth: Bool = true
+        auth: Bool = true,
+        idempotent: Bool
     ) async throws -> Response {
-        try await send(path: path, method: method, body: Optional<Data>.none, auth: auth)
+        try await send(path: path, method: method, body: nil, auth: auth, idempotent: idempotent)
     }
 
     private func request<Response: Decodable, Body: Encodable>(
         _ path: String,
         method: String,
         body: Body,
-        auth: Bool = true
+        auth: Bool = true,
+        idempotent: Bool
     ) async throws -> Response {
         let data: Data
         do { data = try encoder.encode(body) }
         catch { throw APIError.decoding(error) }
-        return try await send(path: path, method: method, body: data, auth: auth)
+        return try await send(path: path, method: method, body: data, auth: auth, idempotent: idempotent)
     }
 
     // Failure diagnostics land in the unified log (`log stream --predicate 'subsystem ==
-    // "com.anitrack.app"'`) so "the app says unreachable" is attributable to a concrete cause.
+    // "com.anitrack.app"'`) so "the app says unreachable" is attributable to a concrete cause —
+    // and so single-flight refresh and retry are verifiable without a UI.
     private static let log = Logger(subsystem: "com.anitrack.app", category: "api")
 
+    /// The whole transport state machine.
+    ///
+    /// Exactly one RESPONSE path throws `.unauthorized` — a 401 that survived a forced refresh.
+    /// The only other site is the pre-flight guard below, which fires when there is no token to
+    /// send at all and no request is ever made. **403 is on neither.**
     private func send<Response: Decodable>(
         path: String,
         method: String,
         body: Data?,
-        auth: Bool
+        auth: Bool,
+        idempotent: Bool
     ) async throws -> Response {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
-        var req = URLRequest(url: url)
-        req.httpMethod = method
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let body {
-            req.httpBody = body
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        }
-        if auth {
-            if let token = await tokenProvider.currentToken() {
+
+        var attempt = 0            // retries consumed
+        var refreshed = false      // the one forced token refresh this request is allowed
+        var forcedToken: String?   // set by that refresh, so the retry does not re-read the cache
+
+        while true {
+            var req = URLRequest(url: url)
+            req.httpMethod = method
+            req.setValue("application/json", forHTTPHeaderField: "Accept")
+            if let body {
+                req.httpBody = body
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            }
+            var sentToken: String?
+            if auth {
+                let resolved: String?
+                if let forcedToken { resolved = forcedToken } else { resolved = await tokenProvider.currentToken() }
+                guard let token = resolved else {
+                    APIClient.log.error("\(method) \(path): no auth token available (signed out or token fetch failed)")
+                    throw APIError.unauthorized
+                }
+                sentToken = token
                 req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            } else {
-                APIClient.log.error("\(method) \(path): no auth token available (signed out or token fetch failed)")
+            }
+
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await session.data(for: req)
+            } catch {
+                // A request cancelled by the next keystroke is superseded, never retried.
+                if (error as? URLError)?.code == .cancelled { throw APIError.transport(error) }
+                if idempotent, attempt < RetryPolicy.maxRetries {
+                    attempt += 1
+                    let delay = RetryPolicy.delay(attempt: attempt)
+                    APIClient.log.error("retry scheduled attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=0")
+                    try await Task.sleep(for: .seconds(delay))
+                    continue
+                }
+                APIClient.log.error("\(method) \(url.absoluteString): transport error: \(error)")
+                throw APIError.transport(error)
+            }
+
+            guard let http = response as? HTTPURLResponse else {
+                throw APIError.infrastructure(-1, "no-http-response")
+            }
+            let status = http.statusCode
+            let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+
+            // 1 — 401: refresh ONCE, then retry immediately. The retry does not consume the
+            // backoff budget: a stale token is not a flaky network. This is the ONLY branch in the
+            // client that ends a session.
+            if status == 401 {
+                if auth, !refreshed {
+                    refreshed = true
+                    APIClient.log.error("auth.refresh begin")
+                    let fresh = await refresher.token(from: tokenProvider)
+                    let changed = fresh != nil && fresh != sentToken
+                    APIClient.log.error("auth.refresh end(changed:\(changed))")
+                    if changed {
+                        forcedToken = fresh
+                        continue
+                    }
+                }
+                APIClient.log.error("unauthorized after refresh")
                 throw APIError.unauthorized
             }
-        }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: req)
-        } catch {
-            APIClient.log.error("\(method) \(url.absoluteString): transport error: \(error)")
-            throw APIError.transport(error)
-        }
+            // 2 — 403 is INFRASTRUCTURE, never a sign-out. A Cloudflare WAF challenge says nothing
+            // about the user's session; signing them out on it is the 2026-08-22 regression.
+            if status == 403 {
+                APIClient.log.error("infrastructure status=403 contentType=\(contentType, privacy: .public)")
+                throw APIError.infrastructure(403, contentType.isEmpty ? "forbidden" : contentType)
+            }
 
-        guard let http = response as? HTTPURLResponse else {
-            throw APIError.http(-1, "No HTTP response")
-        }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            APIClient.log.error("\(method) \(path): HTTP \(http.statusCode) (unauthorized)")
-            throw APIError.unauthorized
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
-            APIClient.log.error("\(method) \(path): HTTP \(http.statusCode): \(bodyText, privacy: .public)")
-            throw APIError.http(http.statusCode, bodyText)
-        }
+            // 3 — an HTML body at ANY status (captive portal, WAF interstitial, a 200 sign-in page)
+            // is an infrastructure failure, not a decode failure.
+            if isHTML(data: data, contentType: contentType) {
+                APIClient.log.error("infrastructure status=\(status) contentType=\(contentType.isEmpty ? "html" : contentType, privacy: .public)")
+                throw APIError.infrastructure(status, "html")
+            }
 
-        do {
-            return try decoder.decode(Response.self, from: data)
-        } catch {
-            APIClient.log.error("\(method) \(path): decoding failed: \(error)")
-            throw APIError.decoding(error)
+            // 4 — 429 and 5xx are worth one or two more attempts.
+            if status == 429 || (500...504).contains(status) {
+                let after = status == 429 ? RetryPolicy.retryAfter(http.value(forHTTPHeaderField: "Retry-After")) : nil
+                if idempotent, attempt < RetryPolicy.maxRetries {
+                    attempt += 1
+                    let delay = after ?? RetryPolicy.delay(attempt: attempt)
+                    APIClient.log.error("retry scheduled attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=\(status)")
+                    try await Task.sleep(for: .seconds(delay))
+                    continue
+                }
+                if status == 429 { throw APIError.rateLimited(retryAfter: after) }
+                let bodyText = String(data: data, encoding: .utf8) ?? ""
+                APIClient.log.error("\(method) \(path): HTTP \(status): \(bodyText, privacy: .public)")
+                throw APIError.http(status, bodyText)
+            }
+
+            guard (200..<300).contains(status) else {
+                let bodyText = String(data: data, encoding: .utf8) ?? ""
+                APIClient.log.error("\(method) \(path): HTTP \(status): \(bodyText, privacy: .public)")
+                throw APIError.http(status, bodyText)
+            }
+
+            do {
+                return try decoder.decode(Response.self, from: data)
+            } catch {
+                APIClient.log.error("\(method) \(path): decoding failed: \(error)")
+                throw APIError.decoding(error)
+            }
         }
+    }
+
+    /// HTML by declared type, or by the first non-whitespace byte. Cheap, and it catches the
+    /// proxies that serve an interstitial as `text/plain`.
+    private func isHTML(data: Data, contentType: String) -> Bool {
+        if contentType.contains("text/html") { return true }
+        guard let first = data.first(where: { !($0 == 0x20 || $0 == 0x0a || $0 == 0x0d || $0 == 0x09) }) else {
+            return false
+        }
+        return first == UInt8(ascii: "<")
     }
 }
