@@ -15,7 +15,7 @@ final class AppModel {
     // Calendar feed span, in local days either side of today.
     static let scheduleBack = -7
     static let scheduleAhead = 14
-    static let undoSeconds: Double = 5
+    static let undoSeconds: Double = 6
     static let errorSeconds: Double = 4
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
     static let recentsKey = "recentSearches"
@@ -37,6 +37,8 @@ final class AppModel {
     private(set) var pendingAdds: Set<String> = []
     var prevOpenedAt: Int64 = 0
     var loading = true
+    /// True once the cold-launch splash has left and Today is actually visible — the recap waits for it.
+    var surfaceReady = false
     var loadError = false
 
     // Discover/search.
@@ -729,7 +731,8 @@ final class AppModel {
     /// Mark the releasing part of a franchise caught up (PUT /me/progress {mediaId, airedEpisodes}).
     func markCaughtUp(_ franchiseId: String) {
         guard let f = franchise(id: franchiseId), let part = f.releasingPart else { return }
-        Haptics.success()
+        let milestone = !part.isReleasing && part.totalEpisodes > 0 && part.airedEpisodes >= part.totalEpisodes
+        FeedbackCoordinator.fire(milestone ? .success : .commitMedium)
         let prev = part.progress
         // Through the same ceiling `setProgress` uses: asserting a number the server would clamp
         // shows "caught up" against a server that disagrees, and the next launch silently reverts.
@@ -763,6 +766,36 @@ final class AppModel {
         }
     }
 
+    /// Mark the next episode of the releasing (or resume) part as watched — the Focus card's primary
+    /// action. Local commit first, one `.commitLight`, no toast here: the card shows the result and the
+    /// view presents the Undo toast when its handoff settles (spec: mark timeline).
+    @discardableResult
+    func markNext(franchiseId: String) -> UndoState? {
+        guard let f = franchise(id: franchiseId), let part = f.releasingPart ?? f.resumePart else { return nil }
+        let target = min(part.progress + 1, part.progressCeiling)
+        guard target > part.progress else { return nil }
+        FeedbackCoordinator.fire(.commitLight)
+        let prev = part.progress
+        applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: target)
+        Task {
+            do {
+                _ = try await api.setProgress(mediaId: part.mediaId, episodes: target)
+                settleLocalProgress(mediaId: part.mediaId, episodes: target)
+            } catch {
+                applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: prev)
+                settleLocalProgress(mediaId: part.mediaId, episodes: prev)
+                showError("1 change couldn\u{2019}t sync")
+            }
+        }
+        return UndoState(mediaId: part.mediaId, franchiseId: franchiseId, prevProgress: prev, title: f.title, episode: target)
+    }
+
+    /// Present an Undo toast for a write that already happened (called when the card handoff settles).
+    func presentUndo(_ state: UndoState) {
+        undo = state
+        scheduleUndoDismissal()
+    }
+
     /// Set explicit progress for a part (detail pips / movie toggle / Library's log-next ring).
     /// The single choke point where every write is bounded to the part's episode count — an
     /// unbounded "+1" control otherwise walks progress off the end of a season (see
@@ -770,9 +803,9 @@ final class AppModel {
     func setProgress(franchiseId: String, mediaId: Int, episodes: Int) {
         let part = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }
         let clamped = min(max(0, episodes), part?.progressCeiling ?? .max)
-        // Soft, refined tick for per-episode / movie watched toggles (distinct from catch-up's success).
-        Haptics.impact(.soft)
         let prev = part?.progress
+        // One watch fact → commitLight; a contiguous range → commitMedium (spec: haptic vocabulary).
+        FeedbackCoordinator.fire(abs(clamped - (prev ?? clamped)) > 1 ? .commitMedium : .commitLight)
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
         Task {
             do {

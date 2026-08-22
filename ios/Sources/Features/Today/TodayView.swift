@@ -1,652 +1,793 @@
 import SwiftUI
 
-// "Today" tab — the v4 "Editorial" redesign (Claude Design: explorations/today-v4.html).
-//  - a full-bleed 432pt HERO under the status bar: cover art with a top-biased crop, top+bottom
-//    scrims melting into the app background, a ghost chip, a big Outfit display title, a mono-caps
-//    tracker meta line ("S2 E6 · AIRED 2H AGO · 2 TO CATCH UP"), and dual CTAs
-//    ("Mark E6 watched" = catch up to newest, + ghost "Details");
-//  - the wordmark + avatar float pinned over the hero (the greeting header is retired);
-//  - the NOW BAR: a persistent Live-Activity-style strip pinned under the wordmark — pulse dot,
-//    26pt thumb, show token, and ONE big "when" value (LIVE "OUT NOW" / NEXT countdown or day
-//    word). It mirrors `AppModel.nowBarItem` (same fact as the lock-screen Live Activity) and
-//    collapses to nothing when idle. When the bar's franchise IS a hero page's franchise, that
-//    hero's meta line drops its time fragment — one fact, one place, one size;
-//  - hero pages full-width with animated pill dots; the ladder (new → continue → up next) stays;
-//  - "Currently watching" shelf: 108×152 posters, mono captions, trailing edge fade, See-all card.
-// Source rule unchanged: anime may show clock times/relative hours; TV never does.
+// "Today" — the Focus Stack (spec v8, boards 01–03). One frame answers "what now":
+//   arrival  → Previously Recap (eyebrow "Since Tuesday" + ≤3 beats) held, then handed off;
+//   resting  → the Focus Card (the single most actionable item) + two queue rows + "View all";
+//   calm     → "Nothing changed since you were last here" + the next known event.
+// Presentation is derived from AppModel feeds (outNow → keepWatching → nextUp); the view owns
+// only timing state. One haptic per transaction; the Undo toast lands when the handoff settles.
 struct TodayView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AuthManager.self) private var auth
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
     var onSeeAllWatching: () -> Void = {}
+    var onAddShow: () -> Void = {}
 
     private var now: Int64 { appModel.now }
-    @State private var showProfile = false
-    @State private var heroPage: String?
-    @State private var nowBarPulse = false
 
-    private static let heroCap = 3
+    @State private var showProfile = false
+    @State private var showSkeleton = false
+
+    // Recap
+    @State private var recap: RecapDigest?
+    @State private var recapMode: RecapDigest.Presentation = .none
+    @State private var recapOnStage = false        // full card occupies the Focus frame
+    @State private var recapRevealed = false       // beats have finished revealing
+    @State private var recapEvaluated = false
+    @State private var recapClockStarted = false
+    @State private var recapSeenSurface = false
+
+    // Mark handoff
+    @State private var pinned: [Franchise]?        // stack snapshot held while the card shows its result
+    @State private var committedEpisode: Int?
+    @State private var pendingUndo: UndoState?
+    @State private var batchPrompt: BatchPrompt?
+
+    @Namespace private var ns
+
+    private static let queueCount = 2
     private static let shelfCap = 10
-    private static let heroHeight: CGFloat = 432
-    /// Extra art height beyond the hero window — the crop shows the image's upper region
-    /// (faces usually live in a poster's top third), standing in for the mock's hand-tuned focus.
-    private static let heroCropOverflow: CGFloat = 80
+
+    // MARK: - Body
 
     var body: some View {
-        GeometryReader { geo in
-            let topInset = geo.safeAreaInsets.top
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if appModel.loading && appModel.library.isEmpty {
-                        Loader().padding(.top, topInset + 60)
-                    } else if appModel.loadError && appModel.libraryEmpty {
-                        EmptyStateView(
-                            title: "Couldn't load your shows",
-                            message: "The server couldn't be reached. Check your connection and try again.",
-                            ctaLabel: "Retry",
-                            onCta: { Task { await appModel.reload() } }
-                        )
-                        .padding(.top, topInset + 40)
-                    } else if appModel.libraryEmpty && !appModel.loading {
-                        EmptyStateView(
-                            title: "Welcome to Previously.",
-                            message: "Your airing-first tracker. Add shows you're watching and we'll tell you exactly what dropped and what's next. Use the Add tab to get started."
-                        )
-                        .padding(.top, topInset + 40)
-                    } else if heroItems.isEmpty && shelf.isEmpty && !appModel.loading {
-                        EmptyStateView(title: "You're all caught up", message: allCaughtUpBody)
-                            .padding(.top, topInset + 40)
-                    } else {
-                        if appModel.loadError {
-                            RetryBanner { Task { await appModel.reload() } }
-                                .padding(.horizontal, Theme.Space.gutter)
-                                // Clear the pinned now bar when it's present.
-                                .padding(.top, topInset + (appModel.nowBarItem == nil ? 8 : 64))
-                        }
-                        heroSection
-                        if heroItems.count > 1 { heroDots.padding(.top, 10) }
-                        if !shelf.isEmpty { shelfSection.padding(.top, 22) }
-                    }
-                }
-                .padding(.bottom, 140)
-                .animation(.uiGentle, value: appModel.loading)
-                .animation(.uiGentle, value: appModel.loadError)
-                .animation(.uiSmooth, value: heroItems.map(\.franchise.id))
-                .animation(.uiSmooth, value: shelf.map(\.id))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                content
             }
-            .ignoresSafeArea(edges: .top)
-            .scrollIndicators(.hidden)
-            .scrollContentBackground(.hidden)
-            .background(AppBackground())
-            .overlay(alignment: .top) {
-                VStack(alignment: .leading, spacing: 10) {
-                    brandHeader
-                    if let item = appModel.nowBarItem,
-                       let f = appModel.franchise(id: item.franchiseId) {
-                        nowBar(f, item: item)
-                            .padding(.horizontal, Theme.Space.gutter)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-                }
-                .padding(.top, 10)
-                .animation(.uiSmooth, value: appModel.nowBarItem)
-            }
-            .refreshable {
-                await appModel.reload()
-                if !appModel.loadError { Haptics.impact(.light) }
-            }
+            .padding(.bottom, 120)
         }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
+        .scrollIndicators(.hidden)
+        .background(ThemeColor.canvas.ignoresSafeArea())
+        .refreshable { await appModel.reload() }
         .sheet(isPresented: $showProfile) { ProfileView() }
+        .task {
+            try? await Task.sleep(for: .milliseconds(240))
+            if appModel.loading && appModel.library.isEmpty { showSkeleton = true }
+        }
+        .onChange(of: appModel.loading) { _, loading in
+            if !loading { showSkeleton = false; evaluateRecap() }
+        }
+        .onChange(of: appModel.surfaceReady) { _, _ in startRecapClock() }
+        .onAppear { evaluateRecap() }
+        .onDisappear { if recapMode == .strip { acknowledgeRecap() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background, recapMode == .strip { acknowledgeRecap() }
+        }
+        .confirmationDialog(batchPrompt?.title ?? "", isPresented: Binding(get: { batchPrompt != nil }, set: { if !$0 { batchPrompt = nil } }),
+                            titleVisibility: .visible, presenting: batchPrompt) { prompt in
+            Button(prompt.confirm) { prompt.perform() }
+            Button("Cancel", role: .cancel) {}
+        } message: { prompt in
+            Text(prompt.message)
+        }
     }
 
-    // MARK: brand header (pinned over the hero)
+    // MARK: - Header
 
-    private var brandHeader: some View {
-        HStack {
-            PreviouslyMark(width: 16, detail: .none)
-                .padding(.trailing, 2)
-            (Text("Previously") + Text(".").foregroundStyle(Theme.accent))
-                .scaledFont(19, weight: .bold)
-                .tracking(0.2)
-                .shadow(color: .black.opacity(0.6), radius: 7, y: 1)
+    private var header: some View {
+        HStack(alignment: .center) {
+            Wordmark()
             Spacer()
-            Button { showProfile = true } label: {   // navigation → silent per HIG
-                Text(auth.avatarInitial)
-                    .scaledFont(14, weight: .bold)
-                    .foregroundStyle(Theme.background)
-                    .frame(width: 34, height: 34)
-                    .background(
-                        LinearGradient(colors: [Theme.accent, Color(hex: 0xC9702E)],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing),
-                        in: Circle()
-                    )
-                    .overlay(Circle().stroke(Color.white.opacity(0.28), lineWidth: 1.5))
-                    .shadow(color: .black.opacity(0.45), radius: 7, y: 2)
-            }
-            .buttonStyle(SpringPressButtonStyle(scale: 0.92))
-        }
-        .padding(.horizontal, Theme.Space.gutter)
-    }
-
-    // MARK: now bar
-
-    /// The persistent answer to "when" — Live-Activity compact anatomy on a material plate:
-    /// [dot] [thumb] [SHOW · S2 E7 / sub-line] ──── [one big value]. The big slot always answers
-    /// *when* at the fidelity the source supports: anime gets a real countdown or OUT NOW with a
-    /// clock beneath; TV gets day words only — never a clock, never a pulse (its 17:00 UTC
-    /// instant is synthesized). Idle = not rendered at all; an ever-present "nothing airing"
-    /// strip would turn Today's calmest state into a nag.
-    private func nowBar(_ f: Franchise, item: AppModel.NowBarItem) -> some View {
-        let vm = CardModel(franchise: f, action: .none, now: now)
-        let live = item.state == .live
-        let (big, sub) = nowBarCopy(f, vm: vm, item: item)
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        return Button { onOpenDetail(f.id, "nowbar/\(f.id)") } label: {   // navigation → silent per HIG
-            HStack(spacing: 10) {
-                nowBarDot(live: live, pulses: live && vm.source == .anilist)
-                Thumb(cover: vm.cover, width: 26, height: 26, radius: 6)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(nowBarTitle(vm, live: live))
-                        .scaledFont(10, weight: .semibold, monospacedDigit: true)
-                        .tracking(0.8)
-                        .lineLimit(1)
-                        .foregroundStyle(Theme.text72)
-                    Text(sub)
-                        .scaledFont(9.5, weight: .medium, monospacedDigit: true)
-                        .tracking(0.8)
-                        .lineLimit(1)
-                        .foregroundStyle(live ? Theme.accent : Theme.text50)
-                }
-                Spacer(minLength: 10)
-                Text(big)
-                    .scaledFont(24, weight: .bold, monospacedDigit: true)
-                    .tracking(-0.5)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .foregroundStyle(Theme.accent)
-                    .contentTransition(.numericText())
-                    .animation(.uiGentle, value: big)
-            }
-            .padding(.leading, 12).padding(.trailing, 14).padding(.vertical, 9)
-            .background {
+            Button { showProfile = true } label: {
                 ZStack {
-                    shape.fill(.ultraThinMaterial)
-                    // LIVE: a whisper of accent under the stroke — tinted, not shouting.
-                    if live { shape.fill(Theme.accent.opacity(0.10)) }
+                    Circle().fill(ThemeColor.surfaceFloating)
+                    Circle().stroke(ThemeColor.stroke, lineWidth: 1)
+                    Text(initials)
+                        .type(ThemeType.metadataEmphasis)
+                        .foregroundStyle(ThemeColor.textSecondary)
                 }
+                .frame(width: 30, height: 30)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
             }
-            .overlay(shape.stroke(live ? Theme.accentBorder : Theme.hairlineStrong, lineWidth: 1))
-            .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Profile")
         }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.97))
+        .padding(.leading, 16)
+        .padding(.trailing, 9)
+        .frame(height: 52)
     }
 
-    /// Schedule's `.live` node treatment, at bar scale: a slow breath on a gradient halo
-    /// (compositor-cheap scale/opacity), frozen at rest under Reduce Motion. The halo mounts
-    /// only while pulsing, so its `onAppear` re-arms the animation on every LIVE entry.
-    private func nowBarDot(live: Bool, pulses: Bool) -> some View {
-        ZStack {
-            if pulses {
-                Circle()
-                    .fill(RadialGradient(colors: [Theme.accent.opacity(0.5), Theme.accent.opacity(0)],
-                                         center: .center, startRadius: 1, endRadius: 11))
-                    .frame(width: 22, height: 22)
-                    .scaleEffect(nowBarPulse ? 1.25 : 0.85)
-                    .opacity(nowBarPulse ? 1 : 0.6)
-                    .onAppear {
-                        nowBarPulse = false
-                        guard !reduceMotion else { return }
-                        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                            nowBarPulse = true
+    private var initials: String {
+        let name = auth.displayName.trimmingCharacters(in: .whitespaces)
+        let parts = name.split(separator: " ").prefix(2).compactMap { $0.first }
+        let s = String(parts).uppercased()
+        return s.isEmpty ? "•" : s
+    }
+
+    // MARK: - Content states
+
+    @ViewBuilder
+    private var content: some View {
+        if appModel.loading && appModel.library.isEmpty {
+            if showSkeleton { skeleton.transition(.opacity) }
+        } else if appModel.loadError && appModel.libraryEmpty {
+            stateCard(symbol: "wifi.slash", title: "Connect to load your library",
+                      message: "Your shows will appear once you’re back online.",
+                      cta: "Try again") { Task { await appModel.reload() } }
+        } else if appModel.libraryEmpty {
+            stateCard(symbol: "tv", title: "Nothing here yet",
+                      message: "Add the shows you’re watching and Today will tell you what’s next.",
+                      cta: "Add a show", action: onAddShow)
+        } else {
+            stack
+        }
+    }
+
+    private var skeleton: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 16) {
+                    SkeletonBlock(width: 80, height: 120, radius: ThemeRadius.poster)
+                    VStack(alignment: .leading, spacing: 10) {
+                        SkeletonBlock(width: 90, height: 10)
+                        SkeletonBlock(width: 180, height: 18)
+                        SkeletonBlock(width: 130, height: 12)
+                    }
+                    .padding(.top, 4)
+                }
+                SkeletonBlock(height: 48, radius: 24)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 212, alignment: .topLeading)
+            .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            ForEach(0..<2, id: \.self) { _ in
+                HStack(spacing: 12) {
+                    SkeletonBlock(width: 36, height: 54, radius: 6)
+                    VStack(alignment: .leading, spacing: 8) {
+                        SkeletonBlock(width: 160, height: 13)
+                        SkeletonBlock(width: 110, height: 10)
+                    }
+                }
+                .padding(.horizontal, 24)
+            }
+            SkeletonBlock(width: 120, height: 10).padding(.horizontal, 16).padding(.top, 8)
+            HStack(spacing: 12) {
+                ForEach(0..<3, id: \.self) { _ in SkeletonBlock(width: 104, height: 156, radius: ThemeRadius.poster) }
+            }
+            .padding(.horizontal, 16)
+        }
+        .accessibilityLabel("Loading")
+    }
+
+    private func stateCard(symbol: String, title: String, message: String, cta: String, action: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(ThemeColor.textTertiary)
+                .padding(.bottom, 4)
+            Text(title).type(ThemeType.showTitleL).foregroundStyle(ThemeColor.textPrimary)
+            Text(message).type(ThemeType.callout).foregroundStyle(ThemeColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(cta, action: action)
+                .buttonStyle(SecondaryButtonStyle2())
+                .padding(.top, 8)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous).stroke(ThemeColor.separator, lineWidth: 1))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    // MARK: - The stack
+
+    /// Actionable items, most actionable first: fresh unwatched episodes, then backlog.
+    private var liveItems: [Franchise] {
+        appModel.outNow + appModel.keepWatching
+    }
+    private var items: [Franchise] { pinned ?? liveItems }
+    private var focus: Franchise? { items.first }
+    private var queue: [Franchise] { Array(items.dropFirst().prefix(TodayView.queueCount)) }
+    private var stackIds: Set<String> { Set(items.prefix(TodayView.queueCount + 1).map(\.id)) }
+    private var updateCount: Int { appModel.outNow.count }
+    private var comingNext: Franchise? {
+        guard let f = appModel.nextUp, !stackIds.contains(f.id) else { return nil }
+        return f
+    }
+    private var shelf: [Franchise] {
+        Array(appModel.watchingShelf.filter { !stackIds.contains($0.id) }.prefix(TodayView.shelfCap))
+    }
+
+    private var stack: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if appModel.loadError {
+                staleStrip.padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+            }
+            if recapMode == .strip, !recapOnStage, let recap {
+                RecapStrip(text: recapStripText(recap)) { stageRecap() }
+                    .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                    .transition(.opacity)
+            }
+
+            // The Focus frame: recap on arrival, otherwise the card.
+            ZStack(alignment: .top) {
+                if recapOnStage, let recap {
+                    RecapCard(digest: recap, revealed: recapRevealed, now: now, ns: ns, reduceMotion: reduceMotion)
+                        .onTapGesture { handoffRecap(userAction: true) }
+                        .transition(.asymmetric(insertion: .opacity, removal: .opacity.combined(with: .scale(scale: 0.985))))
+                } else if let focus {
+                    focusCard(focus)
+                        .id(focus.id)
+                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 6)), removal: .opacity.combined(with: .scale(scale: 0.985))))
+                } else {
+                    calmCard.transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: recapOnStage)
+            .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: focus?.id)
+
+            if !recapOnStage {
+                if !queue.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(queue) { f in
+                            queueRow(f)
+                                .transition(.opacity.combined(with: .offset(y: 4)))
                         }
                     }
-            }
-            Circle()
-                .fill(live ? Theme.accent : Theme.text36)
-                .frame(width: 8, height: 8)
-                .shadow(color: live ? Theme.accent.opacity(0.7) : .clear, radius: 4)
-        }
-        .frame(width: 11, height: 11)   // layout footprint stays the dot; the halo overflows
-    }
-
-    /// "FRIEREN: BEYOND JOURNEY'S END · S2 E7" — the episode half is the drop for LIVE, the
-    /// next-to-air for NEXT.
-    private func nowBarTitle(_ vm: CardModel, live: Bool) -> String {
-        let episode = live
-            ? (vm.airedEpisodes > 0 ? "E\(vm.airedEpisodes)" : "")
-            : (vm.nextEp.map { "E\($0)" } ?? "")
-        let token = [vm.seasonToken(), episode].filter { !$0.isEmpty }.joined(separator: " ")
-        return token.isEmpty ? vm.title.uppercased() : "\(vm.title.uppercased()) · \(token)"
-    }
-
-    /// (big slot, sub-line). The big slot is ONE isolated value — never a serialized string;
-    /// the sub-line carries the supporting clause.
-    private func nowBarCopy(_ f: Franchise, vm: CardModel, item: AppModel.NowBarItem) -> (String, String) {
-        switch item.state {
-        case .live:
-            // The big slot holds a VALUE, never a status word — a display-size "OUT NOW" reads
-            // as a shouting badge. Availability lives in the small caps sub-line.
-            if vm.source == .anilist {
-                let time = Formatting.fmtTime(item.at, anchor: f.timeAnchor).uppercased()
-                let sub = ["OUT NOW", time].filter { !$0.isEmpty }.joined(separator: " · ")
-                return (vm.airedAgo.isEmpty ? "now" : vm.airedAgo, sub)
-            }
-            // TV: a whole-day fact. Several episodes landing at once is a drop, not an episode.
-            if vm.progress == 0 && vm.airedEpisodes > 1 { return ("TODAY", "SEASON DROP · OUT NOW") }
-            return ("TODAY", "NEW EPISODE · OUT NOW")
-        case .next:
-            if vm.source == .anilist {
-                let countdown = Formatting.fmtCountdown(target: item.at, now: now, anchor: f.timeAnchor)
-                let time = Formatting.fmtTime(item.at, anchor: f.timeAnchor).uppercased()
-                let dayWord: String
-                if f.dayDiff(of: item.at, now: now) == 0 {
-                    let hour = Formatting.localParts(item.at, anchor: f.timeAnchor).hour
-                    dayWord = Formatting.isEvening(hour: hour) ? "TONIGHT" : "TODAY"
-                } else {
-                    dayWord = Formatting.fmtDay(ts: item.at, now: now, anchor: f.timeAnchor).uppercased()
+                    .padding(.top, 6)
+                    .padding(.horizontal, 8)
+                    .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: queue.map(\.id))
                 }
-                return (countdown, "AIRS \(time) \(dayWord)")
+                if updateCount > TodayView.queueCount + 1 {
+                    Button("View all \(updateCount) updates", action: onSeeAllWatching)
+                        .buttonStyle(TertiaryButtonStyle2())
+                        .padding(.horizontal, 16)
+                }
+                if let next = comingNext, let part = next.releasingPart, let at = next.nextAiring(now: now) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SectionLabel(text: "Coming next").padding(.horizontal, 16)
+                        Button { onOpenDetail(next.id, "next/\(next.id)") } label: {
+                            HStack(spacing: 12) {
+                                PosterSlot(url: next.cover, width: 36, height: 54, radius: 6)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(next.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary).lineLimit(1)
+                                    Text("Episode \(part.nextEpisodeNumber ?? part.airedEpisodes + 1) · \(TemporalCopy.airs(at: at, now: now, source: next.source))")
+                                        .type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(2)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.forward").font(.system(size: 12, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
+                            }
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 68)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(RowPressStyle())
+                        .padding(.horizontal, 8)
+                    }
+                    .padding(.top, 22)
+                }
+                if !shelf.isEmpty {
+                    watchingShelf.padding(.top, 26)
+                }
             }
-            let day = vm.dayWordLong.uppercased()
-            let span = vm.relClock.map { " · IN \($0.uppercased())" } ?? ""
-            return (day.isEmpty ? "SOON" : day, "NEW EPISODE\(span)")
         }
+        .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: recapMode)
     }
 
-    private var allCaughtUpBody: String {
-        // `whenLabel` already knows the difference: anime lands at a clock time, TV lands on a
-        // day (its clock is synthesized). No source branch belongs at a formatting call site.
-        if let f = appModel.nextUp, let next = f.nextAiring(now: now) {
-            return "Nothing new since you were last here. Your next episode lands \(f.whenLabel(ts: next, now: now))."
+    private var staleStrip: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle").font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColor.warning)
+            Text("Couldn’t refresh airing dates").type(ThemeType.metadataEmphasis).foregroundStyle(ThemeColor.textPrimary)
+            Spacer()
+            Button("Retry") { Task { await appModel.reload() } }.buttonStyle(TertiaryButtonStyle2())
         }
-        return "Nothing new since you were last here."
+        .padding(.leading, 14)
+        .frame(minHeight: 44)
+        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous).stroke(ThemeColor.warning.opacity(0.35), lineWidth: 1))
+        .transition(.opacity)
     }
 
-    // MARK: hero ladder
+    // MARK: - Focus card
 
-    private enum HeroVariant {
-        case newEpisode   // ghost accent chip, full urgency
-        case resume       // quiet CONTINUE chip
-        case waiting      // quiet UP NEXT chip, no primary CTA
-    }
+    private enum FocusKind { case fresh(behind: Int), backlog(left: Int), caughtUp, waiting(at: Int64) }
 
-    /// Hero pages by priority: fresh drops (max 3) → the resume target → the next airing.
-    private var heroItems: [(franchise: Franchise, variant: HeroVariant)] {
-        let fresh = appModel.outNow.prefix(Self.heroCap)
-        if !fresh.isEmpty { return fresh.map { ($0, .newEpisode) } }
-        if let resume = appModel.keepWatching.first { return [(resume, .resume)] }
-        if let next = appModel.nextUp { return [(next, .waiting)] }
-        return []
+    private func kind(of f: Franchise) -> (FocusKind, FranchisePart)? {
+        // Evaluated on the object (not the live feed) so a pinned snapshot keeps its wording while
+        // the card shows its result.
+        if let part = f.releasingPart, now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow,
+           part.episodesBehind > 0 || appModel.justCaught.contains(f.id) {
+            return part.episodesBehind > 0 ? (.fresh(behind: part.episodesBehind), part) : (.caughtUp, part)
+        }
+        if let part = f.resumePart { return (.backlog(left: f.continueBacklog), part) }
+        if let part = f.releasingPart, let at = f.nextAiring(now: now) { return (.waiting(at: at), part) }
+        return nil
     }
 
     @ViewBuilder
-    private var heroSection: some View {
-        let items = heroItems
-        if items.count <= 1 {
-            if let item = items.first {
-                heroCard(item.franchise, variant: item.variant)
-            }
-        } else {
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
-                    ForEach(items, id: \.franchise.id) { item in
-                        heroCard(item.franchise, variant: item.variant)
-                            .containerRelativeFrame(.horizontal)
-                            .id(item.franchise.id)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.paging)
-            .scrollIndicators(.hidden)
-            .scrollPosition(id: $heroPage)
+    private func focusCard(_ f: Franchise) -> some View {
+        if let (kind, part) = kind(of: f) {
+            let nextEpisode = part.progress + 1
+            let behind: Int = {
+                if case .fresh(let b) = kind { return b }
+                if case .backlog(let l) = kind { return l }
+                return 0
+            }()
+            let committed = committedEpisode != nil && pinned?.first?.id == f.id
+            FocusCardView(
+                franchise: f,
+                eyebrow: eyebrow(kind, f: f, part: part),
+                eyebrowDot: { if case .fresh = kind { return true } else { return false } }(),
+                meta: metaLine(part: part, episode: nextEpisode),
+                line: supportLine(kind, f: f, part: part),
+                ctaEpisode: committed ? committedEpisode : (behind > 0 ? nextEpisode : nil),
+                committed: committed,
+                behind: behind,
+                ns: ns,
+                onOpen: { onOpenDetail(f.id, "focus/\(f.id)") },
+                onMark: { mark(f) },
+                onMarkThrough: { n in promptBatch(f, part: part, through: n) },
+                onMarkAll: { promptBatch(f, part: part, through: part.progressCeiling) },
+                onViewEpisodes: { onOpenDetail(f.id, "focus/\(f.id)") }
+            )
         }
     }
 
-    // Animated pill dots — the active page's dot stretches into a small capsule.
-    private var heroDots: some View {
-        HStack(spacing: 5) {
-            ForEach(heroItems, id: \.franchise.id) { item in
-                let on = (heroPage ?? heroItems.first?.franchise.id) == item.franchise.id
-                Capsule()
-                    .fill(on ? Theme.accent : Theme.text28)
-                    .frame(width: on ? 14 : 5, height: 5)
+    private func eyebrow(_ kind: FocusKind, f: Franchise, part: FranchisePart) -> String {
+        switch kind {
+        case .fresh(let behind):
+            if behind > 1 { return "\(behind) episodes behind" }
+            if let last = part.lastAiredAt { return TemporalCopy.aired(at: last, now: now, source: f.source) }
+            return "New episode"
+        case .backlog: return "Continue"
+        case .caughtUp: return "Caught up"
+        case .waiting: return "Up next"
+        }
+    }
+
+    private func metaLine(part: FranchisePart, episode: Int) -> String {
+        if part.isMovie { return part.label }
+        let season = part.kind == .season ? part.label : part.label
+        return "\(season) · Episode \(episode)"
+    }
+
+    private func supportLine(_ kind: FocusKind, f: Franchise, part: FranchisePart) -> String? {
+        switch kind {
+        case .fresh(let behind):
+            if behind == 1 { return "Caught up after this episode" }
+            if let last = part.lastAiredAt { return "Latest " + TemporalCopy.aired(at: last, now: now, source: f.source).lowercased() }
+            return nil
+        case .backlog(let left):
+            return left == 1 ? "Last episode of the season" : "\(left) episodes left"
+        case .caughtUp:
+            if let at = part.nextAiringAt, at > now { return TemporalCopy.airs(at: at, now: now, source: f.source) }
+            return nil
+        case .waiting(let at):
+            return TemporalCopy.airs(at: at, now: now, source: f.source)
+        }
+    }
+
+    // MARK: - Calm card
+
+    private var calmCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "Today")
+            Text("Nothing changed since you were last here")
+                .type(ThemeType.showTitleM).foregroundStyle(ThemeColor.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let next = appModel.nextUp, let at = next.nextAiring(now: now) {
+                Text("\(next.title) · \(TemporalCopy.airs(at: at, now: now, source: next.source))")
+                    .type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(2)
+            } else {
+                Text("No dates announced for what you’re watching")
+                    .type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous).stroke(ThemeColor.separator, lineWidth: 1))
+    }
+
+    // MARK: - Queue rows
+
+    private func queueRow(_ f: Franchise) -> some View {
+        Button { onOpenDetail(f.id, "queue/\(f.id)") } label: {
+            HStack(spacing: 12) {
+                PosterSlot(url: f.cover, width: 36, height: 54, radius: 6)
+                    .matchedGeometryEffect(id: "poster/\(f.id)", in: ns)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary).lineLimit(1)
+                    Text(queueMeta(f)).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.forward").font(.system(size: 12, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
+            }
+            .padding(.horizontal, 8)
+            .frame(minHeight: 68)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(RowPressStyle())
+    }
+
+    private func queueMeta(_ f: Franchise) -> String {
+        guard let (kind, part) = kind(of: f) else { return "" }
+        let ep = "Episode \(part.progress + 1)"
+        switch kind {
+        case .fresh(let behind):
+            if behind > 1 { return "\(ep) · \(behind) behind" }
+            if let last = part.lastAiredAt { return "\(ep) · \(TemporalCopy.aired(at: last, now: now, source: f.source))" }
+            return ep
+        case .backlog(let left): return "\(ep) · \(left) left"
+        case .caughtUp: return "Caught up"
+        case .waiting(let at): return TemporalCopy.airs(at: at, now: now, source: f.source)
+        }
+    }
+
+    // MARK: - Watching shelf
+
+    private var watchingShelf: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel(text: "Watching")
+                Spacer()
+                Button("See all", action: onSeeAllWatching).buttonStyle(TertiaryButtonStyle2())
+                    .frame(height: 20)
+            }
+            .padding(.horizontal, 16)
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(shelf) { f in
+                        Button { onOpenDetail(f.id, "shelf/\(f.id)") } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                PosterSlot(url: f.cover, width: 104, height: 156)
+                                Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary)
+                                    .lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                                Text(shelfCaption(f)).type(ThemeType.caption).foregroundStyle(ThemeColor.textTertiary).lineLimit(1)
+                            }
+                            .frame(width: 104, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+        }
+    }
+
+    private func shelfCaption(_ f: Franchise) -> String {
+        switch appModel.shelfState(of: f) {
+        case .newEpisode: return "New episode"
+        case .backlog:
+            if let p = f.resumePart { return "Episode \(p.progress + 1) next" }
+            return "Continue"
+        case .airingWait:
+            if let at = f.nextAiring(now: now) { return TemporalCopy.airsCompact(at: at, now: now, source: f.source) }
+            return "Caught up"
+        case .premiereSoon:
+            return TemporalCopy.returns(at: appModel.nextPremiere(of: f), now: now, source: f.source)
+        case nil: return ""
+        }
+    }
+
+    // MARK: - Mark timeline
+
+    private func mark(_ f: Franchise) {
+        guard committedEpisode == nil else { return }
+        let snapshot = items
+        guard let undo = appModel.markNext(franchiseId: f.id) else { return }
+        pinned = snapshot
+        pendingUndo = undo
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
+            committedEpisode = undo.episode
+        }
+        if recapMode == .strip { acknowledgeRecap() }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            let settle = ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)
+            withAnimation(settle) {
+                pinned = nil
+                committedEpisode = nil
+            } completion: {
+                if let undo = pendingUndo { appModel.presentUndo(undo); pendingUndo = nil }
+            }
+        }
+    }
+
+    private struct BatchPrompt: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let confirm: String
+        let perform: () -> Void
+    }
+
+    private func promptBatch(_ f: Franchise, part: FranchisePart, through: Int) {
+        let count = through - part.progress
+        guard count > 0 else { return }
+        let all = through >= part.progressCeiling
+        batchPrompt = BatchPrompt(
+            title: all ? "Mark all \(count) episodes as watched?" : "Mark through Episode \(through)?",
+            message: "\(f.title) · \(part.label). You can undo this for a few seconds.",
+            confirm: all ? "Mark \(count) episodes" : "Mark \(count) episodes",
+            perform: {
+                if all { appModel.markCaughtUp(f.id) }
+                else { appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: through) }
+            }
+        )
+    }
+
+    // MARK: - Recap
+
+    /// Computes the digest as soon as the library is in — under the splash if need be — and puts
+    /// the full recap on stage immediately, so it is the first thing in the Focus frame. The
+    /// reveal/hold clock only starts once the surface is actually visible.
+    private func evaluateRecap() {
+        guard !appModel.loading, !recapEvaluated, !appModel.library.isEmpty else { return }
+        recapEvaluated = true
+        let demo = RecapState.demo
+        let since = demo ? now - 4 * Formatting.D : appModel.prevOpenedAt
+        guard let digest = RecapDigest.build(library: appModel.library, since: since, now: now, keepWatching: appModel.keepWatching) else {
+            recap = nil; recapMode = .none; return
+        }
+        let mode = demo ? .full : digest.presentation(absence: now - since, lastFullRecapAt: RecapState.lastFullRecapAt,
+                                                      acknowledgedID: RecapState.acknowledgedID, now: now, enteredByDeepLink: false)
+        recap = digest
+        recapMode = mode
+        if mode == .full {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { recapOnStage = true; recapRevealed = false }
+            startRecapClock()
+        }
+    }
+
+    /// The strip was tapped: bring the full recap on stage and run its clock.
+    private func stageRecap() {
+        guard recap != nil, !recapOnStage else { return }
+        recapRevealed = false
+        recapClockStarted = false
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) { recapOnStage = true }
+        startRecapClock()
+    }
+
+    /// 0–460 ms reveal · hold · handoff at ≈2,060 ms (Reduce Motion: no stagger, 1,600 ms hold).
+    /// On a cold launch the clock starts at the splash handoff, so the beats reveal while the
+    /// splash crossfades away and the hold is counted from the first clean frame.
+    private func startRecapClock() {
+        guard recapOnStage, appModel.surfaceReady, !recapClockStarted else { return }
+        recapClockStarted = true
+        let coldLaunch = !recapSeenSurface
+        recapSeenSurface = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(60))
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)) { recapRevealed = true }
+            let hold = (reduceMotion ? 1600 : 2000) + (coldLaunch ? 460 : 0)
+            try? await Task.sleep(for: .milliseconds(hold))
+            handoffRecap(userAction: false)
+        }
+    }
+
+    private func handoffRecap(userAction: Bool) {
+        guard recapOnStage else { return }
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
+            recapOnStage = false
+        } completion: {
+            acknowledgeRecap()
+        }
+    }
+
+    private func acknowledgeRecap() {
+        guard let recap else { return }
+        if !RecapState.demo {
+            RecapState.acknowledgedID = recap.digestID
+            if recapMode == .full { RecapState.lastFullRecapAt = now }
+        }
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) { recapMode = .none }
+    }
+
+    private func recapStripText(_ recap: RecapDigest) -> String {
+        let aired = recap.beats.reduce(0) { acc, b in
+            if case .episodesAired(let n) = b.kind { return acc + n } else { return acc }
+        }
+        let since = TemporalCopy.since(recap.since, now: now).lowercased()
+        if aired > 0 { return "\(aired == 1 ? "1 episode" : "\(aired) episodes") aired \(since)" }
+        return "\(recap.beats.count) updates \(since)"
+    }
+}
+
+extension RecapState {
+    /// `-recapDemo 1` launch argument: force the full recap every launch (captures / review).
+    static var demo: Bool { UserDefaults.standard.bool(forKey: "recapDemo") }
+}
+
+// MARK: - Wordmark
+
+/// "Previously." — Outfit SemiBold 20, the full stop in accent. Static unless a live indicator
+/// is earned (an exact-time episode is airing right now).
+struct Wordmark: View {
+    var body: some View {
+        (Text("Previously").foregroundStyle(ThemeColor.textPrimary) + Text(".").foregroundStyle(ThemeColor.accent))
+            .type(ThemeType.brandWordmark)
+            .accessibilityLabel("Previously")
+    }
+}
+
+// MARK: - Focus card view
+
+struct FocusCardView: View {
+    let franchise: Franchise
+    let eyebrow: String
+    let eyebrowDot: Bool
+    let meta: String
+    let line: String?
+    let ctaEpisode: Int?
+    let committed: Bool
+    let behind: Int
+    let ns: Namespace.ID
+    let onOpen: () -> Void
+    let onMark: () -> Void
+    let onMarkThrough: (Int) -> Void
+    let onMarkAll: () -> Void
+    let onViewEpisodes: () -> Void
+
+    @State private var tint: Color?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Accessibility sizes stack the poster above the text instead of beside it (spec: Dynamic Type).
+    private var isAX: Bool { typeSize.isAccessibilitySize }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button(action: onOpen) {
+                let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                                  : AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+                layout {
+                    PosterSlot(url: franchise.cover, width: 80, height: 120)
+                        .matchedGeometryEffect(id: "poster/\(franchise.id)", in: ns)
+                    VStack(alignment: .leading, spacing: 5) {
+                        SectionLabel(text: eyebrow, dot: eyebrowDot, tint: eyebrowDot ? ThemeColor.accent : ThemeColor.textTertiary)
+                        Text(franchise.title)
+                            .type(ThemeType.showTitleL)
+                            .foregroundStyle(ThemeColor.textPrimary)
+                            .lineLimit(isAX ? 4 : 2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(meta)
+                            .type(ThemeType.metadataEmphasis)
+                            .foregroundStyle(ThemeColor.textSecondary)
+                            .contentTransition(.numericText())
+                            .lineLimit(2)
+                        if let line {
+                            Text(line).type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary).lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, isAX ? 0 : 2)
+                    if !isAX { Spacer(minLength: 0) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityHint("Opens the show")
+
+            if let ctaEpisode {
+                cta(episode: ctaEpisode)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 212, alignment: .topLeading)
+        .background(ArtAdaptiveGround(tint: tint))
+        .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous).stroke(ThemeColor.stroke, lineWidth: 1))
+        .task(id: franchise.cover) {
+            tint = await PaletteCache.shared.resolve(url: franchise.cover, maxPixel: 360)
+        }
+    }
+
+    @ViewBuilder
+    private func cta(episode: Int) -> some View {
+        let label = HStack(spacing: 8) {
+            if committed {
+                Image(systemName: "checkmark").font(.system(size: 14, weight: .bold))
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+            Text(committed ? "Episode \(episode) watched" : "Mark as watched")
+                .contentTransition(.interpolate)
+            if behind > 1 && !committed {
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).opacity(0.7)
             }
         }
         .frame(maxWidth: .infinity)
-        .animation(.uiSnappy, value: heroPage)
-    }
+        .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: committed)
 
-    // MARK: hero card
-
-    private func heroCard(_ f: Franchise, variant: HeroVariant) -> some View {
-        let vm = CardModel(franchise: f, action: .none, now: now)
-        return Button { onOpenDetail(f.id, "hero/\(f.id)") } label: {
-            ZStack(alignment: .bottomLeading) {
-                // Cover art, top-biased crop: the art window is taller than the hero and pinned to
-                // its top edge, so the visible region favors the poster's upper third. Hung off
-                // Color.clear so a `.fill` image can never inflate layout (learned the hard way).
-                Color.clear
-                    .frame(height: Self.heroHeight)
-                    .frame(maxWidth: .infinity)
-                    .overlay(alignment: .top) {
-                        RemoteImageView(url: vm.cover ?? vm.banner, maxPixel: 1100)
-                            .frame(height: Self.heroHeight + Self.heroCropOverflow)
-                    }
-                    .clipped()
-                    .overlay {
-                        LinearGradient(
-                            stops: [
-                                .init(color: Theme.background.opacity(0.55), location: 0),
-                                .init(color: .clear, location: 0.28),
-                            ],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    }
-                    .overlay {
-                        LinearGradient(
-                            stops: [
-                                .init(color: .clear, location: 0.44),
-                                .init(color: Theme.background.opacity(0.62), location: 0.72),
-                                .init(color: Theme.background, location: 1),
-                            ],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    }
-
-                VStack(alignment: .leading, spacing: 0) {
-                    heroChip(variant)
-                    Text(vm.title)
-                        .scaledFont(34, weight: .bold)
-                        .tracking(-1.2)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .foregroundStyle(Theme.textPrimary)
-                        .shadow(color: .black.opacity(0.5), radius: 14, y: 2)
-                        .padding(.top, 10)
-                    heroMeta(f, vm: vm, variant: variant)
-                        .padding(.top, 9)
-                    heroCTAs(f, vm: vm, variant: variant)
-                        .padding(.top, 14)
+        if behind > 1 && !committed {
+            Menu {
+                let through = min(episode + 4, episode + behind - 1)
+                if through > episode {
+                    Button("Mark through Episode \(through)") { onMarkThrough(through) }
                 }
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.bottom, 18)
-
-                if appModel.justCaught.contains(f.id) {
-                    CaughtUpOverlay(size: 60)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+                Button("Mark all \(behind) episodes as watched") { onMarkAll() }
+                Button("View episodes") { onViewEpisodes() }
+            } label: {
+                label
+            } primaryAction: {
+                onMark()
             }
-            .frame(height: Self.heroHeight)
-            .animation(.uiGentle, value: appModel.justCaught.contains(f.id))
-        }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.99))
-        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
-    }
-
-    // Ghost chip: dark translucent fill, accent for the NEW moment, quiet for the fallbacks.
-    private func heroChip(_ variant: HeroVariant) -> some View {
-        let (label, fg, border): (String, Color, Color) = switch variant {
-        case .newEpisode: ("NEW EPISODE", Theme.accent, Theme.accentBorder)
-        case .resume: ("CONTINUE", Theme.text72, Theme.hairlineStrong)
-        case .waiting: ("UP NEXT", Theme.text72, Theme.hairlineStrong)
-        }
-        return Text(label)
-            .scaledFont(9.5, weight: .bold)
-            .tracking(1.0)
-            .foregroundStyle(fg)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Theme.background.opacity(0.55),
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(border, lineWidth: 1))
-    }
-
-    // Mono-caps tracker meta: "S2 E6 · AIRED 2H AGO · 2 TO CATCH UP" — quiet facts, accent tail.
-    // Dedupe rule: when the now bar already states this franchise's "when" at display size, the
-    // meta line drops its time fragment and keeps only watch context — one fact, one place.
-    private func heroMeta(_ f: Franchise, vm: CardModel, variant: HeroVariant) -> some View {
-        let inNowBar = appModel.nowBarItem?.franchiseId == f.id
-        let (base, tail): (String, String) = switch variant {
-        case .newEpisode: newEpisodeMeta(vm, dropTime: inNowBar)
-        case .resume: resumeMeta(f)
-        case .waiting: waitingMeta(vm, dropTime: inNowBar)
-        }
-        return (Text(base).foregroundColor(Theme.text72)
-                + Text(tail.isEmpty ? "" : " · \(tail)").foregroundColor(Theme.accent))
-            .scaledFont(11, weight: .medium, monospacedDigit: true)
-            .tracking(0.8)
-            .lineLimit(1)
-            .shadow(color: .black.opacity(0.6), radius: 6, y: 1)
-    }
-
-    private func newEpisodeMeta(_ vm: CardModel, dropTime: Bool) -> (String, String) {
-        // TV full-season drop is an availability event, not an episode number.
-        if vm.source == .tmdb && vm.progress == 0 && vm.airedEpisodes > 1 {
-            let label = (vm.partLabel.isEmpty ? vm.seasonToken() : vm.partLabel).uppercased()
-            return (label.isEmpty ? "NEW SEASON" : label, dropTime ? "" : "NOW STREAMING")
-        }
-        var base = [vm.seasonToken(), vm.airedEpisodes > 0 ? "E\(vm.airedEpisodes)" : ""]
-            .filter { !$0.isEmpty }.joined(separator: " ")
-        if !dropTime {
-            if vm.source == .anilist && !vm.airedAgo.isEmpty {
-                base += " · AIRED \(vm.airedAgo.uppercased())"
-            } else if vm.source == .tmdb {
-                base += " · OUT NOW"
-            }
-        }
-        let tail = vm.behindCount > 1 ? "\(vm.behindCount) TO CATCH UP" : "UP TO DATE AFTER THIS"
-        return (base, tail)
-    }
-
-    private func resumeMeta(_ f: Franchise) -> (String, String) {
-        guard let part = f.resumePart else { return ("", "") }
-        let season = part.kind == .season ? "S\(part.sequence) " : ""
-        return ("\(season)E\(part.progress + 1) NEXT", "\(f.continueBacklog) LEFT")
-    }
-
-    private func waitingMeta(_ vm: CardModel, dropTime: Bool) -> (String, String) {
-        var base = [vm.seasonToken(), vm.nextEp.map { "E\($0)" } ?? ""]
-            .filter { !$0.isEmpty }.joined(separator: " ")
-        // The now bar owns this franchise's "when" at display size — keep only watch context.
-        if dropTime { return (base, "") }
-        // One label for "when does this land" — "TOMORROW 9:00 PM" for anime, "TOMORROW" for TV.
-        let when = vm.whenLabel.uppercased()
-        if !when.isEmpty { base += base.isEmpty ? when : " · \(when)" }
-        // nil = nothing left to quantify: nothing is scheduled, or a TV drop is TODAY and the
-        // base already says so. The accent tail exists to size a WAIT, not to repeat the day.
-        guard let clock = vm.relClock else { return (base, "") }
-        return (base, clock == "now" ? "NOW" : "IN \(clock.uppercased())")
-    }
-
-    @ViewBuilder
-    private func heroCTAs(_ f: Franchise, vm: CardModel, variant: HeroVariant) -> some View {
-        HStack(spacing: 8) {
-            switch variant {
-            case .newEpisode:
-                if vm.progress == 0 && vm.airedEpisodes > 1 {
-                    accentPill("Start watching", icon: "play.fill") { onOpenDetail(f.id, "hero/\(f.id)") }
-                } else {
-                    // Catch-up semantics: contiguous progress, one tap → watched through newest.
-                    accentPill("Mark E\(vm.airedEpisodes) watched", icon: "checkmark") {
-                        appModel.markCaughtUp(f.id)
-                    }
-                }
-                ghostPill("Details") { onOpenDetail(f.id, "hero/\(f.id)") }
-            case .resume:
-                if let part = f.resumePart {
-                    accentPill("Watched E\(part.progress + 1)", icon: "checkmark") {
-                        appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId,
-                                             episodes: part.progress + 1)
-                    }
-                }
-                ghostPill("Details") { onOpenDetail(f.id, "hero/\(f.id)") }
-            case .waiting:
-                ghostPill("Details") { onOpenDetail(f.id, "hero/\(f.id)") }
-            }
+            .buttonStyle(PrimaryButtonStyle2())
+            .accessibilityLabel("Mark Episode \(episode) of \(franchise.title) as watched")
+        } else {
+            Button(action: onMark) { label }
+                .buttonStyle(PrimaryButtonStyle2())
+                .allowsHitTesting(!committed)
+                .accessibilityLabel(committed ? "Episode \(episode) watched" : "Mark Episode \(episode) of \(franchise.title) as watched")
         }
     }
+}
 
-    // No haptic here on purpose: the STATE CHANGE owns the feedback (markCaughtUp fires success,
-    // setProgress fires .soft). Firing one on the press too gave the hero CTA a double tap.
-    private func accentPill(_ label: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).scaledFont(11, weight: .bold)
-                Text(label).scaledFont(12.5, weight: .bold)
-            }
-            .foregroundStyle(Theme.background)
-            .padding(.horizontal, 15).padding(.vertical, 9)
-            .background(Theme.accent, in: Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-        }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.94))
-    }
+// MARK: - Recap card
 
-    private func ghostPill(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .scaledFont(12.5, weight: .bold)
-                .foregroundStyle(Theme.textPrimary)
-                .padding(.horizontal, 15).padding(.vertical, 9)
-                .background(Theme.background.opacity(0.35), in: Capsule())
-                .overlay(Capsule().stroke(Color.white.opacity(0.28), lineWidth: 1))
-        }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.94))
-    }
+struct RecapCard: View {
+    let digest: RecapDigest
+    let revealed: Bool
+    let now: Int64
+    let ns: Namespace.ID
+    let reduceMotion: Bool
 
-    // MARK: currently watching shelf
+    @State private var tint: Color?
 
-    /// The rotation minus whatever the hero already shows.
-    private var shelf: [Franchise] {
-        let heroIds = Set(heroItems.map(\.franchise.id))
-        return appModel.watchingShelf.filter { !heroIds.contains($0.id) }
-    }
-
-    private var shelfSection: some View {
-        let items = shelf
-        let visible = Array(items.prefix(Self.shelfCap))
-        return VStack(alignment: .leading, spacing: 0) {
-            SectionHeader(label: "Currently watching",
-                          trailing: "\(items.count) \(items.count == 1 ? "show" : "shows")")
-                .padding(.horizontal, Theme.Space.gutter)
-
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(visible) { f in shelfCard(f) }
-                    if items.count > Self.shelfCap {
-                        seeAllCard(total: items.count)
-                    }
-                }
-                .padding(.horizontal, Theme.Space.gutter)
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollIndicators(.hidden)
-            // Right-edge fade — hints at more without chrome.
-            .overlay(alignment: .trailing) {
-                LinearGradient(colors: [.clear, Theme.background.opacity(0.85)],
-                               startPoint: .leading, endPoint: .trailing)
-                    .frame(width: 28)
-                    .allowsHitTesting(false)
-            }
-        }
-    }
-
-    private func shelfCard(_ f: Franchise) -> some View {
-        let state = appModel.shelfState(of: f)
-        return Button { onOpenDetail(f.id, "shelf/\(f.id)") } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                Thumb(cover: f.cover, width: 108, height: 152, radius: 12)
-                    .shadow(color: .black.opacity(0.38), radius: 10, y: 5)
-                    .overlay(alignment: .topLeading) {
-                        if state == .newEpisode {
-                            Text("NEW")
-                                .scaledFont(9.5, weight: .bold)
-                                .tracking(0.8)
-                                .foregroundStyle(Theme.background)
-                                .padding(.horizontal, 8).padding(.vertical, 3)
-                                .background(Theme.accent, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                                .shadow(color: .black.opacity(0.45), radius: 5, y: 2)
-                                .padding(8)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionLabel(text: TemporalCopy.since(digest.since, now: now))
+                .opacity(revealed ? 1 : 0)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(digest.beats.enumerated()), id: \.element.id) { i, beat in
+                    HStack(spacing: 12) {
+                        PosterSlot(url: beat.cover, width: 36, height: 54, radius: 6)
+                            .matchedGeometryEffect(id: "poster/\(beat.franchiseId)", in: ns)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(beat.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary).lineLimit(1)
+                            Text(beat.label(now: now)).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(1)
                         }
+                        Spacer(minLength: 0)
                     }
-                Text(f.title)
-                    .scaledFont(12, weight: .semibold)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .foregroundStyle(Theme.text72)
-                    .frame(height: 31, alignment: .topLeading)
-                    .padding(.top, 8)
-                shelfCaption(f, state: state)
-                    .padding(.top, 5)
+                    .opacity(revealed ? 1 : 0)
+                    .offset(y: revealed || reduceMotion ? 0 : 6)
+                    .animation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion).delay(reduceMotion ? 0 : 0.12 * Double(i + 1)), value: revealed)
+                }
             }
-            .frame(width: 108, alignment: .leading)
-        }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.96))
-        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
-    }
-
-    // Mono caption = the card's whole state system: accent for time-bound facts, quiet for backlog.
-    @ViewBuilder
-    private func shelfCaption(_ f: Franchise, state: AppModel.ShelfState?) -> some View {
-        switch state {
-        case .newEpisode:
-            let part = f.releasingPart
-            let season = part.map { $0.kind == .season ? "S\($0.sequence) " : "" } ?? ""
-            caption("\(season)E\(part?.airedEpisodes ?? 0) out now", color: Theme.accent)
-        case .backlog:
-            if let part = f.resumePart {
-                let season = part.kind == .season ? "S\(part.sequence) · " : ""
-                caption("\(season)\(f.continueBacklog) left", color: Theme.text50)
-            }
-        case .airingWait:
-            // Read in the franchise's own calendar throughout — a TV date is a day, not an instant.
-            if let next = f.nextAiring(now: now) {
-                let day = Formatting.fmtDay(ts: next, now: now, anchor: f.timeAnchor)
-                let span = Formatting.fmtRelSpanShort(ts: next, now: now, anchor: f.timeAnchor)
-                let isToday = f.dayDiff(of: next, now: now) == 0
-                caption(isToday ? "Today" : "\(day) · \(span)", color: Theme.accent)
-            }
-        case .premiereSoon:
-            if let premiere = appModel.nextPremiere(of: f) {
-                caption(Formatting.fmtMonthDay(premiere, anchor: f.timeAnchor), color: Theme.text46)
-            }
-        case nil:
-            EmptyView()
-        }
-    }
-
-    private func caption(_ text: String, color: Color) -> some View {
-        Text(text)
-            .scaledFont(10, weight: .medium, monospacedDigit: true)
-            .tracking(0.4)
-            .foregroundStyle(color)
-            .lineLimit(1)
-    }
-
-    private func seeAllCard(total: Int) -> some View {
-        Button {
-            Haptics.selection()
-            onSeeAllWatching()
-        } label: {
-            VStack(spacing: 5) {
-                Text("See all")
-                    .scaledFont(12, weight: .semibold)
-                    .foregroundStyle(Theme.text72)
-                Text("\(total)")
-                    .scaledFont(13, weight: .semibold, monospacedDigit: true)
-                    .foregroundStyle(Theme.text36)
-            }
-            .frame(width: 108, height: 152)
-            .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Theme.hairlineStrong, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            if digest.hiddenBeatCount > 0 {
+                Text("and \(digest.hiddenBeatCount) more")
+                    .type(ThemeType.caption).foregroundStyle(ThemeColor.textTertiary)
+                    .opacity(revealed ? 1 : 0)
             }
         }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.96))
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 212, alignment: .topLeading)
+        .background(ArtAdaptiveGround(tint: tint))
+        .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.focusCard, style: .continuous).stroke(ThemeColor.stroke, lineWidth: 1))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Since you were last here: " + digest.beats.map { "\($0.title), \($0.label(now: now))" }.joined(separator: ". "))
+        .accessibilityHint("Double tap to continue")
+        .task(id: digest.beats.first?.cover) {
+            tint = await PaletteCache.shared.resolve(url: digest.beats.first?.cover, maxPixel: 360)
+        }
     }
 }

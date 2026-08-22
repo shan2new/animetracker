@@ -36,7 +36,7 @@ struct RootView: View {
                 // The splash animates its own zoom-through exit (the camera push in
                 // SplashView's timeline), so the container just crossfades over it — the
                 // app emerges from inside the icon as it scales past the viewer.
-                SplashView { withAnimation(.uiSmooth) { splashDone = true } }
+                SplashView { withAnimation(.uiSmooth) { splashDone = true }; appModel.surfaceReady = true }
                     .zIndex(10)
                     .transition(.opacity)
             }
@@ -109,7 +109,8 @@ struct MainTabView: View {
                 Tab(AppTab.today.titleKey, image: AppTab.today.icon, value: AppTab.today) {
                     NavigationStack {
                         TodayView(onOpenDetail: openDetail,
-                                  onSeeAllWatching: { selectedTab = .library })
+                                  onSeeAllWatching: { selectedTab = .library },
+                                  onAddShow: { selectedTab = .discover })
                     }
                     .pageInTransition(isActive: selectedTab == .today)
                 }
@@ -138,7 +139,7 @@ struct MainTabView: View {
             // ToastHost — a sheet presents above this whole ZStack.)
             ToastHost()
                 .padding(.horizontal, 16)
-                .padding(.bottom, 96)
+                .padding(.bottom, 58)
         }
         // Detail rises as a bottom-up drawer — a large sheet with a grabber and swipe-to-dismiss.
         // A soft impact fires on open (see openDetail) and on close (onDismiss — covers swipe-down,

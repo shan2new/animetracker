@@ -13,9 +13,9 @@ struct UndoState: Identifiable, Equatable {
 
     var message: String {
         if added {
-            return "Added \(title) to \(statusLabel ?? "library")"
+            return "Added \(title) to \(statusLabel ?? "Library")"
         }
-        return "Marked \(title) · Ep \(episode)"
+        return "Episode \(episode) marked as watched"
     }
 }
 
@@ -36,87 +36,24 @@ struct ToastHost: View {
                 UndoToast(state: undo) { appModel.performUndo() }
             }
         }
-        .animation(.uiSnappy, value: appModel.undo?.id)
-        .animation(.uiSnappy, value: appModel.errorToast)
+        .animation(ThemeMotion.uiSnappy, value: appModel.undo?.id)
+        .animation(ThemeMotion.uiSnappy, value: appModel.errorToast)
     }
 }
 
-// Floating glass toast shown when a write failed and was rolled back.
+// Failure toast: persists until dismissed by a new write (spec: failure toasts persist).
 struct ErrorToast: View {
     let message: String
-
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle().fill(Color(hex: 0xE5484D)).frame(width: 20, height: 20)
-                Image(systemName: "exclamationmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            Text(message)
-                .scaledFont(13.5)
-                .foregroundStyle(Theme.text90)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.leading, 15)
-        .padding(.trailing, 12)
-        .padding(.vertical, 11)
-        .glassChrome(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color(hex: 0xE5484D).opacity(0.35), lineWidth: 1)
-        )
-        .frame(maxWidth: 360)
-        .shadow(color: .black.opacity(0.55), radius: 20, y: 12)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        ToastView(message: message, failure: true).frame(maxWidth: 420)
     }
 }
 
-// Floating glass undo toast.
+// Canonical Undo toast (spec board 02): 6 s, one action, lands when the handoff settles.
 struct UndoToast: View {
     let state: UndoState
     let onUndo: () -> Void
-
-    @State private var checkTrim: CGFloat = 0
-
     var body: some View {
-        GlassGroup(spacing: 6) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle().fill(Theme.accent).frame(width: 20, height: 20)
-                    // Checkmark draws itself in just after the toast lands (echoes CaughtUpOverlay).
-                    CheckmarkShape()
-                        .trim(from: 0, to: checkTrim)
-                        .stroke(Theme.background, style: StrokeStyle(lineWidth: 3.4, lineCap: .round, lineJoin: .round))
-                        .frame(width: 11, height: 11)
-                }
-                Text(state.message)
-                    .scaledFont(13.5)
-                    .foregroundStyle(Theme.text90)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Undo", action: onUndo)
-                    .scaledFont(13.5, weight: .semibold)
-                    .foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 4)
-                    .buttonStyle(SpringPressButtonStyle(scale: 0.92))
-            }
-            .padding(.leading, 15)
-            .padding(.trailing, 12)
-            .padding(.vertical, 11)
-            .glassChrome(in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Theme.hairlineStrong, lineWidth: 1)
-            )
-        }
-        .frame(maxWidth: 360)
-        .shadow(color: .black.opacity(0.55), radius: 20, y: 12)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-        .onAppear {
-            withAnimation(.easeOut(duration: 0.35).delay(0.15)) { checkTrim = 1 }
-        }
+        ToastView(message: state.message, actionLabel: "Undo", action: onUndo).frame(maxWidth: 420)
     }
 }
