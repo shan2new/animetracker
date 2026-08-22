@@ -2,69 +2,59 @@ import SwiftUI
 import ClerkKit
 import ClerkKitUI
 
-// Signed-out screen. Presents Clerk's AuthView when a publishable key is configured; otherwise
-// offers a dev-bypass sign-in that authenticates against the local backend's DEV_AUTH_BYPASS mode.
+// First run (spec board 07): the brand, one action. Nothing to read, nothing to configure.
+// The developer sign-in exists only in debug builds without a Clerk key.
 struct SignInView: View {
     @Environment(AuthManager.self) private var auth
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showClerkAuth = false
     @State private var devId = "demo-user"
 
     var body: some View {
         ZStack {
-            // Subtle accent glow backdrop.
-            RadialGradient(colors: [Theme.accent.opacity(0.12), .clear],
-                           center: .top, startRadius: 0, endRadius: 420)
+            ThemeColor.canvas.ignoresSafeArea()
+            RadialGradient(colors: [ThemeColor.accent.opacity(0.14), .clear], center: .top, startRadius: 0, endRadius: 420)
                 .ignoresSafeArea()
+                .accessibilityHidden(true)
 
             VStack(spacing: 0) {
                 Spacer()
-                PreviouslyMark(width: 44)
-                    .shadow(color: Theme.accent.opacity(0.30), radius: 16, y: 6)
-                (Text("Previously") + Text(".").foregroundStyle(Theme.accent))
-                    .scaledFont(34, weight: .semibold)
-                    .tracking(-1)
-                    .padding(.top, 12)
-                Text("Your airing-first TV tracker.")
-                    .scaledFont(15)
-                    .foregroundStyle(Theme.text52)
-                    .padding(.top, 8)
-
+                PreviouslyMark(width: 52)
+                    .shadow(color: ThemeColor.accent.opacity(0.30), radius: 16, y: 6)
+                    .accessibilityHidden(true)
+                (Text("Previously").foregroundStyle(ThemeColor.textPrimary) + Text(".").foregroundStyle(ThemeColor.accent))
+                    .type(ThemeType.displayXL)
+                    .padding(.top, ThemeSpace.x4)
+                    .accessibilityLabel("Previously")
+                Text("Know what changed. Record what you watched.")
+                    .type(ThemeType.callout)
+                    .foregroundStyle(ThemeColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, ThemeSpace.x2)
+                    .padding(.horizontal, ThemeSpace.x8)
                 Spacer()
 
-                VStack(spacing: 14) {
+                VStack(spacing: ThemeSpace.x3) {
                     if AppConfig.isClerkConfigured {
-                        Button {
-                            Haptics.impact(.soft)
-                            showClerkAuth = true
-                        } label: {
-                            Text("Sign in")
-                                .scaledFont(16, weight: .semibold)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 15)
-                                .foregroundStyle(Theme.background)
-                        }
-                        .buttonStyleProminentGlass()
-                        .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        Button("Sign in") { showClerkAuth = true }
+                            .buttonStyle(PrimaryButtonStyle2())
                     } else {
-                        DevSignInCard(devId: $devId) {
-                            auth.signInDev(clerkId: devId)
-                        }
+                        #if DEBUG
+                        DevSignInCard(devId: $devId) { auth.signInDev(clerkId: devId) }
+                        #else
+                        Text("Sign-in isn’t configured for this build.")
+                            .type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary)
+                        #endif
                     }
-
                     if let error = auth.lastError {
-                        Text(error)
-                            .scaledFont(12.5)
-                            .foregroundStyle(Theme.accent)
-                            .multilineTextAlignment(.center)
+                        InlineNotice(error)
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 40)
+                .padding(.horizontal, ThemeSpace.x6)
+                .padding(.bottom, ThemeSpace.x10)
             }
         }
         .sheet(isPresented: $showClerkAuth) {
-            // Clerk's prebuilt sign-in/sign-up flow.
-            // Re-inject Clerk.shared explicitly — sheets can form a detached environment chain.
             AuthView()
                 .environment(Clerk.shared)
                 .onChange(of: Clerk.shared.session != nil) { _, signedIn in
@@ -77,43 +67,31 @@ struct SignInView: View {
     }
 }
 
-// Dev-bypass card: enter a Clerk user id, signs in with a `dev:<id>` bearer.
+#if DEBUG
 private struct DevSignInCard: View {
     @Binding var devId: String
     let onContinue: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("DEVELOPER SIGN-IN")
-                .scaledFont(11, weight: .semibold)
-                .tracking(1)
-                .foregroundStyle(Theme.text40)
-            Text("No Clerk key configured. Sign in with a dev user id (requires DEV_AUTH_BYPASS=1 on the backend).")
-                .scaledFont(12.5)
-                .foregroundStyle(Theme.text52)
-                .lineSpacing(2)
-
+        VStack(alignment: .leading, spacing: ThemeSpace.x3) {
+            SectionLabel(text: "Developer sign-in")
+            Text("No Clerk key configured. Sign in with a dev user id (the backend must allow DEV_AUTH_BYPASS outside production).")
+                .type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
             TextField("dev user id", text: $devId)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .scaledFont(15)
-                .foregroundStyle(Theme.textPrimary)
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(Theme.fillSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
-
-            Button { Haptics.impact(.soft); onContinue() } label: {
-                Text("Continue")
-                    .scaledFont(15, weight: .semibold)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    .foregroundStyle(Theme.background)
-            }
-            .buttonStyleProminentGlass()
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .type(ThemeType.body)
+                .foregroundStyle(ThemeColor.textPrimary)
+                .padding(.horizontal, 14).frame(minHeight: 44)
+                .background(ThemeColor.surfaceFloating, in: RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous).stroke(ThemeColor.stroke, lineWidth: 1))
+            Button("Continue", action: onContinue)
+                .buttonStyle(PrimaryButtonStyle2())
         }
-        .padding(18)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hairline, lineWidth: 1))
+        .padding(ThemeSpace.x4)
+        .background(ThemeColor.surfaceRaised, in: RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous).stroke(ThemeColor.separator, lineWidth: 1))
     }
 }
+#endif

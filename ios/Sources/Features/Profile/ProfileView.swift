@@ -101,6 +101,14 @@ struct ProfileView: View {
 
     private var settings: some View {
         GroupedList(header: "Settings") {
+            ShareLink(item: LibraryExport(appModel: appModel, format: .json), preview: SharePreview("Previously library (JSON)")) {
+                exportRow(title: "Export as JSON", subtitle: "Every title with progress and status")
+            }
+            .buttonStyle(GroupedRowPressStyle())
+            ShareLink(item: LibraryExport(appModel: appModel, format: .csv), preview: SharePreview("Previously library (CSV)")) {
+                exportRow(title: "Export as CSV", subtitle: "One row per season or movie")
+            }
+            .buttonStyle(GroupedRowPressStyle())
             GroupedRow(symbol: "bell", symbolTint: ThemeColor.information.opacity(0.2), title: "Notifications",
                        subtitle: "Episode alerts and the Live Activity", trailing: .chevron(nil)) {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -128,6 +136,23 @@ struct ProfileView: View {
             .buttonStyle(TertiaryButtonStyle2(destructive: true))
             .frame(maxWidth: .infinity)
             .padding(.top, ThemeSpace.x2)
+    }
+
+    private func exportRow(title: String, subtitle: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .medium)).foregroundStyle(ThemeColor.textPrimary)
+                .frame(width: 28, height: 28).background(ThemeColor.surfacePressed, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).type(ThemeType.body).foregroundStyle(ThemeColor.textPrimary)
+                Text(subtitle).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
+        }
+        .padding(.leading, 14).padding(.trailing, 16)
+        .frame(minHeight: 52)
+        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) { Rectangle().fill(ThemeColor.separator).frame(height: 1).padding(.leading, 54) }
     }
 
     // MARK: - Helpers

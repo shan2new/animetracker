@@ -256,7 +256,7 @@ struct FranchiseDetailView: View {
                 Button(Copy.Action.restartRewatch) { promptRestartRewatch(f, session: session) }
                 Button("Cancel rewatch\u{2026}") { promptCancelRewatch(f, session: session) }
             }
-            if !RewatchStore.shared.sessions(for: f.id).isEmpty || f.isSeriesComplete {
+            if !RewatchStore.shared.sessions(for: f.id).isEmpty || nextUpState(f)?.kind == .seriesComplete {
                 Button(Copy.Action.viewWatchHistory) { push(.history(franchiseId: f.id)) }
             }
             Divider()
@@ -295,7 +295,24 @@ struct FranchiseDetailView: View {
                           line3: summary.lastCompletedAt.flatMap { $0 > 0 ? "Last finished \(TemporalCopy.dateWord($0, now: now, anchor: .local))" : nil },
                           episode: nil, behind: 0)
         }
-        guard let part = f.currentPart else { return nil }
+        guard let part = f.currentPart else {
+            // Nothing to resume: an announced installment waits; a finished run (with extras the
+            // catalogue still lists as upcoming) is complete for the viewer.
+            if let up = f.parts.first(where: \.isUpcoming) {
+                return NextUp(kind: .waiting, part: up, line1: up.canonicalLabel.isEmpty ? up.title : up.canonicalLabel,
+                              line2: up.announcedDateLabel(source: f.source).map { "Premieres \($0)" } ?? "No date announced",
+                              line3: nil, episode: nil, behind: 0)
+            }
+            let episodic = f.episodicPartsInOrder
+            if !episodic.isEmpty, episodic.allSatisfy(\.isComplete) {
+                let summary = RewatchStore.shared.summary(for: f.id)
+                return NextUp(kind: .seriesComplete, part: nil, line1: "You’ve finished \(f.title)",
+                              line2: Copy.Progress.watchedTimes(max(1, summary.completedCount)),
+                              line3: summary.lastCompletedAt.flatMap { $0 > 0 ? "Last finished \(TemporalCopy.dateWord($0, now: now, anchor: .local))" : nil },
+                              episode: nil, behind: 0)
+            }
+            return nil
+        }
         if part.isUpcoming {
             return NextUp(kind: .waiting, part: part, line1: part.canonicalLabel,
                           line2: part.announcedDateLabel(source: f.source).map { "Premieres \($0)" } ?? "No date announced",
@@ -402,7 +419,7 @@ struct FranchiseDetailView: View {
     @ViewBuilder
     private func historyRow(_ f: Franchise) -> some View {
         let sessions = RewatchStore.shared.sessions(for: f.id)
-        if !sessions.isEmpty || f.isSeriesComplete {
+        if !sessions.isEmpty || nextUpState(f)?.kind == .seriesComplete {
             GroupedList {
                 GroupedRow(symbol: "clock.arrow.circlepath", symbolTint: ThemeColor.accentSoft, title: Copy.Action.viewWatchHistory,
                            subtitle: sessions.isEmpty ? Copy.Progress.watchedTimes(1) : Copy.watchSessions(sessions.count),

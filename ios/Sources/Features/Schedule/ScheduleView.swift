@@ -11,6 +11,8 @@ struct ScheduleView: View {
     var onAddShow: () -> Void = {}
 
     @State private var selectedDay = 0
+    /// The day whose header is at the top of the feed; the strip follows it while scrolling.
+    @State private var visibleDay = 0
     @State private var typeFilter: MediaFilter = .all
     @State private var unwatchedOnly = false
     @State private var committed: Set<String> = []
@@ -95,9 +97,20 @@ struct ScheduleView: View {
                 }
                 .padding(.bottom, 120)
             }
+            .coordinateSpace(name: "schedule.feed")
+            .onPreferenceChange(DayHeaderKey.self) { offsets in
+                // The last header that has scrolled under the sticky bar is the current day.
+                let threshold: CGFloat = 120
+                if let top = offsets.filter({ $0.value <= threshold }).max(by: { $0.value < $1.value })?.key ?? offsets.min(by: { $0.value < $1.value })?.key,
+                   top != visibleDay {
+                    visibleDay = top
+                    selectedDay = top
+                }
+            }
             .scrollIndicators(.hidden)
             .background(ThemeColor.canvas.ignoresSafeArea())
             .refreshable { await appModel.reload() }
+            .task { await ScheduleReminders.shared.refresh() }
             .navigationTitle("Schedule")
             .navigationBarTitleDisplayMode(.large)
             .toolbar(.visible, for: .navigationBar)
@@ -298,6 +311,9 @@ struct ScheduleView: View {
             .accessibilityLabel(day.header)
             .accessibilityAddTraits(.isHeader)
             .id("day-\(day.id)")
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: DayHeaderKey.self, value: [day.id: geo.frame(in: .named("schedule.feed")).minY])
+            })
 
             if day.isEmpty {
                 Text(day.timed.isEmpty && day.dateOnly.isEmpty && hasAiredEarlierToday(day) ? "Nothing else airs today" : "Nothing airs today")
@@ -373,11 +389,15 @@ struct ScheduleView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(f.title), \(meta)\(time != nil && !showsAction ? ", \(time!)" : "")")
+                .accessibilityLabel("\(f.title), \(meta)\(time != nil && !showsAction ? ", \(time!)" : "")\(!e.aired && ScheduleReminders.shared.has(mediaId: e.part.mediaId, episode: e.episode) ? ", reminder set" : "")")
                 .accessibilityValue(watched ? "Complete" : "")
                 .accessibilityHint("Opens the show")
 
                 HStack(spacing: ThemeSpace.x2) {
+                    if !e.aired, ScheduleReminders.shared.has(mediaId: e.part.mediaId, episode: e.episode) {
+                        Image(systemName: "bell.fill").font(.system(size: 14)).foregroundStyle(ThemeColor.textTertiary)
+                            .accessibilityHidden(true)
+                    }
                     if let time, !showsAction, !isAX {
                         Text(time).type(ThemeType.time).foregroundStyle(ThemeColor.textSecondary)
                     }
@@ -459,5 +479,13 @@ struct ScheduleView: View {
                 present()
             }
         }
+    }
+}
+
+
+private struct DayHeaderKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] { [:] }
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
     }
 }

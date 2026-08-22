@@ -564,6 +564,10 @@ struct EmptyStateCopy: Equatable, Sendable {
         title: "You\u{2019}re offline",
         supporting: "Showing saved data. Changes will sync when you reconnect.")
 
+    static let searchLaunchpad = EmptyStateCopy(
+        symbol: "magnifyingglass",
+        title: "Find your next show",
+        supporting: "Search anime and TV by title.")
     static let noSessions = EmptyStateCopy(
         symbol: "clock.arrow.circlepath",
         title: "No watch history yet",
