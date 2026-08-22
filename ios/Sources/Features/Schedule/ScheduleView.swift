@@ -503,7 +503,7 @@ struct ScheduleView: View {
                 .fill(accent ? Theme.accent.opacity(0.25) : Theme.hairline)
                 .frame(height: 1)
             if count > 0 {
-                Text(count == 1 ? "1 EP" : "\(count) EPS")
+                Text(Copy.episodes(count).uppercased())
                     .scaledFont(10, weight: .medium, monospacedDigit: true)
                     .tracking(0.6)
                     .foregroundStyle(accent ? Theme.accent.opacity(0.8) : Theme.text36)
@@ -594,11 +594,11 @@ struct ScheduleView: View {
     // Metadata line: anime → "Ep 12"; TV → "Season 2 · Ep 7", or "Season 2 · 8 episodes" for a drop.
     private func metaText(_ vm: CardModel, aired: Bool) -> Text {
         let season = (vm.isTV && !vm.partLabel.isEmpty) ? "\(vm.partLabel) · " : ""
-        if aired { return Text("\(season)Ep \(vm.airedEpisodes)") }
+        if aired { return Text("\(season)\(Copy.episode(vm.airedEpisodes))") }
         if vm.isTV && vm.nextAiringCount > 1 {
-            return Text("\(season)\(vm.nextAiringCount) episodes")
+            return Text("\(season)\(Copy.episodes(vm.nextAiringCount))")
         }
-        return Text("\(season)Ep \(vm.nextEp.map(String.init) ?? "?")")
+        return Text("\(season)\(vm.nextEp.map { Copy.episode($0) } ?? "Episode ?")")
     }
 
     @ViewBuilder
