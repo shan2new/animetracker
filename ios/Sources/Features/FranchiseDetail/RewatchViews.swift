@@ -15,6 +15,58 @@ struct StartRewatchSheet: View {
 
     private var parts: [FranchisePart] { franchise.episodicPartsInOrder }
 
+    /// "All seasons" gets a count like every other row. "Entire franchise" was server vocabulary
+    /// (the app's word for a work is "title"), and it was the only option on the sheet carrying no
+    /// count — so the one option that covers everything looked like the vague one.
+    private var everythingCount: String? {
+        let total = parts.reduce(0) { $0 + max($1.totalEpisodes, $1.progress) }
+        return total > 0 ? Copy.episodes(total) : nil
+    }
+
+    /// One scope row: one line, one height, its count and its selected state in one trailing
+    /// column that is reserved whether or not the row is the selected one.
+    ///
+    /// The rows used to run 41/46/54/62 pt because the count was a SECOND LINE on some of them —
+    /// which broke the separator rhythm — and no row said "only" any more: the section is headed
+    /// SCOPE, so a plain name reads correctly, while "OVA 2: No Regrets only" read as *No Regrets
+    /// only*.
+    private func scopeRow(title: String, count: String?, selected: Bool,
+                          separator: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            FeedbackCoordinator.fire(.selection)
+            action()
+        } label: {
+            HStack(spacing: 10) {
+                Text(title)
+                    .type(ThemeType.body)
+                    .foregroundStyle(ThemeColor.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                if let count {
+                    Text(count).type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary)
+                        .lineLimit(1)
+                }
+                Image(systemName: "checkmark")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ThemeColor.accent)
+                    .opacity(selected ? 1 : 0)
+                    .frame(width: 18)
+            }
+            .padding(.leading, 14).padding(.trailing, 16)
+            .frame(minHeight: ThemeMetrics.rowCompact)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                if separator {
+                    Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1).padding(.leading, 14)
+                }
+            }
+        }
+        .buttonStyle(GroupedRowPressStyle())
+        .accessibilityLabel([title, count].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -23,7 +75,7 @@ struct StartRewatchSheet: View {
                     // its own artwork, before it asks anything. A modal that opens on a grey
                     // sentence and a list of radio rows could be about anything.
                     HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
-                        DetailPoster(url: franchise.cover, slot: .queue)
+                        PosterSlot(url: franchise.cover, .queue)
                         VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                             Text(franchise.title)
                                 .type(ThemeType.showTitleM)
@@ -37,18 +89,22 @@ struct StartRewatchSheet: View {
                         Spacer(minLength: 0)
                     }
                     GroupedList(header: "Scope") {
-                        GroupedRow(title: "Entire franchise", trailing: .check(scope == .franchise), separator: !parts.isEmpty) {
-                            FeedbackCoordinator.fire(.selection); scope = .franchise
+                        scopeRow(title: "All seasons", count: everythingCount,
+                                 selected: scope == .franchise, separator: !parts.isEmpty) {
+                            scope = .franchise
                         }
                         ForEach(Array(parts.enumerated()), id: \.element.id) { i, part in
-                            GroupedRow(title: "\(part.canonicalLabel.isEmpty ? part.title : part.canonicalLabel) only",
-                                       subtitle: part.totalEpisodes > 0 ? Copy.episodes(part.totalEpisodes) : nil,
-                                       trailing: .check(scope == .part(mediaId: part.mediaId)), separator: i < parts.count - 1) {
-                                FeedbackCoordinator.fire(.selection); scope = .part(mediaId: part.mediaId)
+                            scopeRow(title: part.canonicalLabel.isEmpty ? part.title : part.canonicalLabel,
+                                     count: part.totalEpisodes > 0 ? Copy.episodes(part.totalEpisodes) : nil,
+                                     selected: scope == .part(mediaId: part.mediaId),
+                                     separator: i < parts.count - 1) {
+                                scope = .part(mediaId: part.mediaId)
                             }
                         }
                     }
-                    GroupedList(header: "Start date") {
+                    // No "START DATE" label above a row that already says "Start date" — the
+                    // header and the row were the same three words, 10 pt apart.
+                    GroupedList {
                         HStack {
                             Text("Start date").type(ThemeType.body).foregroundStyle(ThemeColor.textPrimary)
                             Spacer()
@@ -59,33 +115,45 @@ struct StartRewatchSheet: View {
                         .padding(.leading, 14).padding(.trailing, 10)
                         .frame(minHeight: ThemeMetrics.rowCompact)
                     }
-                    Button(Copy.Action.startRewatch) {
-                        onStart(scope, Int64(startDate.timeIntervalSince1970 * 1000))
-                        dismiss()
-                    }
-                    .buttonStyle(PrimaryButtonStyle2())
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
                 .padding(.top, ThemeSpace.x4)
-                .padding(.bottom, ThemeSpace.x8)
+                .padding(.bottom, ThemeSpace.x4)
             }
             .background(ThemeColor.canvasRaised.ignoresSafeArea())
+            // The commit, PINNED. It used to be the last thing in the scroll, below the scope list
+            // and a start-date group — on a nine-part franchise a screen and a half below the fold —
+            // so the user picked a scope and had nothing on screen to commit with, while the last
+            // visible row was sliced flat by the screen edge with no home-indicator inset.
+            .safeAreaInset(edge: .bottom) {
+                Button(Copy.Action.startRewatch) {
+                    onStart(scope, Int64(startDate.timeIntervalSince1970 * 1000))
+                    dismiss()
+                }
+                .buttonStyle(PrimaryButtonStyle2())
+                .padding(.horizontal, ThemeMetrics.gutter)
+                .padding(.top, ThemeSpace.x3)
+                .padding(.bottom, ThemeSpace.x2)
+                .background(.ultraThinMaterial)
+            }
             .navigationTitle(Copy.Action.startRewatch)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: {
-                        // `body`, not `listAction`: a sheet's Cancel is a navigation control and
-                        // iOS sets it at the same size as the sheet's own title. `listAction` is
-                        // for inline links inside content ("See all", "Read more"), and at 13 pt
-                        // beside a 17-pt title it reads as a caption rather than a control.
+                        // NEUTRAL. Amber on the dismissive action made the loudest coloured object
+                        // on the sheet the one that throws the work away — and the selection check
+                        // was amber too, so there were two ambers and neither was the primary
+                        // action. `body`, not `listAction`: a sheet's Cancel is a navigation
+                        // control and iOS sets it at the sheet title's own size. `.plain` also gave
+                        // the sheet's only visible control no press state at all.
                         Text(Copy.Action.cancel)
                             .type(ThemeType.body)
-                            .foregroundStyle(ThemeColor.accent)
+                            .foregroundStyle(ThemeColor.textSecondary)
                             .lineLimit(1)
                             .fixedSize()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowPressStyle(radius: ThemeRadius.compactControl))
                 }
                 // A plain text button — iOS has never put a filled pill in a sheet's leading
                 // position. `.buttonStyle(.plain)` alone does not get there: the toolbar gives
@@ -103,6 +171,7 @@ struct StartRewatchSheet: View {
 struct WatchHistoryView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     let franchiseId: String
 
     @State private var editing: WatchSession?
@@ -131,17 +200,17 @@ struct WatchHistoryView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
             ScrollView {
+                // ONE leading edge for the record. The screen used to run three — an identity
+                // poster at 16, the rail at 20, the cards at 40 — with the show's cover printed a
+                // second time above a list of sessions that are all the same show. The identity is
+                // the navigation bar's job now (title + subtitle), and what is left is the rail:
+                // gutter 16 + the rail's own 22-pt gutter puts the cards at 38, exactly where
+                // Schedule's rows start, so the app's two rail screens share one grammar.
                 VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
-                    identityHeader
                     if sessions.count == 1, let only = sessions.first {
                         // A rail needs two nodes to be a rail. One disconnected ring floating
                         // beside a single card was worse than no timeline at all, so a solo
                         // session is a plain row under its own label.
-                        //
-                        // And it carries NO poster: the identity header 40 pt above it is already
-                        // showing that exact artwork at that exact size, and a session is not a
-                        // different show — printing the cover twice made the screen read as two
-                        // rows of the same list rather than a show and its record.
                         VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
                             SectionLabel(text: "Sessions")
                             soloSessionRow(only)
@@ -149,12 +218,10 @@ struct WatchHistoryView: View {
                     } else {
                         HistoryRail {
                             ForEach(Array(sessions.enumerated()), id: \.element.id) { i, session in
-                                // No poster, for the same reason the solo row carries none: the
-                                // identity header above is already showing this exact artwork, and
-                                // a session is not a different show. Three identical posters down
-                                // one screen made a record read as a list of duplicates.
+                                // No poster: a session is not a different show, and three identical
+                                // covers down one screen made a record read as a list of duplicates.
                                 HistorySessionRow(title: session.title,
-                                                  subtitle: session.subtitle(nextEpisode: nextEpisode(session), now: now),
+                                                  subtitle: sessionLine(session),
                                                   active: session.isActive,
                                                   position: position(i, of: sessions.count)) {
                                     editing = session
@@ -164,21 +231,25 @@ struct WatchHistoryView: View {
                     }
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
-                // Clears the FLOATING toolbar, not just the status bar. This screen's content
-                // starts at the top of the safe area, which on a screen whose navigation bar has
-                // no background of its own puts the identity header under the back button.
-                .padding(.top, DetailMetrics.toolbarClearance)
+                .padding(.top, ThemeSpace.x4)
                 .padding(.bottom, DetailMetrics.bottomClearance)
+                // A two-session record is ~240 pt of content above 600 pt of pure black. Centred
+                // in the content area it reads as the answer to the question the screen asks —
+                // the same rule the empty state above already follows. Long lists, and every
+                // accessibility size, scroll from the top as normal.
+                .modifier(CentreShortList(active: sessions.count <= 3 && !typeSize.isAccessibilitySize))
             }
             .scrollIndicators(.hidden)
             }
         }
-        .scrollEdgeChrome()
-        .overlay(alignment: .top) { FloatingToolbarVeil() }
-        .navigationTitle(Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
+        // A real navigation bar with a real material, and the show's own name on it: the shipped
+        // screen was a hand-built row over hidden chrome, titled "Watch history" and nothing else,
+        // so the name of the show whose history it was never appeared anywhere on it.
+        .navigationTitle(franchise?.title ?? Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
+        .navigationSubtitle(historySubtitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if !sessions.isEmpty {
@@ -187,13 +258,10 @@ struct WatchHistoryView: View {
                             Label(Copy.Action.deleteWatchHistory, systemImage: "trash")
                         }
                     } label: {
-                        // Matches Detail's overflow exactly: a plain glyph on chrome glass. The
-                        // amber-ringed `ellipsis.circle` read as this screen's primary action.
+                        // The toolbar item supplies the material; no local glass disc inside it.
                         Image(systemName: "ellipsis")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(ThemeColor.textPrimary)
-                            .frame(width: 34, height: 34)
-                            .chromeGlass(in: Circle(), interactive: true)
                             .frame(width: 44, height: 44)
                     }
                     .accessibilityLabel("More actions")
@@ -201,9 +269,8 @@ struct WatchHistoryView: View {
             }
         }
         .sheet(item: $editing) { session in
+            // The sheet sizes itself to its own content (see `SessionDetailView`).
             SessionDetailView(session: session)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
         }
         .confirmationDialog(Copy.Confirm.deleteHistoryTitle, isPresented: $confirmDeleteAll, titleVisibility: .visible) {
             Button(Copy.Confirm.deleteHistoryConfirm, role: .destructive) {
@@ -221,7 +288,7 @@ struct WatchHistoryView: View {
     /// The one session, as a record rather than as a media row: what it is called, when it ran,
     /// how many episodes it covered, and the way in.
     private func soloSessionRow(_ session: WatchSession) -> some View {
-        let line = session.subtitle(nextEpisode: nextEpisode(session), now: now)
+        let line = sessionLine(session)
         return Button { editing = session } label: {
             HStack(alignment: .center, spacing: ThemeSpace.x3) {
                 VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
@@ -248,26 +315,39 @@ struct WatchHistoryView: View {
         .accessibilityLabel("\(session.title), \(line)")
     }
 
-    @ViewBuilder
-    private var identityHeader: some View {
-        if let f = franchise, !sessions.isEmpty {
-            let completed = store.summary(for: franchiseId).completedCount
-            HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
-                DetailPoster(url: f.cover, slot: .row)
-                VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
-                    Text(f.title)
-                        .type(ThemeType.showTitleM)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if completed > 0 { ProgressText(Copy.Progress.watchedTimes(completed)) }
-                    ProgressText(Copy.watchSessions(sessions.count) + " · "
-                                 + Copy.episodes(sessions.reduce(0) { $0 + $1.episodes }),
-                                 tint: ThemeColor.textTertiary)
-                }
-                Spacer(minLength: 0)
-            }
+    /// The bar's subtitle: the whole record in one line. It was three stacked `ProgressText`
+    /// lines inside the content, under a poster the screen did not need.
+    private var historySubtitle: String {
+        guard !sessions.isEmpty else { return "" }
+        let episodes = sessions.reduce(0) { $0 + $1.episodes }
+        var bits = [Copy.watchSessions(sessions.count)]
+        if episodes > 0 { bits.append(Copy.episodes(episodes)) }
+        return bits.joined(separator: " \u{b7} ")
+    }
+
+    /// One session's line, with ONE date formatter behind it.
+    ///
+    /// Adjacent rows read "24 May – 29 Jul" and "10 Dec, 2024" — two formats, one of them missing
+    /// its year and the other punctuated in a way no locale writes. `TemporalCopy.dateRange` orders
+    /// and punctuates per locale and states both years whenever the span is not this year's.
+    private func sessionLine(_ session: WatchSession) -> String {
+        if session.isActive {
+            if let next = nextEpisode(session) { return Copy.Progress.inProgress(nextEpisode: next) }
+            return "In progress"
         }
+        if let cancelled = session.cancelledAtEpisode {
+            return "Cancelled at \(Copy.episodeInSentence(cancelled))"
+        }
+        let count = session.episodes > 0 ? Copy.episodes(session.episodes) : nil
+        let when: String? = {
+            guard let end = session.completedAt, end > 0 else { return nil }
+            guard let start = session.startedAt, start > 0, start < end else {
+                return TemporalCopy.dateWord(end, now: now, anchor: .local)
+            }
+            return TemporalCopy.dateRange(start, end, now: now)
+        }()
+        let bits = [when, count].compactMap { $0 }
+        return bits.isEmpty ? "Dates unknown" : bits.joined(separator: " \u{b7} ")
     }
 
     private func nextEpisode(_ session: WatchSession) -> Int? {
@@ -295,6 +375,8 @@ struct SessionDetailView: View {
 
     @State private var startDate: Date
     @State private var confirmDelete = false
+    /// Measured, so the sheet's detent is the content's own height.
+    @State private var contentHeight: CGFloat = 0
 
     init(session: WatchSession) {
         self.session = session
@@ -303,16 +385,80 @@ struct SessionDetailView: View {
 
     private var now: Int64 { appModel.now }
     private var store: RewatchStore { RewatchStore.shared }
+    private var franchise: Franchise? { appModel.franchise(id: session.franchiseId) }
+
+    /// The one line that states the whole session: when it ran and how much of it there was, in
+    /// the same formatter the row behind the sheet uses.
+    ///
+    /// The shipped sheet printed four date formats within two taps of each other — "Start date
+    /// 24 May 2026" (with a year), "Completed 29 Jul" (without one), "10 Dec, 2024" in the list
+    /// behind it and "24 May – 29 Jul" in the row it came from — all hand-assembled, none
+    /// localised. Inside a form the year is never implied.
+    private var spanLine: String {
+        let count = session.episodes > 0 ? Copy.episodes(session.episodes) : nil
+        let when: String? = {
+            guard let end = session.completedAt, end > 0 else {
+                guard let start = session.startedAt, start > 0 else { return nil }
+                // The full date, year included: this line sits directly above a date PICKER that
+                // prints its own year, and a form may not state one date two ways.
+                return "Started \(Formatting.fmtFullDate(start, anchor: .local))"
+            }
+            guard let start = session.startedAt, start > 0, start < end else {
+                return TemporalCopy.dateWord(end, now: now, anchor: .local)
+            }
+            return TemporalCopy.dateRange(start, end, now: now)
+        }()
+        let bits = [when, count].compactMap { $0 }
+        return bits.isEmpty ? "Dates unknown" : bits.joined(separator: " \u{b7} ")
+    }
+
+    /// The scope, in the app's own vocabulary.
+    private var scopeLine: String? {
+        switch session.scope {
+        case .franchise: return "All seasons"
+        case .part(let mediaId):
+            let label = franchise?.canonicalPartLabel(for: mediaId) ?? ""
+            return label.isEmpty ? nil : label
+        }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
+                    // A SUMMARY, not a form. The sheet used to open on four label/value rows with
+                    // no artwork, no title and no indication of which show it belonged to — and
+                    // "Status: Completed" sat directly above "Completed: 29 Jul", so the word was
+                    // both a value and a field label in adjacent rows while proving nothing the
+                    // completion date did not already prove.
+                    HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
+                        PosterSlot(url: franchise?.cover, .row)
+                        VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
+                            Text(franchise?.title ?? session.title)
+                                .type(ThemeType.showTitleM)
+                                .foregroundStyle(ThemeColor.textPrimary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                            // The scope, not the session's own name: the sheet's title already
+                            // says "Second watch" 40 pt above this line.
+                            Text(scopeLine ?? session.title)
+                                .type(ThemeType.heroMeta)
+                                .foregroundStyle(ThemeColor.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(spanLine)
+                                .type(ThemeType.metadata)
+                                .foregroundStyle(ThemeColor.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
                     GroupedList {
+                        // The one thing on this sheet that is genuinely editable, and the only row
+                        // that looks it.
                         HStack {
-                            Text("Start date").type(ThemeType.body).foregroundStyle(ThemeColor.textPrimary)
+                            Text("Started").type(ThemeType.body).foregroundStyle(ThemeColor.textPrimary)
                             Spacer()
-                            DatePicker("Start date", selection: $startDate, in: ...Date(), displayedComponents: .date)
+                            DatePicker("Started", selection: $startDate, in: ...Date(), displayedComponents: .date)
                                 .labelsHidden().tint(ThemeColor.accent)
                         }
                         .padding(.leading, 14).padding(.trailing, 10)
@@ -320,11 +466,18 @@ struct SessionDetailView: View {
                         .overlay(alignment: .bottom) {
                             Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1).padding(.leading, 14)
                         }
-                        GroupedRow(title: "Status", trailing: .value(session.isActive ? "In progress" : (session.isCompleted ? "Completed" : "Cancelled")))
+                        // `Started` / `Finished` — a pair. And no Status row once a completion date
+                        // exists: a date proves the state, and the same word cannot be a value in
+                        // one row and a field label in the next.
                         if let completed = session.completedAt, completed > 0 {
-                            GroupedRow(title: "Completed", trailing: .value(TemporalCopy.dateWord(completed, now: now, anchor: .local)))
+                            GroupedRow(title: "Finished",
+                                       trailing: .value(TemporalCopy.dateWord(completed, now: now, anchor: .local)),
+                                       separator: false)
+                        } else {
+                            GroupedRow(title: "Status",
+                                       trailing: .value(session.isActive ? "In progress" : "Cancelled"),
+                                       separator: false)
                         }
-                        GroupedRow(title: "Episodes", trailing: .value(session.episodes > 0 ? "\(session.episodes)" : "—"), separator: false)
                     }
                     // A destructive verb is a ROW in its own plate, not a red word floating
                     // centred under a void.
@@ -344,13 +497,17 @@ struct SessionDetailView: View {
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
                 .padding(.top, ThemeSpace.x4)
-                .padding(.bottom, ThemeSpace.x8)
+                .padding(.bottom, ThemeSpace.x6)
+                // The sheet is exactly as tall as what is in it. At `.medium` it left 105–600 pt of
+                // dead plate below the last group.
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
+            .scrollBounceBehavior(.basedOnSize)
             .background(ThemeColor.canvasRaised.ignoresSafeArea())
             .navigationTitle(session.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     // Plain bold text, for the same reason `Cancel` is plain text on the rewatch
                     // sheet: the toolbar wraps every item in its own glass capsule, and a filled
                     // pill is not what iOS puts in a sheet's confirm slot.
@@ -365,7 +522,7 @@ struct SessionDetailView: View {
                             .lineLimit(1)
                             .fixedSize()
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RowPressStyle(radius: ThemeRadius.compactControl))
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -379,6 +536,23 @@ struct SessionDetailView: View {
             } message: {
                 Text(Copy.Confirm.deleteSession(count: session.episodes))
             }
+        }
+        .presentationDetents([.height(min(max(contentHeight + 64, 260), 620)), .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// Centres a short list in the scroll view's own height rather than pinning it under the bar with
+/// several hundred points of black beneath it. Off at accessibility sizes, where the content is
+/// taller than the container and has to scroll from the top.
+struct CentreShortList: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if active {
+            content.containerRelativeFrame(.vertical, alignment: .center)
+        } else {
+            content
         }
     }
 }
