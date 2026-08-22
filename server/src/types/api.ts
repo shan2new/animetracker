@@ -144,6 +144,17 @@ export interface FranchiseListResponse {
   sources?: { anilist: SourceOutcome; tmdb: SourceOutcome }
 }
 
+/**
+ * `DELETE /me`. The account and everything it owned are gone, so there is nothing left to
+ * describe: the response carries only the fact that the erasure completed.
+ *
+ * `deleted` is a literal `true` rather than the codebase's usual `{ ok: true }` so a client can
+ * never read "the request was accepted" as "the account no longer exists".
+ */
+export interface AccountDeletedResponse {
+  deleted: true
+}
+
 /** A stored per-user notification (announcement news for a subscribed franchise). */
 export interface NotificationItem {
   id: string
