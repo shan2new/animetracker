@@ -50,17 +50,33 @@ export async function searchFranchises(
   }
   if (!query.trim()) return { franchises: await getTrendingFranchises(limit), sources }
 
+  // The outcome is written per CALL, success included, so the LAST attempt wins. Latching only
+  // the failure would let a first call that threw mark the catalogue `failed` for good — and the
+  // spell-corrected retry below would then return live AniList hits under "AniList couldn't be
+  // reached", which is exactly the dishonesty `sources` exists to prevent.
   const searchAniListSafe = (q: string) =>
-    searchMedia(q).catch(() => {
-      sources.anilist = 'failed'
-      return []
-    })
+    searchMedia(q).then(
+      (r) => {
+        sources.anilist = 'ok'
+        return r
+      },
+      () => {
+        sources.anilist = 'failed'
+        return []
+      },
+    )
   const searchTvSafe = (q: string) => {
     if (!tmdbEnabled()) return Promise.resolve([])
-    return searchTv(q).catch(() => {
-      sources.tmdb = 'failed'
-      return []
-    })
+    return searchTv(q).then(
+      (r) => {
+        sources.tmdb = 'ok'
+        return r
+      },
+      () => {
+        sources.tmdb = 'failed'
+        return []
+      },
+    )
   }
 
   let [hits, tvHitsRaw] = await Promise.all([searchAniListSafe(query), searchTvSafe(query)])

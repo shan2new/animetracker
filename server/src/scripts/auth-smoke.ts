@@ -9,6 +9,12 @@
  *
  * Exits 0 when both hold, 1 otherwise — printing the status and the first 200 bytes of the body so
  * a failure is diagnosable without a second round-trip. Safe to run against staging first.
+ *
+ * SIDE EFFECT ON FAILURE: assertion 2 only fails when the host still honours dev-bypass tokens —
+ * and a host that honours them also `upsertUser()`s the throwaway `smoke-<uuid>` clerk id into its
+ * `users` table. A FAIL therefore leaves ONE junk user row on the target host per run; delete it
+ * (`delete from users where clerk_id like 'smoke-%'`) after fixing the config. A PASS writes
+ * nothing, because the request is rejected before it reaches the upsert.
  */
 export {} // top-level await needs this file to be a module; it imports nothing on purpose.
 

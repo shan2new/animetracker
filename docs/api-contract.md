@@ -138,20 +138,23 @@ authenticated user's progress.
 | POST | `/me/notifications/read` | `{ ids?: [uuid] }` | `{ marked: Int }` — omit `ids` to mark all unread as read |
 
 ### FranchiseListResponse
-The envelope every franchise-list route returns. Two fields exist so the client can be honest
-rather than silently plausible:
+The envelope every franchise-list route returns. `franchises` is the only guaranteed field; the
+other three are **optional — present only on `/search`**, the one route that fans out across
+catalogues. `/franchises/trending` returns `{ franchises }` alone. They exist so the client can be
+honest rather than silently plausible:
 ```jsonc
 {
   "franchises": [ FranchiseSummary, … ],
-  "correctedQuery": "Mushoku Tensei",  // present only when the query was spell-corrected AND the
-                                       // rewrite actually found something
-  "originalQuery": "Mushuko Tensei",   // echoed alongside correctedQuery
-  "sources": {                          // per-catalogue outcome: a catalogue that FAILED is not a
-    "anilist": "ok",                    // catalogue with no matches. ok | failed | disabled
-    "tmdb": "disabled"                  // "disabled" = TMDB_ACCESS_TOKEN unset (anime-only mode)
-  }
+  "correctedQuery": "Mushoku Tensei",  // optional — /search only; present only when the query was
+                                       // spell-corrected AND the rewrite actually found something
+  "originalQuery": "Mushuko Tensei",   // optional — /search only; echoed alongside correctedQuery
+  "sources": {                          // optional — /search only. Per-catalogue outcome: a
+    "anilist": "ok",                    // catalogue that FAILED is not a catalogue with no
+    "tmdb": "disabled"                  // matches. ok | failed | disabled; "disabled" =
+  }                                     // TMDB_ACCESS_TOKEN unset (anime-only mode)
 }
 ```
+A client must treat an absent `sources` as "nothing to report", never as a failure.
 
 ### NotificationItem
 

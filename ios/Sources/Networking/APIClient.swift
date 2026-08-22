@@ -52,7 +52,8 @@ enum APIError: LocalizedError {
         }
     }
 
-    /// Log-only detail: status codes, MIME types, body text. Never rendered anywhere.
+    /// Log-only detail: status codes, MIME types, body text. Written to the unified log by the
+    /// throw sites in `send`; never rendered in any surface.
     var diagnostic: String {
         switch self {
         case .invalidURL: return "invalid-url"
@@ -65,7 +66,9 @@ enum APIError: LocalizedError {
         }
     }
 
-    /// The ONLY predicate any caller may use to decide whether to sign the user out.
+    /// The predicate callers should use to decide whether to sign the user out, once `AppModel`
+    /// adopts it (SP-2). It still branches on `catch APIError.unauthorized` today, which is the
+    /// same test spelled out longhand — but only this predicate survives adding a case.
     var isSessionEnding: Bool {
         if case .unauthorized = self { return true }
         return false
@@ -116,19 +119,38 @@ actor TokenRefresher {
     /// Long enough to cover one screen's fan-out, short enough that a genuinely new 401 refetches.
     private static let reuseWindow: TimeInterval = 3
 
+    /// Same subsystem/category as `APIClient.log`, so `auth.refresh` lines interleave with the
+    /// request lines in one `log stream --predicate 'subsystem == "com.anitrack.app"'`.
+    private static let log = Logger(subsystem: "com.anitrack.app", category: "api")
+
     private var inFlight: Task<TokenRefreshOutcome, Never>?
     private var lastToken: String?
     private var lastAt: Date?
 
+    /// The `auth.refresh` log lines live HERE, inside the actor, not at the call site: one
+    /// `begin`/`end` pair is emitted per actual refresh, so a burst of six concurrent 401s prints
+    /// one pair plus five `coalesced`/`reused` lines. Logging at the call site would print six of
+    /// each and make single-flight unverifiable from `log stream`.
     func token(from provider: TokenProvider) async -> TokenRefreshOutcome {
         if let lastAt, let lastToken, Date().timeIntervalSince(lastAt) < TokenRefresher.reuseWindow {
+            TokenRefresher.log.error("auth.refresh reused")
             return .token(lastToken)
         }
-        if let inFlight { return await inFlight.value }
+        if let inFlight {
+            TokenRefresher.log.error("auth.refresh coalesced")
+            return await inFlight.value
+        }
+        TokenRefresher.log.error("auth.refresh begin")
         let task = Task { await provider.refreshedToken() }
         inFlight = task
         let value = await task.value
         inFlight = nil
+        switch value {
+        case .token: TokenRefresher.log.error("auth.refresh end(changed:true)")
+        // The issuer had nothing to renew — a `dev:` token, or no Clerk session. NOT a network call.
+        case .notRefreshable: TokenRefresher.log.error("auth.refresh end(changed:false, notRefreshable)")
+        case .failed: TokenRefresher.log.error("auth.refresh end(changed:false, unreachable)")
+        }
         // ONLY a success primes the reuse window. Caching a refresh that failed because Clerk was
         // unreachable would replay that failure to every 401 for the next 3 s, turning one network
         // blip into a session-wide teardown.
@@ -196,7 +218,10 @@ final class APIClient: @unchecked Sendable {
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = APIClient.requestTimeout
-        config.timeoutIntervalForResource = 30
+        // Resource cap = the logical budget + 1 s. `timeoutIntervalForRequest` is an INTER-PACKET
+        // timeout: an upstream that trickles one byte every 14 s never trips it, so this is the
+        // only true wall-clock ceiling, and it must not outlive `RetryPolicy.budget`.
+        config.timeoutIntervalForResource = RetryPolicy.budget + 1
         config.waitsForConnectivity = false
         config.httpAdditionalHeaders = ["Accept": "application/json"]
         return URLSession(configuration: config)
@@ -333,10 +358,14 @@ final class APIClient: @unchecked Sendable {
 
     /// The whole transport state machine.
     ///
-    /// Exactly one RESPONSE path throws `.unauthorized` — a 401 that survived a forced refresh.
-    /// The only other site is the pre-flight guard below, and it fires only when there is no
-    /// SESSION: a token we merely failed to FETCH (offline, expired JWT, unreachable issuer) is
-    /// `.transport` and keeps the session. **403 is on neither.**
+    /// Exactly one RESPONSE path throws `.unauthorized` — a 401 that survived a forced refresh,
+    /// on a request that CARRIED a credential and came back with a non-HTML body. An HTML body
+    /// outranks the status: a 401 from nginx `auth_basic`, a Cloudflare Access challenge or a
+    /// captive portal is `.infrastructure(401, "html")` with the session kept, because "any status
+    /// + HTML" is infrastructure. The only other `.unauthorized` site is the pre-flight guard
+    /// below, and it fires only when there is no SESSION: a token we merely failed to FETCH
+    /// (offline, expired JWT, unreachable issuer) is `.transport` and keeps the session.
+    /// **403 is on neither.**
     ///
     /// The whole logical request — every attempt plus every backoff sleep — is bounded by one
     /// wall-clock budget, and each attempt's own timeout is clamped to what is left of it. A
@@ -398,7 +427,7 @@ final class APIClient: @unchecked Sendable {
                 let delay = RetryPolicy.delay(attempt: attempt + 1)
                 if idempotent, RetryPolicy.canRetry(attempt: attempt, delay: delay, deadline: deadline) {
                     attempt += 1
-                    APIClient.log.error("retry scheduled attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=0")
+                    APIClient.log.error("retry scheduled \(method, privacy: .public) \(path, privacy: .public) attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=0")
                     try await Task.sleep(for: .seconds(delay))
                     continue
                 }
@@ -407,34 +436,40 @@ final class APIClient: @unchecked Sendable {
             }
 
             guard let http = response as? HTTPURLResponse else {
-                APIClient.log.error("infrastructure status=-1 contentType=no-http-response")
-                throw APIError.infrastructure(-1, "no-http-response")
+                let e = APIError.infrastructure(-1, "no-http-response")
+                APIClient.log.error("\(method) \(path): \(e.diagnostic, privacy: .public)")
+                throw e
             }
             let status = http.statusCode
             let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
 
             // 1 — 401: refresh ONCE, then retry immediately. The retry does not consume the
             // backoff budget: a stale token is not a flaky network. This is the ONLY branch in the
-            // client that ends a session.
-            if status == 401 {
-                if auth, !refreshed {
+            // client that ends a session, so it is guarded on the two facts that make a 401 mean
+            // "your credential is dead":
+            //   * `auth` — we actually SENT a credential. A 401 on an unauthenticated probe
+            //     (`health()`) is the server's business, never a reason to sign anyone out.
+            //   * not HTML — a real expired session from Fastify is `401 {"error":"invalid token"}`
+            //     in `application/json`. An HTML 401 is nginx `auth_basic`, a Cloudflare Access
+            //     challenge, or a captive portal; it falls through to branch 4 and becomes
+            //     `.infrastructure(401, "html")` with the session KEPT.
+            if status == 401, auth, !isHTML(data: data, contentType: contentType) {
+                if !refreshed {
                     refreshed = true
-                    APIClient.log.error("auth.refresh begin")
                     let outcome = await refresher.token(from: tokenProvider)
                     switch outcome {
                     case let .token(fresh) where fresh != sentToken:
-                        APIClient.log.error("auth.refresh end(changed:true)")
                         forcedToken = fresh
                         continue
                     case let .failed(err):
                         // We never learned whether the credentials are dead — we only learned that
                         // the issuer is unreachable. That is a network fact, not a session fact.
-                        APIClient.log.error("auth.refresh end(unreachable) — transport, session kept")
+                        APIClient.log.error("\(method) \(path): auth.refresh unreachable — transport, session kept")
                         throw APIError.transport(err)
                     case .token, .notRefreshable:
                         // The issuer answered, and the answer was final: the same token back, or
                         // an issuer with nothing to renew (`dev:`, or no Clerk session).
-                        APIClient.log.error("auth.refresh end(changed:false)")
+                        break
                     }
                 }
                 APIClient.log.error("unauthorized after refresh")
@@ -444,8 +479,9 @@ final class APIClient: @unchecked Sendable {
             // 2 — 403 is INFRASTRUCTURE, never a sign-out. A Cloudflare WAF challenge says nothing
             // about the user's session; signing them out on it is the 2026-08-22 regression.
             if status == 403 {
-                APIClient.log.error("infrastructure status=403 contentType=\(contentType, privacy: .public)")
-                throw APIError.infrastructure(403, contentType.isEmpty ? "forbidden" : contentType)
+                let e = APIError.infrastructure(403, contentType.isEmpty ? "forbidden" : contentType)
+                APIClient.log.error("\(method) \(path): \(e.diagnostic, privacy: .public)")
+                throw e
             }
 
             // 3 — 429 and 5xx are worth one or two more attempts. This runs BEFORE the HTML test
@@ -456,7 +492,7 @@ final class APIClient: @unchecked Sendable {
                 let delay = after ?? RetryPolicy.delay(attempt: attempt + 1)
                 if idempotent, RetryPolicy.canRetry(attempt: attempt, delay: delay, deadline: deadline) {
                     attempt += 1
-                    APIClient.log.error("retry scheduled attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=\(status)")
+                    APIClient.log.error("retry scheduled \(method, privacy: .public) \(path, privacy: .public) attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=\(status)")
                     try await Task.sleep(for: .seconds(delay))
                     continue
                 }
@@ -468,14 +504,15 @@ final class APIClient: @unchecked Sendable {
             // 4 — an HTML body at ANY status (captive portal, WAF interstitial, a 200 sign-in page,
             // a CDN's 503 page) is an infrastructure failure, not a decode failure.
             if isHTML(data: data, contentType: contentType) {
-                APIClient.log.error("infrastructure status=\(status) contentType=\(contentType.isEmpty ? "html" : contentType, privacy: .public)")
-                throw APIError.infrastructure(status, "html")
+                let e = APIError.infrastructure(status, "html")
+                APIClient.log.error("\(method) \(path): \(e.diagnostic, privacy: .public) contentType=\(contentType.isEmpty ? "sniffed" : contentType, privacy: .public)")
+                throw e
             }
 
             guard (200..<300).contains(status) else {
-                let bodyText = String(data: data, encoding: .utf8) ?? ""
-                APIClient.log.error("\(method) \(path): HTTP \(status): \(bodyText, privacy: .public)")
-                throw APIError.http(status, bodyText)
+                let e = APIError.http(status, String(data: data, encoding: .utf8) ?? "")
+                APIClient.log.error("\(method) \(path): \(e.diagnostic, privacy: .public)")
+                throw e
             }
 
             do {
