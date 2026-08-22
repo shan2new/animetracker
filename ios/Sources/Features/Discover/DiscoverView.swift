@@ -613,7 +613,7 @@ struct DiscoverView: View {
     private var noResultsState: some View {
         let trimmed = appModel.searchQuery.trimmingCharacters(in: .whitespaces)
         let copy: EmptyStateCopy = appModel.searchError
-            ? (SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData)
+            ? (SyncCenter.shared.isOnline ? .searchFailed : .offlineNoData)
             : .noSearchResults(query: trimmed)
         return EmptyState(copy, prominence: .section, primary: appModel.searchError ? { appModel.retrySearch() } : nil)
             .padding(.top, ThemeSpace.x4)

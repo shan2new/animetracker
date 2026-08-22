@@ -192,6 +192,8 @@ private extension View {
                 switch p {
                 case .episodes(let franchiseId, let mediaId, let focusEpisode):
                     SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, focusEpisode: focusEpisode)
+                case .history(let franchiseId):
+                    WatchHistoryView(franchiseId: franchiseId)
                 }
             }
     }

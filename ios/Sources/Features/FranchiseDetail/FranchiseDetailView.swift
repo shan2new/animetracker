@@ -25,11 +25,17 @@ struct FranchiseDetailView: View {
     @State private var committedEpisode: Int?
     @State private var pendingUndo: UndoState?
     @State private var prompt: WritePrompt?
+    @State private var showStartRewatch = false
+    /// Minted when a mark completes a season; the hairline sweep draws once per token.
+    @State private var sweepToken: UUID?
 
     private var now: Int64 { appModel.now }
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
-    enum DetailPush: Hashable { case episodes(franchiseId: String, mediaId: Int, focusEpisode: Int?) }
+    enum DetailPush: Hashable {
+        case episodes(franchiseId: String, mediaId: Int, focusEpisode: Int?)
+        case history(franchiseId: String)
+    }
 
     // MARK: - Body
 
@@ -123,6 +129,7 @@ struct FranchiseDetailView: View {
                         nextUpCard(f, state: state)
                             .id(state.identity)
                             .transition(.opacity.combined(with: .offset(y: 6)))
+                        historyRow(f)
                     }
                     about(f)
                     partsList(f)
@@ -244,6 +251,14 @@ struct FranchiseDetailView: View {
                 }
                 Button(Copy.Action.viewEpisodes) { push(.episodes(franchiseId: f.id, mediaId: part.mediaId, focusEpisode: nil)) }
             }
+            if let session = RewatchStore.shared.activeSession(for: f.id) {
+                Divider()
+                Button(Copy.Action.restartRewatch) { promptRestartRewatch(f, session: session) }
+                Button("Cancel rewatch\u{2026}") { promptCancelRewatch(f, session: session) }
+            }
+            if !RewatchStore.shared.sessions(for: f.id).isEmpty || f.isSeriesComplete {
+                Button(Copy.Action.viewWatchHistory) { push(.history(franchiseId: f.id)) }
+            }
             Divider()
             RemoveFromLibraryButton(franchise: f, appModel: appModel)
         } label: {
@@ -274,8 +289,11 @@ struct FranchiseDetailView: View {
 
     private func nextUpState(_ f: Franchise) -> NextUp? {
         if f.isSeriesComplete {
+            let summary = RewatchStore.shared.summary(for: f.id)
             return NextUp(kind: .seriesComplete, part: nil, line1: "You’ve finished \(f.title)",
-                          line2: Copy.Progress.watchedTimes(1), line3: nil, episode: nil, behind: 0)
+                          line2: Copy.Progress.watchedTimes(max(1, summary.completedCount)),
+                          line3: summary.lastCompletedAt.flatMap { $0 > 0 ? "Last finished \(TemporalCopy.dateWord($0, now: now, anchor: .local))" : nil },
+                          episode: nil, behind: 0)
         }
         guard let part = f.currentPart else { return nil }
         if part.isUpcoming {
@@ -314,8 +332,9 @@ struct FranchiseDetailView: View {
     @ViewBuilder
     private func nextUpCard(_ f: Franchise, state: NextUp) -> some View {
         let committed = committedEpisode != nil && pinned != nil
+        let active = RewatchStore.shared.activeSession(for: f.id)
         VStack(alignment: .leading, spacing: ThemeSpace.x3) {
-            SectionLabel(text: state.kind == .seasonComplete || state.kind == .seriesComplete ? "Complete" : "Next up",
+            SectionLabel(text: state.kind == .seasonComplete || state.kind == .seriesComplete ? "Complete" : (active.map { "\($0.title) · Next up" } ?? "Next up"),
                          dot: state.kind == .actionable, tint: state.kind == .actionable ? ThemeColor.accent : ThemeColor.textTertiary)
             let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x3))
                               : AnyLayout(HStackLayout(alignment: .center, spacing: ThemeSpace.x3))
@@ -358,10 +377,89 @@ struct FranchiseDetailView: View {
             if let part = state.part, let episode = state.episode, state.kind == .actionable || state.kind == .backlog {
                 cta(f, part: part, episode: committed ? (committedEpisode ?? episode) : episode, behind: state.behind, committed: committed)
             }
+            if state.kind == .seriesComplete && active == nil {
+                Button(Copy.Action.startRewatch) { showStartRewatch = true }
+                    .buttonStyle(PrimaryButtonStyle2())
+                    .transition(.opacity)
+            }
         }
         .padding(.top, 10).padding(.horizontal, 12).padding(.bottom, 12)
         .background(ThemeColor.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous).stroke(ThemeColor.accent.opacity(0.18), lineWidth: 1))
+        .overlay(alignment: .top) {
+            if state.kind == .seasonComplete, let token = sweepToken {
+                SeasonSweepHairline(token: token).padding(.horizontal, 1)
+            }
+        }
+        .sheet(isPresented: $showStartRewatch) {
+            StartRewatchSheet(franchise: f) { scope, startedAt in startRewatch(f, scope: scope, startedAt: startedAt) }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    /// Under the card once any session exists: the way into watch history (board 06 §1.6).
+    @ViewBuilder
+    private func historyRow(_ f: Franchise) -> some View {
+        let sessions = RewatchStore.shared.sessions(for: f.id)
+        if !sessions.isEmpty || f.isSeriesComplete {
+            GroupedList {
+                GroupedRow(symbol: "clock.arrow.circlepath", symbolTint: ThemeColor.accentSoft, title: Copy.Action.viewWatchHistory,
+                           subtitle: sessions.isEmpty ? Copy.Progress.watchedTimes(1) : Copy.watchSessions(sessions.count),
+                           trailing: .chevron(nil), separator: false) {
+                    push(.history(franchiseId: f.id))
+                }
+            }
+        }
+    }
+
+    // MARK: - Rewatch
+
+    private func startRewatch(_ f: Franchise, scope: WatchSession.Scope, startedAt: Int64) {
+        let parts: [FranchisePart] = {
+            switch scope {
+            case .franchise: return f.episodicPartsInOrder
+            case .part(let mediaId): return f.parts.filter { $0.mediaId == mediaId }
+            }
+        }()
+        let snapshot = parts.map { ($0.mediaId, $0.progress) }
+        let previousStatus = f.effectiveStatus
+        let episodes = parts.reduce(0) { $0 + max($1.totalEpisodes, $1.progress) }
+        let session = RewatchStore.shared.startRewatch(franchiseId: f.id, scope: scope, startedAt: startedAt, episodes: episodes)
+        FeedbackCoordinator.fire(.success)
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
+            for (mediaId, progress) in snapshot where progress > 0 {
+                appModel.setProgress(franchiseId: f.id, mediaId: mediaId, episodes: 0, haptic: false)
+            }
+            appModel.setStatus(franchiseId: f.id, status: .watching, haptic: false)
+        }
+        appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 0, title: f.title, episode: 0,
+                                       customMessage: "Rewatch started") {
+            RewatchStore.shared.delete(session.id)
+            for (mediaId, progress) in snapshot { appModel.setProgress(franchiseId: f.id, mediaId: mediaId, episodes: progress, haptic: false) }
+            appModel.setStatus(franchiseId: f.id, status: previousStatus, haptic: false)
+        })
+    }
+
+    private func promptRestartRewatch(_ f: Franchise, session: WatchSession) {
+        let watched = f.episodicPartsInOrder.reduce(0) { $0 + $1.progress }
+        prompt = WritePrompt(title: Copy.Confirm.restartRewatchTitle, message: Copy.Confirm.restartRewatch(count: watched),
+                             confirm: Copy.Confirm.restartRewatchConfirm, destructive: true) {
+            FeedbackCoordinator.fire(.success)
+            for part in f.episodicPartsInOrder where part.progress > 0 {
+                appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: 0, haptic: false)
+            }
+        }
+    }
+
+    private func promptCancelRewatch(_ f: Franchise, session: WatchSession) {
+        let at = f.currentPart?.progress ?? 0
+        prompt = WritePrompt(title: "Cancel this rewatch?",
+                             message: "The session is kept in your history as cancelled at \(Copy.episodeInSentence(at)).",
+                             confirm: "Cancel rewatch", destructive: true) {
+            FeedbackCoordinator.fire(.destructive)
+            RewatchStore.shared.cancel(session.id, atEpisode: at, at: now)
+        }
     }
 
     private func secondLine(_ state: NextUp) -> String? {
@@ -426,6 +524,15 @@ struct FranchiseDetailView: View {
         let completes = part.progress + 1 >= part.markTarget(now: now) && !part.isReleasing && part.totalEpisodes > 0
         let snapshot = f
         guard let undo = appModel.markNext(franchiseId: f.id, mediaId: part.mediaId, haptic: completes ? .success : .commitLight) else { return }
+        if completes {
+            sweepToken = UUID()
+            let others = f.episodicPartsInOrder.filter { $0.mediaId != part.mediaId }
+            let seriesDone = others.allSatisfy(\.isComplete) && !f.parts.contains { $0.isReleasing || $0.isUpcoming }
+            if seriesDone {
+                if let active = RewatchStore.shared.activeSession(for: f.id) { RewatchStore.shared.complete(active.id, at: now) }
+                appModel.setStatus(franchiseId: f.id, status: .completed, haptic: false)
+            }
+        }
         pinned = snapshot
         pendingUndo = undo
         withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { committedEpisode = undo.episode }
@@ -807,5 +914,34 @@ private extension String {
     func lowercasedFirst() -> String {
         guard let first else { return self }
         return first.lowercased() + dropFirst()
+    }
+}
+
+
+/// The season-complete hairline (board 06 state 6): 1 pt of accent at the card's top inside edge,
+/// width 0 → full with `uiSweep`, exactly once per completion token; not drawn under Reduce Motion.
+struct SeasonSweepHairline: View {
+    let token: UUID
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var progress: CGFloat = 0
+    @State private var visible = false
+
+    var body: some View {
+        GeometryReader { geo in
+            Rectangle()
+                .fill(ThemeColor.accent)
+                .frame(width: geo.size.width * progress, height: 1)
+                .opacity(visible ? 1 : 0)
+        }
+        .frame(height: 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onAppear {
+            guard !reduceMotion, SeasonSweepLedger.claim(token) else { return }
+            visible = true
+            withAnimation(ThemeMotion.uiSweep) { progress = 1 } completion: {
+                withAnimation(ThemeMotion.uiGentle.delay(0.4)) { visible = false }
+            }
+        }
     }
 }

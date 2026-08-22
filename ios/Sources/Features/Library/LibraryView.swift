@@ -129,6 +129,9 @@ struct LibraryView: View {
     private func caption(_ f: Franchise, shelf: AppModel.LibShelf) -> String {
         switch shelf {
         case .watching:
+            if let active = RewatchStore.shared.activeSession(for: f.id), let p = f.currentPart {
+                return "\(active.title) · \(Copy.Progress.episodeNext(p.progress + 1))"
+            }
             if let p = f.currentPart, !p.isUpcoming {
                 if p.isReleasing && p.episodesBehind == 0 { return Copy.Progress.caughtUp }
                 return Copy.Progress.episodeNext(p.progress + 1)

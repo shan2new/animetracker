@@ -14,7 +14,8 @@ struct SplashView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onFinished: () -> Void
 
-    @State private var start = Date()
+    /// Set on appear so a slow cold launch does not consume the timeline before the first frame.
+    @State private var start: Date? = nil
 
     // The timeline (real seconds). IGNITE is when the sweep's leading edge crosses the dot
     // (inOutCubic over the sweep window hits dotX ≈ 0.557 at ~52% → ≈0.92s) — every climax
@@ -39,11 +40,12 @@ struct SplashView: View {
     var body: some View {
         GeometryReader { geo in
             TimelineView(.animation) { context in
-                let tm = reduceMotion ? 1.4 : context.date.timeIntervalSince(start)
+                let tm = reduceMotion ? 1.4 : (start.map { context.date.timeIntervalSince($0) } ?? 0)
                 stage(size: geo.size, tm: tm)
             }
         }
         .ignoresSafeArea()
+        .onAppear { if start == nil { start = Date() } }
         .task {
             if !reduceMotion {
                 // One soft tap exactly as the dot ignites — the signature beat, felt as

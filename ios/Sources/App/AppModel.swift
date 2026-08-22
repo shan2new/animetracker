@@ -180,6 +180,8 @@ final class AppModel {
     /// would otherwise keep serving the previous account. Leaves the model in its launch state so
     /// the next sign-in opens on a loader, never on someone else's shows.
     func teardown() {
+        RewatchStore.shared.reset()
+        SeasonSweepLedger.reset()
         clockTask?.cancel(); clockTask = nil
         searchTask?.cancel(); searchTask = nil
         trendingTask?.cancel(); trendingTask = nil
@@ -811,12 +813,12 @@ final class AppModel {
     /// The single choke point where every write is bounded to the part's episode count — an
     /// unbounded "+1" control otherwise walks progress off the end of a season (see
     /// `FranchisePart.progressCeiling`).
-    func setProgress(franchiseId: String, mediaId: Int, episodes: Int) {
+    func setProgress(franchiseId: String, mediaId: Int, episodes: Int, haptic: Bool = true) {
         let part = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }
         let clamped = min(max(0, episodes), part?.progressCeiling ?? .max)
         let prev = part?.progress
         // One watch fact → commitLight; a contiguous range → commitMedium (spec: haptic vocabulary).
-        FeedbackCoordinator.fire(abs(clamped - (prev ?? clamped)) > 1 ? .commitMedium : .commitLight)
+        if haptic { FeedbackCoordinator.fire(abs(clamped - (prev ?? clamped)) > 1 ? .commitMedium : .commitLight) }
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
         Task {
             do {
@@ -865,8 +867,8 @@ final class AppModel {
         }
     }
 
-    func setStatus(franchiseId: String, status: WatchStatus) {
-        FeedbackCoordinator.fire(.selection)
+    func setStatus(franchiseId: String, status: WatchStatus, haptic: Bool = true) {
+        if haptic { FeedbackCoordinator.fire(.selection) }
         guard let idx = library.firstIndex(where: { $0.id == franchiseId }) else {
             // Not in the loaded library (e.g. a pending add) — fire and hope; reload reconciles.
             Task { _ = try? await api.setStatus(franchiseId: franchiseId, status: status) }

@@ -564,6 +564,15 @@ struct EmptyStateCopy: Equatable, Sendable {
         title: "You\u{2019}re offline",
         supporting: "Showing saved data. Changes will sync when you reconnect.")
 
+    static let noSessions = EmptyStateCopy(
+        symbol: "clock.arrow.circlepath",
+        title: "No watch history yet",
+        supporting: "Your first watch is recorded when you finish the show. Rewatches appear here as sessions.")
+    static let searchFailed = EmptyStateCopy(
+        symbol: "wifi.exclamationmark",
+        title: "Search couldn\u{2019}t reach the server",
+        supporting: "Check your connection and try again.",
+        primaryLabel: "Try again")
     static let offlineNoData = EmptyStateCopy(
         symbol: "wifi.slash",
         title: "Connect to load your library",
