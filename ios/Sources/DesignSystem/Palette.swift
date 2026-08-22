@@ -106,20 +106,81 @@ final class PaletteCache {
     }
 }
 
-/// The art-adaptive card ground: derived colour at 52 % → 18 % over the flat surface, then a
-/// 44 % black overlay. A stable result for any poster; text contrast is verified by the gate.
+/// The art-adaptive card ground: derived colour at 52 % → 18 % over the flat surface, under a
+/// black veil. A stable result for any poster; text contrast is verified by the gate.
+///
+/// **The veil is 30 %, not 44 %.** The spec's 44 % is a FLOOR to be raised until primary text
+/// clears 4.5:1 — but the derived colour is already clamped to OKLab L ≤ 0.38, so the composite
+/// landed at rgb(22,18,18) against a rgb(9,9,11) canvas: a 4 % luminance step, which is why the
+/// shipped Focus card read as a hole with an outline round it rather than as a lit object. At 30 %
+/// the same card composites near rgb(34,28,25) — still a deep, cinema-dark ground, `textPrimary`
+/// (#F4F1EC) still clears 12:1 on it, and the card finally has a body.
 struct ArtAdaptiveGround: View {
     let tint: Color?
+    /// 1 is the card ground. Drop it for a large hero where the colour would otherwise dominate.
+    var intensity: Double = 1
+
+    private var base: Color { tint ?? PaletteCache.fallback }
 
     var body: some View {
         ZStack {
             ThemeColor.surfaceFlat
             LinearGradient(
-                colors: [(tint ?? PaletteCache.fallback).opacity(0.52), (tint ?? PaletteCache.fallback).opacity(0.18)],
+                colors: [base.opacity(0.52 * intensity), base.opacity(0.18 * intensity)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
-            Color.black.opacity(0.44)
+            // A light source, not a flat wash: without it a large ground is one dead rectangle of
+            // colour, which is what a gradient-filled div looks like.
+            RadialGradient(colors: [base.opacity(0.30 * intensity), .clear],
+                           center: .init(x: 0.16, y: 0.02), startRadius: 0, endRadius: 320)
+            Color.black.opacity(0.30)
         }
         .animation(ThemeMotion.uiPoster, value: tint == nil)
+    }
+}
+
+/// The ambient identity wash behind the top of a screen: the artwork itself, blurred past
+/// recognition, bleeding under the status bar and dissolving into the canvas.
+///
+/// This is the single biggest thing the shipped build dropped. The original Detail, Library,
+/// Schedule and Search screens all opened on a warm, art-derived atmosphere; the rebuilt ones open
+/// on #09090B. Nothing else recovers that much perceived quality for as little structure — and it
+/// costs one static, already-cached image, drawn once, never animated, never touched on scroll.
+///
+/// Composed as: art → tint bloom → vertical fade to canvas. Everything below `height` is canvas.
+struct ArtBackdrop: View {
+    var url: String? = nil
+    var tint: Color? = nil
+    var height: CGFloat = 380
+    /// 1 for a Detail hero. Lower it on a list screen, where the wash is atmosphere, not identity.
+    var intensity: Double = 1
+
+    private var base: Color { tint ?? PaletteCache.fallback }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            if let url, !url.isEmpty {
+                RemoteImageView(url: url, contentMode: .fill, maxPixel: 320)
+                    .frame(height: height)
+                    .clipped()
+                    .blur(radius: 56, opaque: true)
+                    .saturation(1.25)
+                    .opacity(0.60 * intensity)
+            }
+            LinearGradient(colors: [base.opacity(0.42 * intensity), base.opacity(0.06 * intensity), .clear],
+                           startPoint: .top, endPoint: .bottom)
+            // The handover to the canvas. It must reach FULL canvas well before the content that
+            // sits over it, or the first section looks like it is floating on a stain.
+            LinearGradient(stops: [
+                .init(color: .clear, location: 0.0),
+                .init(color: ThemeColor.canvas.opacity(0.55), location: 0.55),
+                .init(color: ThemeColor.canvas, location: 1.0),
+            ], startPoint: .top, endPoint: .bottom)
+        }
+        .frame(height: height)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

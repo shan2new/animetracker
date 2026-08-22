@@ -105,9 +105,9 @@ struct EmptyState: View {
         }
         .padding(pad)
         .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
-        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .stroke(ThemeColor.separator, lineWidth: 1))
+        // A plate. "Nothing here" is the quietest thing on any screen; outlining it in grey was
+        // the loudest way to draw it.
+        .surface(.plate, radius: radius)
         // Opacity only: an empty state that scales in reads as a celebration of having nothing.
         .transition(.opacity)
     }
@@ -136,9 +136,6 @@ struct InlineNotice: View {
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
-    private var strokeColor: Color {
-        kind == .failure ? ThemeColor.warning.opacity(0.35) : ThemeColor.separator
-    }
 
     var body: some View {
         Group {
@@ -168,9 +165,21 @@ struct InlineNotice: View {
         }
         .padding(.leading, 14)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous)
-            .stroke(strokeColor, lineWidth: 1))
+        .surface(.plate, radius: ThemeRadius.row)
+        // A 3-pt warning rule down the leading edge instead of a 1-px amber outline round the
+        // whole notice: the colour lands where the eye enters the line, and the notice stops
+        // looking like a disabled button.
+        .overlay(alignment: .leading) {
+            if kind == .failure {
+                UnevenRoundedRectangle(topLeadingRadius: ThemeRadius.row,
+                                       bottomLeadingRadius: ThemeRadius.row,
+                                       bottomTrailingRadius: 0, topTrailingRadius: 0,
+                                       style: .continuous)
+                    .fill(ThemeColor.warning.opacity(0.85))
+                    .frame(width: 3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
         .transition(.opacity)
     }
 
@@ -323,10 +332,7 @@ struct SyncBanner: View {
         .padding(.trailing, isAX ? 14 : 6)
         .padding(.vertical, isAX ? ThemeSpace.x3 : 0)
         .frame(minHeight: 52)
-        .background(ThemeColor.surfaceFloating, in: RoundedRectangle(cornerRadius: ThemeRadius.toast, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.toast, style: .continuous)
-            .stroke(ThemeColor.strokeStrong, lineWidth: 1))
-        .shadow(color: .black.opacity(0.40), radius: 16, y: 12)
+        .surface(.floating, radius: ThemeRadius.toast)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isSummaryElement)
         // Persistent chrome fades; it never springs in.
@@ -343,6 +349,10 @@ struct SyncBanner: View {
 struct EpisodeArtwork: View {
     let url: String?
     var spoilerSafe: Bool = true
+    /// The FRANCHISE's palette colour. A show whose stills are missing still has a colour, and a
+    /// list where two rows carry a photograph and eight carry an identical grey play-glyph reads
+    /// as a broken list. Passing this makes the glyph rows read as *this show, no still yet*.
+    var showTint: Color? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tint: Color?
@@ -367,34 +377,48 @@ struct EpisodeArtwork: View {
                 // to drive, so no `.transition` is claimed for it.
                 .animation(ThemeMotion.pick(ThemeMotion.uiPoster, reduceMotion: reduceMotion),
                            value: tint)
-                .frame(width: 96, height: 54)
+                .frame(width: EpisodeArtwork.slot.width, height: EpisodeArtwork.slot.height)
                 .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
-                    .stroke(ThemeColor.separator, lineWidth: 1))
+                    .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
                 .task(id: url) {
                     tint = await PaletteCache.shared.resolve(url: url, maxPixel: 288)
                 }
             } else {
-                EpisodeGlyphTile()
+                EpisodeGlyphTile(showTint: showTint)
             }
         }
         .accessibilityHidden(true)
     }
+
+    /// One rectangle for every episode row, still or not. The shipped build put a 96×54 photograph
+    /// on rows that had one and a 48×48 square on rows that did not, so a season list changed
+    /// shape halfway down and the row rhythm broke with it.
+    static let slot = CGSize(width: 96, height: 54)
 }
 
-/// The neutral episode tile: 48×48, no image, no number, no blur.
+/// The no-still episode tile: the SAME 96×54 rectangle as a real still, filled with the show's own
+/// palette colour under a very quiet glyph. No image, no number, no blur — and no grey box.
 struct EpisodeGlyphTile: View {
+    var showTint: Color? = nil
+
     var body: some View {
-        RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-            .fill(ThemeColor.surfaceFloating)
-            .frame(width: 48, height: 48)
+        RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
+            .fill(showTint ?? ThemeColor.surfaceRaised)
+            .frame(width: EpisodeArtwork.slot.width, height: EpisodeArtwork.slot.height)
+            .overlay {
+                // Darkened, so the tile never competes with the row beside it that has real art.
+                LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.34)],
+                               startPoint: .top, endPoint: .bottom)
+            }
             .overlay(
                 Image(systemName: "play.rectangle")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(ThemeColor.textTertiary)
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(ThemeColor.textPrimary.opacity(0.34))
             )
-            .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                .stroke(ThemeColor.separator, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
+                .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
             .accessibilityHidden(true)
     }
 }
@@ -407,8 +431,11 @@ struct PassiveTick: View {
     var boxed: Bool = false
 
     var body: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.system(size: 18, weight: .regular))
+        // A bare check, not a filled disc. `checkmark.circle.fill` at tertiary grey renders as a
+        // 18-pt grey blob — read as a disabled control rather than as a settled fact — and a column
+        // of them down a season list is the "grey tick glyphs" complaint exactly.
+        Image(systemName: "checkmark")
+            .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(ThemeColor.textTertiary)
             .frame(width: boxed ? 44 : nil, height: boxed ? 44 : nil)
             .accessibilityElement()
@@ -495,7 +522,7 @@ struct SelectionRow: View {
         Button(action: action) {
             HStack(spacing: ThemeSpace.x3) {
                 if let cover {
-                    PosterSlot(url: cover, width: 40, height: 60, radius: ThemeRadius.poster)
+                    PosterSlot(url: cover, .row)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -561,11 +588,14 @@ struct SectionHeaderRow: View {
             Spacer(minLength: ThemeSpace.x2)
             if let actionLabel, let action {
                 Button(actionLabel, action: action)
-                    .buttonStyle(TertiaryButtonStyle2())
-                    // The style's 44x44 target is the accessibility frame and must survive, so the
-                    // row is pulled back optically instead of clamped: negative padding shrinks the
-                    // *layout* height to ~20 pt while the hit region stays 44x44. A `.frame(height:)`
-                    // here would both shrink the target and drag the label 12 pt off the baseline.
+                    // `InlineLinkButtonStyle`, not `TertiaryButtonStyle2`: a section header's
+                    // action is a LINK. At 16-pt semibold amber it was optically larger than the
+                    // 11-pt label it belongs to, so on Library and Today "See all" read as the
+                    // loudest thing in the section — louder than the shows.
+                    .buttonStyle(InlineLinkButtonStyle())
+                    // The style's target is held by padding + `contentShape`, so the row is pulled
+                    // back optically instead of clamped: this shrinks the *layout* height to ~20 pt
+                    // while the hit region stays ≥ 44 pt tall.
                     .padding(.vertical, -12)
             }
         }
@@ -592,7 +622,7 @@ struct CompactActionButtonStyle: ButtonStyle {
             .background(configuration.isPressed ? ThemeColor.surfacePressed : ThemeColor.surfaceFloating,
                         in: RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                .stroke(ThemeColor.stroke, lineWidth: 1))
+                .strokeBorder(ThemeColor.stroke, lineWidth: 1))
             // Reduce Motion presses in opacity, never in scale (board 11).
             .opacity(isEnabled ? (reduceMotion && configuration.isPressed ? 0.72 : 1) : 0.38)
             .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1))
@@ -723,8 +753,7 @@ struct HistorySessionRow: View {
         Button(action: action) {
             HStack(spacing: ThemeSpace.x3) {
                 if let poster {
-                    // Slots under 80 pt on the long edge use the 6-pt radius (matches the queue row).
-                    PosterSlot(url: poster, width: 36, height: 54, radius: 6)
+                    PosterSlot(url: poster, .queue)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -744,9 +773,15 @@ struct HistorySessionRow: View {
             .padding(.vertical, ThemeSpace.x3)
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: HistoryRailMetrics.minRowHeight, alignment: .leading)
-            .background(ThemeColor.surfaceRaised, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous)
-                .stroke(active ? ThemeColor.accent.opacity(0.45) : Color.clear, lineWidth: 1))
+            .surface(.raised, radius: ThemeRadius.row)
+            // The active session keeps its accent ring: here the colour IS the state, and the
+            // ring is the only thing separating this card from its identical neighbours.
+            .overlay {
+                if active {
+                    RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous)
+                        .strokeBorder(ThemeColor.accent.opacity(0.45), lineWidth: 1)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(RowPressStyle())
