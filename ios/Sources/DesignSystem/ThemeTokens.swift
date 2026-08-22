@@ -17,11 +17,17 @@ enum ThemeColor {
     // Canvas
     static let canvas = Color(hex: 0x09090B)
     static let canvasRaised = Color(hex: 0x0D0E11)
-    // Opaque content surfaces
-    static let surfaceFlat = Color(hex: 0x121318)
-    static let surfaceRaised = Color(hex: 0x181A20)
-    static let surfaceFloating = Color(hex: 0x202229)
-    static let surfacePressed = Color(hex: 0x282A32)
+    // Opaque content surfaces.
+    //
+    // These are the RESULT of `plateLift` / `raisedLift` composited over `canvas`, so a screen that
+    // reaches for the token directly and a container that goes through `.surface(_:)` land on the
+    // same colour. The shipped values (#121318 / #181A20) were a 9-value 8-bit step off a #09090B
+    // canvas and 6 values apart from each other — Apple's dark grouped step is roughly twice that,
+    // which is why every container still needed an outline to exist.
+    static let surfaceFlat = Color(hex: 0x171719)
+    static let surfaceRaised = Color(hex: 0x242428)
+    static let surfaceFloating = Color(hex: 0x2A2D36)
+    static let surfacePressed = Color(hex: 0x353842)
     // Text
     static let textPrimary = Color(hex: 0xF4F1EC)
     static let textSecondary = Color(hex: 0xAAA6A0)
@@ -41,7 +47,9 @@ enum ThemeColor {
     static let separator = Color.white.opacity(0.08)
     static let stroke = Color.white.opacity(0.12)
     static let strokeStrong = Color.white.opacity(0.20)
-    static let skeleton = Color(hex: 0xF4F1EC).opacity(0.08)
+    /// Skeleton fill. At 8 % over the old #09090B canvas the structure was ~4 % above ground and
+    /// effectively invisible; it has to read as the shape of what is coming.
+    static let skeleton = Color(hex: 0xF4F1EC).opacity(0.11)
     static let focusRing = Color(hex: 0xF0A24E).opacity(0.70)
     // Overlays
     static let scrim = Color.black.opacity(0.56)
@@ -62,8 +70,22 @@ enum ThemeColor {
     static let separatorQuiet = Color.white.opacity(0.045)
     /// The edge of artwork. Never `stroke` — a 12 %-white outline around a bright poster is a
     /// picture frame, and around a dark poster it is a glow. Just enough to stop art bleeding
-    /// into the canvas.
-    static let posterEdge = Color.white.opacity(0.05)
+    /// into the canvas: at 5 % a near-black poster dissolved into #09090B entirely, so 9 % is the
+    /// floor at which the art still has a boundary and a bright poster still has no frame.
+    static let posterEdge = Color.white.opacity(0.09)
+
+    // MARK: - Surface lifts
+    //
+    // A surface is a RELATIVE lift, not an absolute fill. The shipped `.plate` painted opaque
+    // `surfaceFlat` wherever it landed, so on any screen carrying an `ArtBackdrop` the ambient wash
+    // lifted the canvas AROUND the plate and the plate itself inverted into a hole 13 levels darker
+    // than its own ground — measured on Library, where it is the first element on the screen.
+    // Painting white over whatever is beneath means a plate is always *above* its ground.
+
+    /// `.plate` — grouped lists, section grounds, notices.
+    static let plateLift = Color.white.opacity(0.055)
+    /// `.raised` — a card that carries the screen's action.
+    static let raisedLift = Color.white.opacity(0.11)
     /// The bottom of a full-bleed ambient backdrop, where art hands over to the canvas.
     static let backdropFade = canvas
     /// The veil that hides scrolling content as it approaches the status bar. Full canvas, so the
@@ -149,8 +171,17 @@ enum ThemeMetrics {
     static let artGap: CGFloat = 14
     /// Below a hero, before the first content block.
     static let heroClearance: CGFloat = 26
-    /// Bottom inset that clears the floating tab bar.
-    static let tabBarClearance: CGFloat = 108
+    /// Bottom inset that clears the floating tab bar AND the whole scroll-edge ramp above it.
+    ///
+    /// At 108 against a 116-pt ramp the last block of every screen came to rest *inside* the ramp:
+    /// measured 1.60:1 on Detail's About paragraph, 1.69:1 on a Library row title, 4.29:1 on an
+    /// enabled Search "Add" button against 14.10:1 for the identical control higher up. Nothing
+    /// interactive, and no text, may ever settle inside the veil — so the clearance is the ramp's
+    /// full height plus a margin, not less than it.
+    static let tabBarClearance: CGFloat = 152
+    /// Extra clearance the toast claims when it is on screen, so it insets content rather than
+    /// covering the shelf captions it currently lands on top of.
+    static let toastClearance: CGFloat = 64
 
     // Row heights. A row's height is set by its ART, not by a hairline grid: 68 pt everywhere is
     // what makes a media app look like a list of settings.
@@ -197,9 +228,26 @@ enum ThemeMetrics {
     static let topChromeRamp: CGFloat = 22
     /// Total height of the top chrome, safe area included.
     static var topChromeHeight: CGFloat { topSafeInset + topChromeRamp }
-    /// The soft landing above the floating tab bar. Never fully opaque — the tab bar is glass and
-    /// must keep something to refract.
-    static let bottomChromeHeight: CGFloat = 116
+    /// The ramp that carries content out of sight before it reaches the floating tab bar.
+    ///
+    /// 116 started the ramp ~100 pt above the tab pill's top edge, so half of it did nothing but
+    /// dim readable content, while the pill's own glass rim still had un-occluded body copy to
+    /// refract (the mirrored/upside-down text on `finished.png`, `search.png`, `ax-schedule.png`,
+    /// which reads as GPU corruption). It now starts where the pill does and finishes opaque.
+    static let bottomChromeHeight: CGFloat = 140
+
+    /// Solid canvas painted BELOW the ramp, i.e. behind the tab bar and across the home-indicator
+    /// strip.
+    ///
+    /// A `TabView` insets its children's safe area by the bar, so a `.bottom`-aligned overlay's
+    /// bottom edge is the bar's TOP edge, not the screen's — and `ignoresSafeArea` can only give
+    /// that overlay back the window's own 34-pt inset, never the bar's height on top of it. That
+    /// gap is exactly consequence (b): content rendering at full brightness underneath the bar
+    /// (236/255 on Library against 59 one row above it) with live chevrons in the home-indicator
+    /// strip. Over-drawing past the layout's edge is the only honest fix; the tab bar is drawn by
+    /// the `TabView` above its children, so this passes underneath it and gives its glass an
+    /// opaque ground to refract.
+    static let bottomUnderfill: CGFloat = 180
 }
 
 /// Artwork slots, named by CONTEXT rather than by number, so no screen has to remember that a
@@ -227,8 +275,12 @@ enum PosterSize {
         switch self {
         case .hero: return CGSize(width: 112, height: 168)
         case .focus: return CGSize(width: 88, height: 132)
-        case .shelfLarge: return CGSize(width: 116, height: 174)
-        case .shelfMedium: return CGSize(width: 100, height: 150)
+        // Widened so a shelf caption's first line carries a real WORD. At 100 pt "That Time I Got
+        // Reincarnated as a Slime" broke as "That Time I / Got Reincarn…" and "Re:ZERO / -Starting
+        // Life…" opened a line on a hyphen — the app truncating an identity title on one screen
+        // while Library's rows render the same title whole.
+        case .shelfLarge: return CGSize(width: 124, height: 186)
+        case .shelfMedium: return CGSize(width: 112, height: 168)
         case .searchRow: return CGSize(width: 60, height: 90)
         case .row: return CGSize(width: 48, height: 72)
         case .queue: return CGSize(width: 44, height: 66)

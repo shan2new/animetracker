@@ -16,17 +16,24 @@ import SwiftUI
 private struct PageInTransition: ViewModifier {
     /// True when this view's tab is the selected one.
     let isActive: Bool
-    /// How far the content rises from, in points. Kept small so the motion reads as a settle.
-    var travel: CGFloat = 10
+    /// How far the content rises from, in points. Kept small so the motion reads as a settle —
+    /// 6, not 10: at 10 the first landing reads as content sliding into place, which is a loading
+    /// beat; at 6 it reads as the screen coming into focus.
+    var travel: CGFloat = 6
     @State private var shown = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     // A non-overshooting "smooth" spring: no wobble, no directional bounce — just a calm landing.
-    private var entrance: Animation { .smooth(duration: 0.42) }
+    private var entrance: Animation {
+        ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)
+    }
 
     func body(content: Content) -> some View {
         content
             .opacity(shown ? 1 : 0)
-            .offset(y: shown ? 0 : travel)
+            // Under Reduce Motion the entrance is a pure crossfade: nothing travels.
+            .offset(y: shown || reduceMotion ? 0 : travel)
             // `shown` is never reset — that's the once-only guarantee.
             .onChange(of: isActive) { _, active in
                 if active, !shown { withAnimation(entrance) { shown = true } }
@@ -39,7 +46,7 @@ private struct PageInTransition: ViewModifier {
 extension View {
     /// Applies the shared page-in entrance to a main tab's content, once per tab. `isActive` is
     /// whether this tab is currently selected. See `PageInTransition`.
-    func pageInTransition(isActive: Bool, travel: CGFloat = 10) -> some View {
+    func pageInTransition(isActive: Bool, travel: CGFloat = 6) -> some View {
         modifier(PageInTransition(isActive: isActive, travel: travel))
     }
 }

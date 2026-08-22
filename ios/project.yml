@@ -89,6 +89,12 @@ targets:
         ClerkPublishableKey: "$(CLERK_PUBLISHABLE_KEY)"
         # Backend base URL. Defaults to the local dev server.
         APIBaseURL: "$(API_BASE_URL)"
+        # App Store guideline 5.1.1 requires a reachable Privacy Policy, Terms and a support
+        # contact. AppConfig treats an unset value or one still containing REPLACE_ME as absent
+        # and the Profile screen omits the row, so a placeholder never ships as a broken link.
+        PrivacyPolicyURL: "$(PRIVACY_POLICY_URL)"
+        TermsURL: "$(TERMS_URL)"
+        SupportEmail: "$(SUPPORT_EMAIL)"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.anitrack.app
@@ -103,6 +109,10 @@ targets:
         # For local development, override with a LAN URL such as
         # "http://Shantanus-MacBook-Air.local:8787" (NSAllowsLocalNetworking permits it).
         API_BASE_URL: "https://anime.cognipin.com"
+        # === FILL THESE IN BEFORE SUBMISSION (guideline 5.1.1) ===
+        PRIVACY_POLICY_URL: "REPLACE_ME"
+        TERMS_URL: "REPLACE_ME"
+        SUPPORT_EMAIL: "REPLACE_ME"
         # === SIGNING ===
         DEVELOPMENT_TEAM: YLPZXZS2F4
         CODE_SIGN_STYLE: Automatic

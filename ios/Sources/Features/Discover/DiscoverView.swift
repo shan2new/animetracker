@@ -216,11 +216,13 @@ struct DiscoverView: View {
                             trendingCard(rank: i + 1, item)
                         }
                     }
-                    .padding(.horizontal, ThemeMetrics.gutter)
+                    .padding(.leading, ThemeMetrics.gutter)
                     .padding(.vertical, ThemeSpace.x1)
                 }
                 .scrollIndicators(.hidden)
                 .scrollClipDisabled()
+                // Art may run off the trailing edge; TYPE may not. See `shelfScroller`.
+                .shelfScroller()
                 .padding(.top, ThemeMetrics.labelGap)
             }
 
@@ -500,6 +502,7 @@ struct DiscoverView: View {
             slot: .searchRow,
             chevron: false,
             separator: !isLast,
+            zoomID: "result/\(item.id)",
             trailing: { rowControl(item, owned: owned) },
             action: { onOpenDetail(item.id, "result/\(item.id)") }
         )

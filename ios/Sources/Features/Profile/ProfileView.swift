@@ -87,7 +87,7 @@ struct ProfileView: View {
                 .scrollEdgeEffectStyle(.hard, for: .top)
                 // The row is tappable, but the gesture people already know is the one that should
                 // work: this is the screen that answers "is my library actually saved".
-                .refreshable { await appModel.reload() }
+                .previouslyRefreshable { await appModel.reload() }
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     geo.contentOffset.y + geo.contentInsets.top
                 } action: { _, y in
@@ -183,21 +183,12 @@ struct ProfileView: View {
     /// screen has to beat, used exactly this lit amber disc. It is the only filled accent object
     /// on the screen: `Done` is text and `Sign out` is `destructive`.
     private var avatar: some View {
-        ZStack {
-            Circle().fill(ThemeColor.accent)
-            Circle().fill(
-                LinearGradient(colors: [ThemeColor.controlSheen, .clear],
-                               startPoint: .top, endPoint: .center)
-            )
-            Text(monogram)
-                .type(ThemeType.displayL)
-                .foregroundStyle(ThemeColor.onAccent)
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-                .padding(.horizontal, ThemeSpace.x2)
-        }
-        .frame(width: 72, height: 72)
-        .shadow(.art)
+        // `AccountDisc` with `AuthManager.identity` — the SAME derivation Today's header uses.
+        // Two independent ones produced "U" there (off the raw Clerk id) and "Y" here (off this
+        // screen's own fallback label "Your account"): one user, two meaningless letters, one tap
+        // apart. 56 pt, not 72: at full accent and 72 the disc was the loudest object in the app.
+        AccountDisc(identity: auth.identity, diameter: 56)
+            .shadow(.art)
         .accessibilityHidden(true)
     }
 
@@ -475,29 +466,18 @@ struct ProfileView: View {
 
     // MARK: - Helpers
 
-    /// A Clerk user id is not a name: show the account generically rather than an opaque token.
-    private var accountName: String {
-        if case .dev = auth.mode { return "Your account" }
-        let n = auth.displayName.trimmingCharacters(in: .whitespaces)
-        return (n.isEmpty || n == "Signed in" || n.hasPrefix("user_")) ? "Your account" : n
-    }
+    /// A Clerk user id is not a name. `AccountIdentity` already answers this, once, for every
+    /// surface — this screen no longer decides it for itself.
+    private var accountName: String { auth.identity.displayName }
 
     /// The one fact a profile screen exists to answer besides "who": how this device is signed in.
     /// It is deliberately not the sync line — that belongs to Sync, and printing it twice is how
     /// the shipped build ended up with two greys saying the same thing.
     private var provenance: String {
-        if case .dev = auth.mode { return "Developer session" }
-        return "Signed in with Clerk"
-    }
-
-    /// One letter, never two: Clerk's first name, else the first letter of the email, else the
-    /// first letter of the label the account renders under. Never the app's mark, never a stock
-    /// person glyph, and never "YA" scraped off two words.
-    private var monogram: String {
-        let source = accountName.drop { !$0.isLetter && !$0.isNumber }
-        return source.first.map { String($0).uppercased() }
-            ?? accountName.first.map { String($0).uppercased() }
-            ?? "•"
+        switch auth.identity.provenance {
+        case .developer: return "Developer session"
+        default: return "Signed in with Clerk"
+        }
     }
 
     private var version: String {

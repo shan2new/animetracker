@@ -87,9 +87,33 @@ enum TemporalCopy {
     }
 
     /// "Aug 28" in the current year, "Aug 28, 2027" otherwise.
+    ///
+    /// The year is never string-joined on. `"\(md), \(a.y)"` produced **"31 Mar, 2013"** on a
+    /// day-first device — a comma between a day-first date and its year, which no locale writes
+    /// (en-GB is "31 Mar 2013", en-US "Mar 31, 2013") — and it was on every row of every episode
+    /// list. `fmtFullDate` already carries the "MMMdyyyy" skeleton, which orders and punctuates
+    /// itself per locale; a hand-assembled date cannot.
     static func dateWord(_ ts: Int64, now: Int64, anchor: Formatting.TimeAnchor) -> String {
         let a = Formatting.localParts(ts, anchor: anchor), b = Formatting.localParts(now, anchor: anchor)
-        let md = Formatting.fmtMonthDay(ts, anchor: anchor)
-        return a.y == b.y ? md : "\(md), \(a.y)"
+        return a.y == b.y
+            ? Formatting.fmtMonthDay(ts, anchor: anchor)
+            : Formatting.fmtFullDate(ts, anchor: anchor)
+    }
+
+    /// A date range — "24 May – 29 Jul", "10 Dec 2024 – 3 Feb 2025". One formatter, so the two ends
+    /// agree with each other and with `dateWord`, and the year is never implied away inside a form.
+    ///
+    /// Within two taps the shipped build showed "31 Mar, 2013", "24 May – 29 Jul" (no year at all),
+    /// "10 Dec, 2024" and "24 May 2026" — four formats, two of them in adjacent rows of one list.
+    static func dateRange(_ from: Int64, _ to: Int64, now: Int64,
+                          anchor: Formatting.TimeAnchor = .local) -> String {
+        let a = Formatting.localParts(from, anchor: anchor)
+        let b = Formatting.localParts(to, anchor: anchor)
+        let thisYear = Formatting.localParts(now, anchor: anchor).y
+        // A span that crosses a year, or sits in a year that is not this one, states both years.
+        guard a.y == b.y, a.y == thisYear else {
+            return "\(Formatting.fmtFullDate(from, anchor: anchor)) \u{2013} \(Formatting.fmtFullDate(to, anchor: anchor))"
+        }
+        return "\(Formatting.fmtMonthDay(from, anchor: anchor)) \u{2013} \(Formatting.fmtMonthDay(to, anchor: anchor))"
     }
 }

@@ -180,7 +180,7 @@ struct ScheduleView: View {
                     .frame(maxWidth: .infinity)
                     .ignoresSafeArea(edges: .top)
             }
-            .refreshable { await appModel.reload() }
+            .previouslyRefreshable { await appModel.reload() }
             .task { await ScheduleReminders.shared.refresh() }
             .onChange(of: appModel.loading, initial: true) { _, loading in
                 guard !loading, !didLand, !appModel.library.isEmpty else { return }
@@ -898,20 +898,6 @@ struct ScheduleView: View {
                 present()
             }
         }
-    }
-}
-
-/// Press feedback for the round mark control: compression only, no rounded-rect wash behind a
-/// circle. Reduce Motion presses in opacity (board 11).
-private struct MarkPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1))
-            .opacity(reduceMotion && configuration.isPressed ? 0.72 : 1)
-            .animation(ThemeMotion.pick(ThemeMotion.uiPress, reduceMotion: reduceMotion),
-                       value: configuration.isPressed)
     }
 }
 
