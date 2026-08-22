@@ -85,17 +85,19 @@ struct EmptyState: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(copy.spokenLabel)
 
-            if copy.primaryLabel != nil || copy.secondaryLabel != nil {
+            // A label without a handler is a dead control, not a disabled one: an empty state
+            // that draws `Try again` at 0.38 opacity is worse than an empty state with no button.
+            // The button exists only when the caller supplied something for it to do.
+            if (copy.primaryLabel != nil && primary != nil)
+                || (copy.secondaryLabel != nil && secondary != nil) {
                 VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-                    if let label = copy.primaryLabel {
-                        Button(label) { primary?() }
+                    if let label = copy.primaryLabel, let primary {
+                        Button(label, action: primary)
                             .buttonStyle(PrimaryButtonStyle2())
-                            .disabled(primary == nil)
                     }
-                    if let label = copy.secondaryLabel {
-                        Button(label) { secondary?() }
+                    if let label = copy.secondaryLabel, let secondary {
+                        Button(label, action: secondary)
                             .buttonStyle(TertiaryButtonStyle2())
-                            .disabled(secondary == nil)
                     }
                 }
                 .padding(.top, actionGap)
@@ -205,10 +207,12 @@ struct StaleStrip: View {
             Text(Copy.updated(at: since, now: now))
                 .type(ThemeType.metadata)
                 .foregroundStyle(ThemeColor.textTertiary)
-                .lineLimit(1)
+                // At AX5 the metadata token is ~44 pt: "Updated Aug 19, 2025" cannot fit one line.
+                // The strip is passive, so it wraps and the 28-pt minimum simply grows.
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .frame(minHeight: 28)
+        .frame(minHeight: 28, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Copy.updatedSpokenLabel(at: since, now: now))
         .accessibilityAddTraits(.isStaticText)
@@ -326,10 +330,18 @@ struct EpisodeArtwork: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
                         .fill(tint ?? ThemeColor.surfaceRaised)
+                    // The failed state, mirroring `PosterSlot`: the symbol sits *under* the image,
+                    // so a fetch that never resolves leaves the tint plus a centred photo glyph
+                    // instead of a bare rectangle. The image covers it the moment it lands.
+                    Image(systemName: "photo")
+                        .font(.system(size: 16, weight: .regular))
+                        .foregroundStyle(ThemeColor.textTertiary)
                     RemoteImageView(url: url, contentMode: .fill, maxPixel: 288)
-                        .transition(.opacity.animation(
-                            ThemeMotion.pick(ThemeMotion.uiPoster, reduceMotion: reduceMotion)))
                 }
+                // The tint-to-image fade is `CachedAsyncImage`'s own; there is no insertion here
+                // to drive, so no `.transition` is claimed for it.
+                .animation(ThemeMotion.pick(ThemeMotion.uiPoster, reduceMotion: reduceMotion),
+                           value: tint)
                 .frame(width: 96, height: 54)
                 .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
@@ -522,7 +534,11 @@ struct SectionHeaderRow: View {
             if let actionLabel, let action {
                 Button(actionLabel, action: action)
                     .buttonStyle(TertiaryButtonStyle2())
-                    .frame(height: 20)
+                    // The style's 44x44 target is the accessibility frame and must survive, so the
+                    // row is pulled back optically instead of clamped: negative padding shrinks the
+                    // *layout* height to ~20 pt while the hit region stays 44x44. A `.frame(height:)`
+                    // here would both shrink the target and drag the label 12 pt off the baseline.
+                    .padding(.vertical, -12)
             }
         }
         .accessibilityElement(children: .contain)
@@ -754,14 +770,23 @@ extension View {
     /// `contentTransition(.numericText())` on the four numbers board 12 allows it on: the backlog
     /// count after a mark, the library count, a confirmation summary, and the foreground
     /// countdown. Nowhere else — constant movement turns state into spectacle.
+    ///
+    /// SwiftUI does **not** disable `.numericText()` under Reduce Motion, so the check lives here,
+    /// once, rather than in every caller: with Reduce Motion on the digits crossfade instead of
+    /// rolling. There is no non-value overload — a numeric roll needs the value it is rolling to.
     func numericFact<V: Equatable>(_ value: V) -> some View {
-        contentTransition(.numericText())
-            .animation(ThemeMotion.uiNumeric, value: value)
+        modifier(NumericFact(value: value))
     }
 
-    /// The form for a number whose change the caller already wraps in `withAnimation`.
-    func numericFact() -> some View {
-        contentTransition(.numericText())
+    /// The freshness pair, composed once so that five screens do not hand-assemble it five ways:
+    /// the 16-pt `RefreshIndicator` trails the screen title, and the 28-pt `StaleStrip` sits
+    /// directly beneath it whenever this data class is past its threshold. Applied to a screen's
+    /// title view. `pullDriving` is passed when a native pull owns the moment — the system
+    /// indicator is then the only spinner on screen.
+    func freshness(_ dataClass: SyncCenter.DataClass,
+                   appModel: AppModel,
+                   pullDriving: Bool = false) -> some View {
+        modifier(Freshness(dataClass: dataClass, appModel: appModel, pullDriving: pullDriving))
     }
 
     /// Native `refreshable`, plus the one thing board 11 asks of a pull: `.refreshArmed` at the
@@ -773,6 +798,43 @@ extension View {
     func previouslyRefreshable(threshold: CGFloat = 80,
                                _ action: @escaping @Sendable () async -> Void) -> some View {
         modifier(PreviouslyRefreshable(threshold: threshold, action: action))
+    }
+}
+
+/// Reduce Motion aware numeric transition. `.numericText()` rolls digits; under Reduce Motion the
+/// roll is replaced by an opacity crossfade on the reduced curve.
+private struct NumericFact<V: Equatable>: ViewModifier {
+    let value: V
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .contentTransition(reduceMotion ? .opacity : .numericText())
+            .animation(ThemeMotion.pick(ThemeMotion.uiNumeric, reduceMotion: reduceMotion),
+                       value: value)
+    }
+}
+
+private struct Freshness: ViewModifier {
+    let dataClass: SyncCenter.DataClass
+    let appModel: AppModel
+    let pullDriving: Bool
+
+    func body(content: Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+                content
+                RefreshIndicator(isRefreshing: appModel.isRefreshing, suppressed: pullDriving)
+                Spacer(minLength: 0)
+            }
+            if let since = appModel.staleSince(dataClass) {
+                StaleStrip(since: since, now: appModel.now)
+            }
+        }
+        // Both halves arrive and leave on the same gentle curve; neither is ever a spring.
+        .animation(ThemeMotion.uiGentle, value: appModel.isRefreshing)
+        .animation(ThemeMotion.uiGentle, value: appModel.staleSince(dataClass))
     }
 }
 

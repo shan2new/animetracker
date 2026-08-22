@@ -122,6 +122,10 @@ final class SyncCenter {
 
     private(set) var failedChanges: [FailedChange] = []
 
+    /// At least one failed change has something `Retry` can actually run. A banner or a Profile
+    /// row whose Retry would be a no-op must not draw the button at all.
+    var canRetryAny: Bool { failedChanges.contains { $0.canRetry(self) } }
+
     /// What `Retry` does for a change restored from a previous launch — its closure could not be
     /// encoded, so the app supplies a full reload instead. Set once, at root.
     var onRestoredRetry: (@MainActor () async -> Void)?
@@ -132,6 +136,9 @@ final class SyncCenter {
     private static let directErrorWindow: Int64 = 30_000
     /// Attempts per key, kept across the optimistic removal a retry performs.
     private var attempts: [String: Int] = [:]
+    /// Set while a `retryAll()` batch is in flight, so the batch fires one error haptic, not N.
+    private var batchRetryToken: UUID?
+    private var batchErrorFired = false
 
     /// Records a write the server never accepted. Called by every mutation's `catch`.
     /// The local value is NOT rolled back for progress writes — the mark is a fact about the user.
@@ -151,9 +158,15 @@ final class SyncCenter {
                                               attemptCount: attempts[key] ?? 1, retry: retry))
         }
         // Exactly one error haptic, and only when the user asked for this attempt themselves.
+        // Inside a `retryAll()` batch that is one haptic for the whole batch, not one per row.
         if let asked = userRetriedAt[key], now - asked <= SyncCenter.directErrorWindow {
             userRetriedAt[key] = nil
-            FeedbackCoordinator.fire(.directError)
+            if batchRetryToken == nil {
+                FeedbackCoordinator.fire(.directError)
+            } else if !batchErrorFired {
+                batchErrorFired = true
+                FeedbackCoordinator.fire(.directError)
+            }
         }
         persist()
     }
@@ -176,24 +189,40 @@ final class SyncCenter {
 
     /// Retries one change. The row leaves immediately — the write is optimistic again — and the
     /// command re-records itself if it fails, which is what fires the single `.directError`.
+    ///
+    /// A row is **never** cleared when there is nothing to run: a restored change has no encoded
+    /// closure, and if the app has not supplied `onRestoredRetry` the only honest behaviour is to
+    /// leave the failure standing. Clearing it would delete the record, persist an empty list and
+    /// let `syncedLine()` report "Everything synced" for a write that was never sent.
     func retry(_ id: UUID) {
-        guard let change = failedChanges.first(where: { $0.id == id }) else { return }
+        guard let change = failedChanges.first(where: { $0.id == id }),
+              let run = change.effectiveRetry(self) else { return }
         userRetriedAt[change.key] = .nowMs
         failedChanges.removeAll { $0.id == id }
         persist()
-        let run = change.effectiveRetry(self)
         Task { @MainActor in await run() }
     }
 
     func retryAll() {
-        guard !failedChanges.isEmpty else { return }
-        let batch = failedChanges
+        // Only the rows that actually have something to run leave the banner.
+        let runnable = failedChanges.compactMap { change -> (FailedChange, @MainActor () async -> Void)? in
+            guard let run = change.effectiveRetry(self) else { return nil }
+            return (change, run)
+        }
+        guard !runnable.isEmpty else { return }
         let now: Int64 = .nowMs
-        for change in batch { userRetriedAt[change.key] = now }
-        failedChanges = []
+        for (change, _) in runnable { userRetriedAt[change.key] = now }
+        let runnableIDs = Set(runnable.map(\.0.id))
+        failedChanges.removeAll { runnableIDs.contains($0.id) }
         persist()
+        // One Retry press is one transaction: the whole batch earns at most one `.directError`,
+        // however many of its writes fail again and however far apart they land.
+        let token = UUID()
+        batchRetryToken = token
+        batchErrorFired = false
         Task { @MainActor in
-            for change in batch { await change.effectiveRetry(self)() }
+            for (_, run) in runnable { await run() }
+            if batchRetryToken == token { batchRetryToken = nil }
         }
     }
 
@@ -254,6 +283,8 @@ final class SyncCenter {
         checking = false
         attempts.removeAll()
         userRetriedAt.removeAll()
+        batchRetryToken = nil
+        batchErrorFired = false
         persist()
     }
 }
@@ -274,9 +305,16 @@ struct FailedChange: Identifiable {
     var key: String { FailedChange.key(command: command, title: title) }
     static func key(command: String, title: String) -> String { "\(command)\u{1F}\(title)" }
 
-    /// The retry to actually run — the recorded one, or the app-supplied reload for a restored row.
+    /// The retry to actually run — the recorded one, or the app-supplied reload for a restored
+    /// row. `nil` when there is nothing to run: a missing retry must never be mistaken for a
+    /// successful one, so there is deliberately no empty-closure fallback here.
     @MainActor
-    func effectiveRetry(_ center: SyncCenter) -> @MainActor () async -> Void {
-        retry ?? center.onRestoredRetry ?? { }
+    func effectiveRetry(_ center: SyncCenter) -> (@MainActor () async -> Void)? {
+        retry ?? center.onRestoredRetry
     }
+
+    /// Whether `Retry` can do anything for this row. A row with no runnable retry keeps its place
+    /// in the banner; Profile shows `Discard` as the only way out until `onRestoredRetry` is set.
+    @MainActor
+    func canRetry(_ center: SyncCenter) -> Bool { effectiveRetry(center) != nil }
 }

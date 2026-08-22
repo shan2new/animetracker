@@ -25,7 +25,9 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
     /// `isLoading` means "there is nothing to show yet". A refresh over content the user can
     /// already see is not this — that is `RefreshIndicator` plus the content itself.
     @State private var visible = false
-    @State private var shownAt: Date?
+    /// Monotonic: a wall-clock stamp could be moved by the system mid-window and compute a
+    /// negative or absurd remainder. `ContinuousClock` cannot be adjusted.
+    @State private var shownAt: ContinuousClock.Instant?
 
     init(isLoading: Bool,
          @ViewBuilder skeleton: @escaping () -> Skeleton,
@@ -56,14 +58,14 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
                 guard !visible else { return }
                 try? await Task.sleep(for: .milliseconds(240))
                 guard !Task.isCancelled, isLoading else { return }
-                shownAt = .now
+                shownAt = ContinuousClock.now
                 visible = true
             } else {
                 guard visible else { return }
                 // Minimum visible window: a skeleton that blinks is worse than one that stays.
                 if let shownAt {
-                    let remaining = 0.320 - Date.now.timeIntervalSince(shownAt)
-                    if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+                    let remaining = Duration.milliseconds(320) - shownAt.duration(to: .now)
+                    if remaining > .zero { try? await Task.sleep(for: remaining) }
                 }
                 guard !Task.isCancelled else { return }
                 visible = false
