@@ -1003,30 +1003,23 @@ struct ProfileView: View {
 /// system and this track does not own it; the destructive and legal vocabulary is kept in one
 /// place here so no row can invent its own wording.
 private enum AccountCopy {
-    static let signOut = "Sign out"
-    static let signOutTitle = "Sign out?"
-
-    /// No trailing ellipsis. A trailing "…" on a row label is a macOS menu convention that does not
-    /// exist in iOS row labels — the confirmation dialog is the signal that something follows (m5).
-    static let delete = "Delete account"
-    static let deleteSubtitle = "Erases your library, progress and history"
-    static let deleteTitle = "Delete your account?"
-    static let deleteConfirm = "Delete account"
-    static let deleteFailedTitle = "Couldn\u{2019}t delete your account"
-
-    static let privacy = "Privacy Policy"
-    static let terms = "Terms of Use"
-    static let support = "Contact support"
-
-    /// Three slots, three words: `Up to date` / `Checked just now` / `Sync` (M12).
-    static let upToDate = "Up to date"
-    static let syncNow = "Sync"
-    static let retryAll = "Retry all"
-    static let couldNotReachServer = "Couldn\u{2019}t reach the server"
-    static let offlineSupporting = "Changes sync when you reconnect"
-    static let showingSavedCopy = "Showing the copy saved on this device"
-    static let signedIn = "Signed in with Clerk"
-
+    static let signOut = Copy.Action.signOut
+    static let signOutTitle = Copy.Account.signOutTitle
+    static let delete = Copy.Action.deleteAccount
+    static let deleteSubtitle = Copy.Account.deleteSubtitle
+    static let deleteTitle = Copy.Account.deleteTitle
+    static let deleteConfirm = Copy.Account.deleteConfirm
+    static let deleteFailedTitle = Copy.Account.deleteFailedTitle
+    static let privacy = Copy.Action.privacyPolicy
+    static let terms = Copy.Action.termsOfUse
+    static let support = Copy.Action.contactSupport
+    static let upToDate = Copy.Account.upToDate
+    static let syncNow = Copy.Action.syncNow
+    static let retryAll = Copy.Action.retryAll
+    static let couldNotReachServer = Copy.Account.couldNotReachServer
+    static let offlineSupporting = Copy.Account.offlineSupporting
+    static let showingSavedCopy = Copy.Account.showingSavedCopy
+    static let signedIn = Copy.Account.signedInWithClerk
     static let export = "Export library"
     static let exportSubtitle = "Every title with progress and status"
     /// **Not "for re-import".** There is no import path in this build, and the export screen is the

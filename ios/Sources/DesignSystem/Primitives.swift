@@ -720,7 +720,7 @@ struct ShelfCard: View {
                     Text(title.shelfShortened)
                         .type(ThemeType.shelfTitle)
                         .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(2, reservesSpace: !typeSize.isAccessibilitySize)
+                        .lineLimit(3, reservesSpace: !typeSize.isAccessibilitySize)
                         // DIRECTION §3: never truncate an identity title. Two lines were correctly
                         // reserved, but nothing caught the titles that overflow them — so the app
                         // cut "That Time I Got / Reincarn…" on a shelf while Library's row rendered
@@ -763,7 +763,16 @@ extension String {
         if s.hasSuffix("-"), let open = s.range(of: " -") {
             s = String(s[s.startIndex..<open.lowerBound])
         }
-        return s.trimmingCharacters(in: CharacterSet(charactersIn: " -\u{2013}\u{2014}:"))
+        s = s.trimmingCharacters(in: CharacterSet(charactersIn: " -\u{2013}\u{2014}:"))
+        // A long "Title: Subtitle" keeps its identity half rather than an ellipsis mid-word.
+        if s.count > 40 {
+            for sep in [": ", " – ", " — ", " - ", " ("] {
+                if let r = s.range(of: sep), s.distance(from: s.startIndex, to: r.lowerBound) >= 12 {
+                    return String(s[s.startIndex..<r.lowerBound])
+                }
+            }
+        }
+        return s
     }
 }
 

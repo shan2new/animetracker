@@ -102,6 +102,8 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .today
     /// One navigation path per tab; Detail and its episode list push onto the active tab's path.
     @State private var paths: [AppTab: NavigationPath] = [:]
+    /// An All-titles route requested from another tab, consumed by LibraryView on arrival.
+    @State private var libraryRequest: LibraryView.AllTitlesRoute?
     /// The zoom-transition namespace, published to every card in every tab.
     ///
     /// `zoomSource(_:)` had zero call sites and `\.zoomNamespace` was never populated, so the
@@ -129,6 +131,14 @@ struct MainTabView: View {
                     NavigationStack(path: path(.today)) {
                         TodayView(onOpenDetail: openDetail,
                                   onSeeAllWatching: { selectedTab = .library },
+                                  onViewAllUpdates: {
+                                      libraryRequest = .init(status: .watching, unwatchedOnly: true)
+                                      selectedTab = .library
+                                  },
+                                  onOpenLibrary: { status in
+                                      libraryRequest = .init(status: status)
+                                      selectedTab = .library
+                                  },
                                   onAddShow: { selectedTab = .discover })
                             .detailDestinations(zoom: zoom, push: { push(.today, $0) })
                     }
@@ -144,7 +154,8 @@ struct MainTabView: View {
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
                     NavigationStack(path: path(.library)) {
                         LibraryView(onOpenDetail: openDetail,
-                                    onAddShow: { selectedTab = .discover })
+                                    onAddShow: { selectedTab = .discover },
+                                    requestedAll: $libraryRequest)
                             .detailDestinations(zoom: zoom, push: { push(.library, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .library)

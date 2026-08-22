@@ -1,3 +1,5 @@
+import { partKindForFormat } from '../grouping/partKind.js'
+import type { MediaFormat } from '../anilist/types.js'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions } from '../db/schema.js'
@@ -185,7 +187,10 @@ function buildFranchise(
   // Franchise-level meta for the detail header: premiere year (earliest dated part) + the primary
   // installment's studios/networks (fall back to the first part that has any).
   const primary = f.primaryMediaId != null ? mediaById.get(f.primaryMediaId) : undefined
-  const years = parts.map((p) => p.year).filter((y): y is number => y != null)
+  // Premiere year = the earliest dated SEASON or MOVIE; an OVA or music video dated before the
+  // first season must not become the work's year.
+  const episodic = parts.filter((p) => p.kind === 'season' || p.kind === 'movie')
+  const years = (episodic.length ? episodic : parts).map((p) => p.year).filter((y): y is number => y != null)
   const year = years.length ? Math.min(...years) : (primary?.seasonYear ?? null)
   const studios = (primary?.studios?.length ? primary.studios : parts.find((p) => p.studios.length > 0)?.studios) ?? []
 
@@ -271,7 +276,14 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
         cover: f.cover ?? '',
         banner: f.banner ?? '',
         isReleasing: releasing,
-        partCount: mems.length,
+        // The count Detail prints under "Seasons & movies": episodic members only, never OVAs,
+        // specials or music videos — Search and Detail must agree.
+        partCount: mems.filter((mem) => {
+          const m = mediaById.get(mem.mediaId)
+          if (!m) return false
+          const kind = partKindForFormat((m.format as MediaFormat | null) ?? null)
+          return kind === 'season' || kind === 'movie'
+        }).length,
         nextAiringAt,
         upcoming: f.upcoming ?? null,
         year: primary?.seasonYear ?? minYear,

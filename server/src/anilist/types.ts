@@ -38,5 +38,7 @@ export interface AniListMedia {
   studios?: { nodes: { name: string; isAnimationStudio: boolean }[] } | null
   streamingEpisodes?: { title: string | null; thumbnail: string | null }[] | null
   nextAiringEpisode: { episode: number; airingAt: number } | null
+  /** Per-episode air instants (seconds), when AniList has a schedule for the run. */
+  airingSchedule?: { nodes: { episode: number; airingAt: number }[] } | null
   relations?: { edges: AniListRelationEdge[] } | null
 }

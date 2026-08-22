@@ -392,6 +392,7 @@ struct SyncBanner: View {
     /// A retry has been issued. The button is inert until the banner's row has had time to leave,
     /// so an impatient double-tap cannot send the same write twice.
     @State private var retryInFlight = false
+    @State private var confirmDiscard = false
 
     init(count: Int, retry: (() -> Void)? = nil) {
         self.count = count
@@ -433,7 +434,24 @@ struct SyncBanner: View {
                         .disabled(retryInFlight)
                         .accessibilityHint(Copy.Accessibility.retryHint)
                 }
+            } else {
+                // Nothing can be retried from here (the change came from a previous launch): the
+                // banner still needs a way out, and discarding a write is confirmed first.
+                if isAX {
+                    Button(Copy.Action.dismiss) { confirmDiscard = true }.buttonStyle(SecondaryButtonStyle2())
+                } else {
+                    Button(Copy.Action.dismiss) { confirmDiscard = true }.buttonStyle(TertiaryButtonStyle2())
+                }
             }
+        }
+        .confirmationDialog(Copy.Account.discardChangesTitle(count), isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button(Copy.Account.discardChangesConfirm(count), role: .destructive) {
+                FeedbackCoordinator.fire(.destructive)
+                SyncCenter.shared.discardAll()
+            }
+            Button(Copy.Confirm.cancel, role: .cancel) {}
+        } message: {
+            Text(Copy.Account.discardChangesMessage)
         }
         .task(id: retryInFlight) {
             guard retryInFlight else { return }
@@ -703,6 +721,7 @@ struct SectionHeaderRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
             SectionLabel(text: text, dot: dot)
+                .accessibilityAddTraits(.isHeader)
             if let count {
                 Text("\(count)")
                     .type(ThemeType.sectionLabel)

@@ -35,6 +35,8 @@ struct LibraryView: View {
     var onAddShow: () -> Void = {}
 
     @State private var all: AllTitlesRoute?
+    /// A route another screen asked for ("View all N updates", a Profile stat); consumed once.
+    @Binding var requestedAll: AllTitlesRoute?
     /// True while the user's finger owns a pull. The system's own indicator is then the only
     /// spinner on screen — see `L-17` above.
     @State private var pullDriving = false
@@ -49,7 +51,8 @@ struct LibraryView: View {
     struct AllTitlesRoute: Hashable, Identifiable {
         var status: WatchStatus?
         var returning: ReturnScope?
-        var id: String { "\(status?.rawValue ?? "-")/\(returning?.rawValue ?? "-")" }
+        var unwatchedOnly: Bool = false
+        var id: String { "\(status?.rawValue ?? "-")/\(returning?.rawValue ?? "-")/\(unwatchedOnly)" }
     }
 
     var body: some View {
@@ -120,10 +123,15 @@ struct LibraryView: View {
         .navigationBarTitleDisplayMode(.large)
         .toolbar(.visible, for: .navigationBar)
         .navigationDestination(item: $all) { route in
-            LibraryAllView(initialStatus: route.status, initialReturning: route.returning,
+            LibraryAllView(initialStatus: route.status, initialReturning: route.returning, initialUnwatchedOnly: route.unwatchedOnly,
                            onOpenDetail: onOpenDetail)
         }
         .onAppear { appModel.libQuery = "" }
+        .onChange(of: requestedAll, initial: true) { _, route in
+            guard let route else { return }
+            all = route
+            requestedAll = nil
+        }
     }
 
     /// The empty state's one action, and it is always a live one.

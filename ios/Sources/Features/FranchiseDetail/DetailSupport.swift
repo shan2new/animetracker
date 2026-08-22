@@ -64,28 +64,13 @@ enum RewatchArrival {
 /// confirmation rules are checked against. The shared diff is filed; this is the local half, kept
 /// in one enum rather than scattered as literals at call sites so the move is a rename.
 enum DetailCopy {
-    /// `Copy.Action.showTitle` is "Show title" — a noun phrase, on a card that displays the show's
-    /// title 100 pt above it, for a control whose subject is the EPISODE's title. Verb + object.
-    static let revealEpisodeTitle = "Reveal episode title"
-    static let hideEpisodeTitle = "Hide episode title"
-    /// The season list's whole-list form of the same switch.
-    static let revealEpisodeTitlesAndStills = "Reveal episode titles and stills"
-
-    /// The series-level mark. `markCaughtUp` touches the releasing part only and
-    /// `setStatus(.completed)` changes the word without touching an episode, so there was no way to
-    /// say "I watched all of this" that the seasons list would agree with.
-    static let markSeriesWatched = "Mark series as watched"
-
-    /// The rewatch scope that covers the whole work. "All seasons" was printed over a list
-    /// containing "OVA 1", "OVA 2: No Regrets" and "OVA 3: Lost Girls" — none of which is a season.
-    /// The app's word for a work is "title"; "Everything" is the word for all of it.
-    static let everything = "Everything"
-
-    /// Ending a rewatch. `RewatchStore.complete(_:at:)` existed and was called only from the mark
-    /// path, so a user who abandoned a rewatch at episode 26 could only DELETE the record — leaving
-    /// the "In progress" badge lit and Today offering the rewatch for ever.
-    static let markRewatchComplete = "Mark this rewatch complete"
-    static let stopRewatch = "Stop this rewatch\u{2026}"
+    static let revealEpisodeTitle = Copy.Action.revealEpisodeTitle
+    static let hideEpisodeTitle = Copy.Action.hideEpisodeTitle
+    static let revealEpisodeTitlesAndStills = Copy.Action.revealEpisodeTitlesAndStills
+    static let markSeriesWatched = Copy.Action.markSeriesWatched
+    static let everything = Copy.Rewatch.everything
+    static let markRewatchComplete = Copy.Action.markRewatchComplete
+    static let stopRewatch = Copy.Action.stopRewatch
 }
 
 // MARK: - Episode title sanitising

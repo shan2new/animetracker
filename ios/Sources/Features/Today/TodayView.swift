@@ -5,26 +5,12 @@ import SwiftUI
 /// `Copy.swift` (a design-system file this track does not own); they live here, named and in one
 /// place, until that lands — never inline at a call site.
 private enum TodayCopy {
-    /// → `Copy.Action.details`
-    static let details = "Details"
-    /// → `Copy.Action.continueLabel`. The recap's explicit exit: auto-dismiss is a convenience,
-    /// never the only way out (and under VoiceOver there is no auto-dismiss at all).
-    static let continueAction = "Continue"
-    /// The recap's own eyebrow. A window with no noun ("SINCE 18 AUG") described only half of what
-    /// sat under it; this names what the card IS, and the window moves to the line below.
-    static let whileYouWereAway = "While you were away"
-    /// → `Copy.Action.dismiss`
-    static let dismissRecap = "Dismiss what you missed"
-    /// → `Copy.Accessibility.opensTheShow`. Already written as a bare literal at two call sites in
-    /// this file and absent from every Today row, which is why VoiceOver read the facts and never
-    /// said what tapping would do. One string, named, until `Copy.Accessibility` carries it.
-    static let opensTheShow = "Opens the show"
-    /// → `Copy.Progress.sinceYourLastVisit(_:)`. "Since 23 Jul" named a date with no anchor —
-    /// since the last visit, the last mark or the last episode? The card can afford the words.
-    static func sinceYourLastVisit(_ phrase: String) -> String {
-        let tail = phrase.hasPrefix("Since ") ? String(phrase.dropFirst(6)) : phrase
-        return "Since your last visit, \(tail)"
-    }
+    static let details = Copy.Action.details
+    static let continueAction = Copy.Action.continueLabel
+    static let whileYouWereAway = Copy.Recap.whileYouWereAway
+    static let dismissRecap = Copy.Action.dismissRecap
+    static let opensTheShow = Copy.Accessibility.opensTheShowHint
+    static func sinceYourLastVisit(_ phrase: String) -> String { Copy.Recap.sinceYourLastVisit(phrase) }
 }
 
 // "Today" — the Focus Stack (spec v8, boards 01–03), rebuilt around a FULL-BLEED HERO.
@@ -59,6 +45,8 @@ struct TodayView: View {
     /// behaves while `RootView` (a shared file) has not been rewired yet — see the shared-file
     /// request for `LibraryAllView(initialSort:initialUnwatchedOnly:)`.
     var onViewAllUpdates: (() -> Void)?
+    /// A Profile stat tile: open the Library filtered to that status.
+    var onOpenLibrary: ((WatchStatus) -> Void)?
     var onAddShow: () -> Void = {}
 
     private var now: Int64 { appModel.now }
@@ -201,7 +189,7 @@ struct TodayView: View {
         }
         .background(ThemeColor.canvas.ignoresSafeArea())
         .overlay(alignment: .bottom) { ScrollEdgeChrome(side: .bottom) }
-        .sheet(isPresented: $showProfile) { ProfileView(onOpenLibrary: { _ in onSeeAllWatching() }) }
+        .sheet(isPresented: $showProfile) { ProfileView(onOpenLibrary: { status in (onOpenLibrary ?? { _ in onSeeAllWatching() })(status) }) }
         .onChange(of: appModel.loading) { _, loading in
             if !loading { evaluateRecap() }
         }

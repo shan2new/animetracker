@@ -23,6 +23,7 @@ const MEDIA_FIELDS = `
   studios { nodes { name isAnimationStudio } }
   streamingEpisodes { title thumbnail }
   nextAiringEpisode { episode airingAt }
+  airingSchedule(perPage: 50) { nodes { episode airingAt } }
   relations { edges { relationType node { id type format } } }
 `
 

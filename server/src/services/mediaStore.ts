@@ -21,14 +21,27 @@ function cleanEpisodeTitle(raw: string): string {
  */
 function aniListEpisodes(m: AniListMedia): EpisodeMeta[] {
   const se = m.streamingEpisodes ?? []
-  return se.map((e, i) => ({
-    number: i + 1,
-    title: e.title ? cleanEpisodeTitle(e.title) : null,
-    airDate: null,
-    overview: null,
-    still: e.thumbnail ?? null,
-    runtime: m.duration ?? null,
-  }))
+  // AniList's airingSchedule gives the exact instant per episode (seconds). It is the only source
+  // of per-episode dates for anime, so the list carries it even for episodes without a streaming
+  // entry (no title/still yet) — the client then never has to invent a cadence.
+  const airBy = new Map<number, number>()
+  for (const n of m.airingSchedule?.nodes ?? []) {
+    if (n.episode > 0 && n.airingAt > 0) airBy.set(n.episode, n.airingAt * 1000)
+  }
+  const count = Math.max(se.length, ...airBy.keys(), 0)
+  const out: EpisodeMeta[] = []
+  for (let i = 0; i < count; i++) {
+    const e = se[i]
+    out.push({
+      number: i + 1,
+      title: e?.title ? cleanEpisodeTitle(e.title) : null,
+      airDate: airBy.get(i + 1) ?? null,
+      overview: null,
+      still: e?.thumbnail ?? null,
+      runtime: m.duration ?? null,
+    })
+  }
+  return out
 }
 
 /** Studio names for an AniList media, preferring animation studios. */
