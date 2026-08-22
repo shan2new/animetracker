@@ -135,7 +135,8 @@ struct MainTabView: View {
                 }
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
                     NavigationStack(path: path(.library)) {
-                        LibraryView(onOpenDetail: openDetail)
+                        LibraryView(onOpenDetail: openDetail,
+                                    onAddShow: { selectedTab = .discover })
                             .detailDestinations(push: { push(.library, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .library)
