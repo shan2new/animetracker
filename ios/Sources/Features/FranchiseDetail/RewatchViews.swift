@@ -15,54 +15,41 @@ struct StartRewatchSheet: View {
 
     private var parts: [FranchisePart] { franchise.episodicPartsInOrder }
 
-    /// "All seasons" gets a count like every other row. "Entire franchise" was server vocabulary
-    /// (the app's word for a work is "title"), and it was the only option on the sheet carrying no
-    /// count — so the one option that covers everything looked like the vague one.
+    /// The scope that covers the whole work, with a count like every other row.
+    ///
+    /// It was "All seasons" — printed directly over a list containing "OVA 1", "OVA 2: No Regrets"
+    /// and "OVA 3: Lost Girls", none of which is a season. ("Entire franchise" before that was
+    /// server vocabulary; the code comment rejecting it already recorded that the app's word for a
+    /// work is "title" — and then used the wrong word anyway.)
     private var everythingCount: String? {
         let total = parts.reduce(0) { $0 + max($1.totalEpisodes, $1.progress) }
         return total > 0 ? Copy.episodes(total) : nil
     }
 
-    /// One scope row: one line, one height, its count and its selected state in one trailing
-    /// column that is reserved whether or not the row is the selected one.
+    /// One scope row, in the app's OWN row grammar.
     ///
-    /// The rows used to run 41/46/54/62 pt because the count was a SECOND LINE on some of them —
-    /// which broke the separator rhythm — and no row said "only" any more: the section is headed
-    /// SCOPE, so a plain name reads correctly, while "OVA 2: No Regrets only" read as *No Regrets
-    /// only*.
-    private func scopeRow(title: String, count: String?, selected: Bool,
+    /// The same season list is a push away, rendered as 88-pt poster rows on the canvas; here it
+    /// was text-only 56-pt rows inside a plate with a trailing count — two grammars for one list,
+    /// one tap apart, and the sheet's version was the one that looked like a settings table. This
+    /// is `MediaRow`: artwork, the row's own rhythm, `separatorQuiet` inset to the title, and the
+    /// selection tick as the single trailing control.
+    private func scopeRow(title: String, count: String?, poster: String?, selected: Bool,
                           separator: Bool, action: @escaping () -> Void) -> some View {
-        Button {
+        MediaRow(title: title, meta: count, poster: poster, slot: .queue,
+                 chevron: false, separator: separator,
+                 trailing: {
+                     // Reserved whether or not the row is selected, so a tick landing never
+                     // reflows the row it lands on.
+                     Image(systemName: "checkmark")
+                         .font(.system(size: 15, weight: .semibold))
+                         .foregroundStyle(ThemeColor.accent)
+                         .opacity(selected ? 1 : 0)
+                         .frame(width: 18)
+                         .accessibilityHidden(true)
+                 }) {
             FeedbackCoordinator.fire(.selection)
             action()
-        } label: {
-            HStack(spacing: 10) {
-                Text(title)
-                    .type(ThemeType.body)
-                    .foregroundStyle(ThemeColor.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 8)
-                if let count {
-                    Text(count).type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary)
-                        .lineLimit(1)
-                }
-                Image(systemName: "checkmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ThemeColor.accent)
-                    .opacity(selected ? 1 : 0)
-                    .frame(width: 18)
-            }
-            .padding(.leading, 14).padding(.trailing, 16)
-            .frame(minHeight: ThemeMetrics.rowCompact)
-            .contentShape(Rectangle())
-            .overlay(alignment: .bottom) {
-                if separator {
-                    Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1).padding(.leading, 14)
-                }
-            }
         }
-        .buttonStyle(GroupedRowPressStyle())
         .accessibilityLabel([title, count].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
@@ -88,17 +75,22 @@ struct StartRewatchSheet: View {
                         }
                         Spacer(minLength: 0)
                     }
-                    GroupedList(header: "Scope") {
-                        scopeRow(title: "All seasons", count: everythingCount,
-                                 selected: scope == .franchise, separator: !parts.isEmpty) {
-                            scope = .franchise
-                        }
-                        ForEach(Array(parts.enumerated()), id: \.element.id) { i, part in
-                            scopeRow(title: part.canonicalLabel.isEmpty ? part.title : part.canonicalLabel,
-                                     count: part.totalEpisodes > 0 ? Copy.episodes(part.totalEpisodes) : nil,
-                                     selected: scope == .part(mediaId: part.mediaId),
-                                     separator: i < parts.count - 1) {
-                                scope = .part(mediaId: part.mediaId)
+                    VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
+                        SectionLabel(text: "Scope")
+                        LazyVStack(spacing: 0) {
+                            scopeRow(title: DetailCopy.everything, count: everythingCount,
+                                     poster: franchise.cover,
+                                     selected: scope == .franchise, separator: !parts.isEmpty) {
+                                scope = .franchise
+                            }
+                            ForEach(Array(parts.enumerated()), id: \.element.id) { i, part in
+                                scopeRow(title: part.canonicalLabel.isEmpty ? part.title : part.canonicalLabel,
+                                         count: part.totalEpisodes > 0 ? Copy.episodes(part.totalEpisodes) : nil,
+                                         poster: part.cover ?? franchise.cover,
+                                         selected: scope == .part(mediaId: part.mediaId),
+                                         separator: i < parts.count - 1) {
+                                    scope = .part(mediaId: part.mediaId)
+                                }
                             }
                         }
                     }
@@ -218,12 +210,22 @@ struct WatchHistoryView: View {
                     } else {
                         HistoryRail {
                             ForEach(Array(sessions.enumerated()), id: \.element.id) { i, session in
-                                // No poster: a session is not a different show, and three identical
-                                // covers down one screen made a record read as a list of duplicates.
+                                // The SCOPE's own artwork. A record of a show with a full art
+                                // library was showing zero artwork — the only list in the app that
+                                // did. The earlier reasoning ("three identical covers read as
+                                // duplicates") was right about the franchise cover and wrong about
+                                // the fix: a season-scoped rewatch is a different picture, so the
+                                // scope's poster distinguishes the sessions instead of repeating.
                                 HistorySessionRow(title: session.title,
                                                   subtitle: sessionLine(session),
+                                                  poster: sessionPoster(session),
                                                   active: session.isActive,
-                                                  position: position(i, of: sessions.count)) {
+                                                  position: position(i, of: sessions.count),
+                                                  // The rail's arrival choreography, finally
+                                                  // called from production: the segment draws on
+                                                  // `uiSweep`, then the node settles. Claimed once,
+                                                  // for the session that was just created.
+                                                  isNew: RewatchArrival.claim(session.id)) {
                                     editing = session
                                 }
                             }
@@ -231,14 +233,17 @@ struct WatchHistoryView: View {
                     }
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
-                .padding(.top, ThemeSpace.x4)
-                .padding(.bottom, DetailMetrics.bottomClearance)
-                // A two-session record is ~240 pt of content above 600 pt of pure black. Centred
-                // in the content area it reads as the answer to the question the screen asks —
-                // the same rule the empty state above already follows. Long lists, and every
-                // accessibility size, scroll from the top as normal.
-                .modifier(CentreShortList(active: sessions.count <= 3 && !typeSize.isAccessibilitySize))
+                // TOP-ALIGNED. Two cards started ~354 pt down the screen with ~230 pt of
+                // unexplained void above them and 400–800 pt below — a record centred in its own
+                // scroll view reads as a screen that failed to load, not as an answer. Only a
+                // genuinely single or empty state is centred (below); a rail starts at the top,
+                // where a list starts.
+                .padding(.top, ThemeMetrics.heroClearance)
+                // A two-session record is ~240 pt of content above 600 pt of black. That is what a
+                // short list looks like, and it is the honest shape.
+                .modifier(CentreShortList(active: sessions.count == 1 && !typeSize.isAccessibilitySize))
             }
+            .contentMargins(.bottom, DetailMetrics.bottomClearance, for: .scrollContent)
             .scrollIndicators(.hidden)
             }
         }
@@ -289,29 +294,15 @@ struct WatchHistoryView: View {
     /// how many episodes it covered, and the way in.
     private func soloSessionRow(_ session: WatchSession) -> some View {
         let line = sessionLine(session)
-        return Button { editing = session } label: {
-            HStack(alignment: .center, spacing: ThemeSpace.x3) {
-                VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
-                    Text(session.title)
-                        .type(ThemeType.rowTitle)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(line)
-                        .type(session.isActive ? ThemeType.rowMetaLead : ThemeType.rowMeta)
-                        .foregroundStyle(session.isActive ? ThemeColor.accent : ThemeColor.textSecondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: ThemeSpace.x2)
-                Image(systemName: "chevron.forward")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(ThemeColor.textDisabled)
-            }
-            .frame(minHeight: ThemeMetrics.rowCompact)
-            .contentShape(Rectangle())
+        // The same row grammar the rail uses, and the same artwork: a record of a show with a full
+        // art library was the one list in the app carrying none.
+        return MediaRow(title: session.title,
+                        meta: session.isActive ? nil : line,
+                        lead: session.isActive ? line : nil,
+                        poster: sessionPoster(session), slot: .queue,
+                        hint: "Opens this session") {
+            editing = session
         }
-        .buttonStyle(GroupedRowPressStyle())
         .accessibilityLabel("\(session.title), \(line)")
     }
 
@@ -319,9 +310,12 @@ struct WatchHistoryView: View {
     /// lines inside the content, under a poster the screen did not need.
     private var historySubtitle: String {
         guard !sessions.isEmpty else { return "" }
-        let episodes = sessions.reduce(0) { $0 + $1.episodes }
+        // Only FINISHED sessions contribute to "watched". A rewatch still running has a scope
+        // length, not a tally — counting it here is how one noun phrase came to mean two different
+        // quantities within one show.
+        let episodes = sessions.filter(\.isCompleted).reduce(0) { $0 + $1.episodes }
         var bits = [Copy.watchSessions(sessions.count)]
-        if episodes > 0 { bits.append(Copy.episodes(episodes)) }
+        if episodes > 0 { bits.append(Copy.episodesWatched(episodes)) }
         return bits.joined(separator: " \u{b7} ")
     }
 
@@ -331,23 +325,44 @@ struct WatchHistoryView: View {
     /// its year and the other punctuated in a way no locale writes. `TemporalCopy.dateRange` orders
     /// and punctuates per locale and states both years whenever the span is not this year's.
     private func sessionLine(_ session: WatchSession) -> String {
+        // Every row carries WHEN. Five sessions across four years read as five ordinals and five
+        // counts with nothing at all to tell them apart — on the one screen in the app whose entire
+        // subject is when things happened. An active session states its start; a finished one its
+        // span; a cancelled one where it stopped.
+        let started = session.startedAt.flatMap { $0 > 0 ? "Started \(TemporalCopy.dateWord($0, now: now, anchor: .local))" : nil }
         if session.isActive {
-            if let next = nextEpisode(session) { return Copy.Progress.inProgress(nextEpisode: next) }
-            return "In progress"
+            let progress = nextEpisode(session).map { Copy.episodeNext($0) } ?? "In progress"
+            return [started, progress].compactMap { $0 }.joined(separator: " \u{b7} ")
         }
         if let cancelled = session.cancelledAtEpisode {
-            return "Cancelled at \(Copy.episodeInSentence(cancelled))"
+            return [started, "Cancelled at \(Copy.episodeInSentence(cancelled))"]
+                .compactMap { $0 }.joined(separator: " \u{b7} ")
         }
-        let count = session.episodes > 0 ? Copy.episodes(session.episodes) : nil
+        // Predicated only where it is TRUE. `WatchSession.episodes` is the SCOPE's length, so on a
+        // finished session it is what was watched and on a running one it is not — "2 episodes
+        // watched" beside "Episode 1 next" would be the same class of lie the predication exists to
+        // stop, in the other direction.
+        let count = session.episodes > 0
+            ? (session.isCompleted ? Copy.episodesWatched(session.episodes) : Copy.episodes(session.episodes))
+            : nil
         let when: String? = {
-            guard let end = session.completedAt, end > 0 else { return nil }
+            guard let end = session.completedAt, end > 0 else { return started }
             guard let start = session.startedAt, start > 0, start < end else {
                 return TemporalCopy.dateWord(end, now: now, anchor: .local)
             }
             return TemporalCopy.dateRange(start, end, now: now)
         }()
         let bits = [when, count].compactMap { $0 }
-        return bits.isEmpty ? "Dates unknown" : bits.joined(separator: " \u{b7} ")
+        return bits.isEmpty ? Copy.Progress.datesUnknown : bits.joined(separator: " \u{b7} ")
+    }
+
+    /// The artwork for one session: the season it covers, or the show.
+    private func sessionPoster(_ session: WatchSession) -> String? {
+        switch session.scope {
+        case .franchise: return franchise?.cover
+        case .part(let mediaId):
+            return franchise?.parts.first { $0.mediaId == mediaId }?.cover ?? franchise?.cover
+        }
     }
 
     private func nextEpisode(_ session: WatchSession) -> Int? {
@@ -375,6 +390,7 @@ struct SessionDetailView: View {
 
     @State private var startDate: Date
     @State private var confirmDelete = false
+    @State private var confirmStop = false
     /// Measured, so the sheet's detent is the content's own height.
     @State private var contentHeight: CGFloat = 0
 
@@ -395,27 +411,46 @@ struct SessionDetailView: View {
     /// behind it and "24 May – 29 Jul" in the row it came from — all hand-assembled, none
     /// localised. Inside a form the year is never implied.
     private var spanLine: String {
-        let count = session.episodes > 0 ? Copy.episodes(session.episodes) : nil
+        // Predicated only where it is TRUE: `episodes` is the scope's length, which is what was
+        // watched on a finished session and is not on a running one.
+        let count = session.episodes > 0
+            ? (session.isCompleted ? Copy.episodesWatched(session.episodes) : Copy.episodes(session.episodes))
+            : nil
         let when: String? = {
-            guard let end = session.completedAt, end > 0 else {
-                guard let start = session.startedAt, start > 0 else { return nil }
-                // The full date, year included: this line sits directly above a date PICKER that
-                // prints its own year, and a form may not state one date two ways.
-                return "Started \(Formatting.fmtFullDate(start, anchor: .local))"
-            }
+            // While the session is still running the start date is NOT stated here: the row below
+            // is a date picker showing exactly that date, and "Started 22 Aug 2026" was printed
+            // twice, 100–150 pt apart, in one sheet. The count alone is what this line adds.
+            guard let end = session.completedAt, end > 0 else { return nil }
             guard let start = session.startedAt, start > 0, start < end else {
                 return TemporalCopy.dateWord(end, now: now, anchor: .local)
             }
             return TemporalCopy.dateRange(start, end, now: now)
         }()
         let bits = [when, count].compactMap { $0 }
-        return bits.isEmpty ? "Dates unknown" : bits.joined(separator: " \u{b7} ")
+        return bits.isEmpty ? Copy.Progress.datesUnknown : bits.joined(separator: " \u{b7} ")
+    }
+
+    /// Where a stopped session stopped: the progress of the part it covers.
+    private var stoppedAtEpisode: Int {
+        switch session.scope {
+        case .franchise: return franchise?.currentPart?.progress ?? 0
+        case .part(let mediaId): return franchise?.parts.first { $0.mediaId == mediaId }?.progress ?? 0
+        }
+    }
+
+    /// The session's state, on the identity block where the other facts are — not as a form row
+    /// with a value in it. A static "Status | In progress" row inside a `GroupedList`, directly
+    /// under a real date picker, looked exactly as tappable as the picker and was not.
+    private var statusLine: String? {
+        if session.isActive { return "In progress" }
+        if session.cancelledAtEpisode != nil { return "Stopped" }
+        return nil
     }
 
     /// The scope, in the app's own vocabulary.
     private var scopeLine: String? {
         switch session.scope {
-        case .franchise: return "All seasons"
+        case .franchise: return DetailCopy.everything
         case .part(let mediaId):
             let label = franchise?.canonicalPartLabel(for: mediaId) ?? ""
             return label.isEmpty ? nil : label
@@ -449,34 +484,59 @@ struct SessionDetailView: View {
                                 .type(ThemeType.metadata)
                                 .foregroundStyle(ThemeColor.textTertiary)
                                 .fixedSize(horizontal: false, vertical: true)
+                            // The state, as a FACT on the identity block. It was a form row whose
+                            // value looked like a control and was not.
+                            if let statusLine {
+                                Text(statusLine)
+                                    .type(ThemeType.rowMetaLead)
+                                    .foregroundStyle(session.isActive ? ThemeColor.accent : ThemeColor.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         Spacer(minLength: 0)
                     }
                     GroupedList {
-                        // The one thing on this sheet that is genuinely editable, and the only row
-                        // that looks it.
+                        // The one thing on this sheet that is genuinely editable, and now the only
+                        // row on it. A real `.compact` date picker, with the label and value the
+                        // accessibility layer needs.
                         HStack {
                             Text("Started").type(ThemeType.body).foregroundStyle(ThemeColor.textPrimary)
                             Spacer()
                             DatePicker("Started", selection: $startDate, in: ...Date(), displayedComponents: .date)
+                                .datePickerStyle(.compact)
                                 .labelsHidden().tint(ThemeColor.accent)
                         }
                         .padding(.leading, 14).padding(.trailing, 10)
                         .frame(minHeight: ThemeMetrics.rowCompact)
-                        .overlay(alignment: .bottom) {
-                            Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1).padding(.leading, 14)
-                        }
-                        // `Started` / `Finished` — a pair. And no Status row once a completion date
-                        // exists: a date proves the state, and the same word cannot be a value in
-                        // one row and a field label in the next.
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Start date")
+                        .accessibilityHint("Changes the date this watch began")
+                        // `Finished` keeps its row — a date is a fact with a value, which is what a
+                        // form row is for. The "Status" row that used to sit here is gone: it stated
+                        // what the identity block now states, and it was the fake-editable pill.
                         if let completed = session.completedAt, completed > 0 {
                             GroupedRow(title: "Finished",
                                        trailing: .value(TemporalCopy.dateWord(completed, now: now, anchor: .local)),
                                        separator: false)
-                        } else {
-                            GroupedRow(title: "Status",
-                                       trailing: .value(session.isActive ? "In progress" : "Cancelled"),
-                                       separator: false)
+                        }
+                    }
+                    // ENDING a session, which the sheet never offered.
+                    //
+                    // `RewatchStore.complete(_:at:)` existed and was called only from the mark path,
+                    // so a user who abandoned a rewatch at episode 26 could only DESTROY the record
+                    // — leaving the "In progress" badge and the rail's accent ring lit for ever and
+                    // Today still offering the rewatch. Two non-destructive verbs, above the
+                    // destructive plate, where iOS puts them.
+                    if session.isActive {
+                        GroupedList {
+                            GroupedRow(title: DetailCopy.markRewatchComplete, separator: true) {
+                                FeedbackCoordinator.fire(.success)
+                                store.complete(session.id, at: now)
+                                dismiss()
+                            }
+                            GroupedRow(title: DetailCopy.stopRewatch, separator: false) {
+                                confirmStop = true
+                            }
                         }
                     }
                     // A destructive verb is a ROW in its own plate, not a red word floating
@@ -535,6 +595,18 @@ struct SessionDetailView: View {
                 Button(Copy.Confirm.cancel, role: .cancel) {}
             } message: {
                 Text(Copy.Confirm.deleteSession(count: session.episodes))
+            }
+            // Stopping keeps the record and states where it stopped; it is not a deletion, so it
+            // does not use the destructive verb's copy.
+            .confirmationDialog("Stop this rewatch?", isPresented: $confirmStop, titleVisibility: .visible) {
+                Button("Stop rewatch", role: .destructive) {
+                    FeedbackCoordinator.fire(.destructive)
+                    store.cancel(session.id, atEpisode: stoppedAtEpisode, at: now)
+                    dismiss()
+                }
+                Button(Copy.Confirm.cancel, role: .cancel) {}
+            } message: {
+                Text("The session stays in your history, stopped at \(Copy.episodeInSentence(stoppedAtEpisode)). Your progress is not changed.")
             }
         }
         .presentationDetents([.height(min(max(contentHeight + 64, 260), 620)), .large])
