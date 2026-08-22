@@ -101,10 +101,10 @@ struct SkeletonRow: View {
     let lines: [CGFloat]
     var posterRadius: CGFloat = 6
     var spacing: CGFloat = ThemeSpace.x3
-    @ScaledMetric(wrappedValue: 68, relativeTo: .body) private var height: CGFloat
+    @ScaledMetric(wrappedValue: ThemeMetrics.rowStandard, relativeTo: .body) private var height: CGFloat
 
     init(poster: CGSize, lines: [CGFloat], posterRadius: CGFloat = 6,
-         spacing: CGFloat = ThemeSpace.x3, height: CGFloat = 68) {
+         spacing: CGFloat = ThemeSpace.x3, height: CGFloat = ThemeMetrics.rowStandard) {
         self.poster = poster
         self.lines = lines
         self.posterRadius = posterRadius
@@ -145,15 +145,17 @@ struct SkeletonCard<Content: View>: View {
         VStack(alignment: .leading, spacing: ThemeSpace.x4) { content }
             .padding(ThemeSpace.x4)
             .frame(maxWidth: .infinity, minHeight: height, alignment: .topLeading)
-            .background(ThemeColor.surfaceFlat,
-                        in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            // The shape the card will fill, at the card's own surface level — a skeleton that
+            // sits at a different elevation than the content it stands in for makes the swap
+            // land as a lighting change.
+            .surface(.plate, radius: radius)
     }
 }
 
 /// A horizontal poster shelf.
 struct SkeletonShelf: View {
     var count: Int = 3
-    var size: CGSize = CGSize(width: 104, height: 156)
+    var size: CGSize = PosterSize.shelfLarge.size
     var caption: Bool = false
 
     var body: some View {
@@ -285,8 +287,7 @@ enum Skeleton {
                 }
             }
             .padding(.horizontal, 14)
-            .background(ThemeColor.surfaceRaised,
-                        in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
+            .surface(.plate, radius: ThemeRadius.row)
         }
         .padding(.horizontal, ThemeSpace.x4)
         .padding(.top, ThemeSpace.x2)
