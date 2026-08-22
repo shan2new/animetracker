@@ -152,121 +152,99 @@ enum DetailTint {
     }
 }
 
-// MARK: - Identity poster
+// MARK: - The Next up card's still
 
-/// Detail's identity poster: `PosterSlot`'s geometry from the slot table, with the two things the
-/// shared primitive still gets wrong on this screen.
+/// The card's episode image: a 16:9 rectangle at whatever width the card gives it.
 ///
-/// 1. `PosterSlot` fills its backing with the *extracted tint* permanently, so any art whose
-///    aspect differs from the slot's is framed by a saturated coloured band — measured 6 pt deep
-///    top and bottom on the 112×168 hero, in rgb(100,45,19). On the screen's identity object that
-///    is an orange picture mat. The tint is a pre-load placeholder here and nothing else; once the
-///    art lands the mat is `surfaceRaised`.
-/// 2. Art within 8 % of the slot's aspect fills the slot instead of letterboxing. Every cover in
-///    this catalogue is 2:3 ± 5 %, so in practice there is no mat at all — and a real 16:9 still
-///    handed to a poster slot still fits whole, on neutral.
+/// The slot used to be spoiler-gated behind `revealed`, so on every first view the most important
+/// card on the screen rendered a flat grey rounded rectangle with grey text in it — a placeholder
+/// that outlined brighter than the card ground, where a photograph belongs. **A still is not a
+/// spoiler; an episode TITLE is.** So the picture shows by default and the reveal control now
+/// governs the title alone.
 ///
-/// The image is loaded here rather than through `RemoteImageView` for one reason: the fit/fill
-/// decision needs the decoded size, and deciding it *after* the art is already on screen is a pop.
-/// One state update carries the image and its mode together. Same cache, same loader, same
-/// `Color.clear` sizing box as `CachedAsyncImage` — an `Image`'s ideal size is its pixel size and
-/// it will inflate an enclosing HStack if it is ever asked to size itself.
-struct DetailPoster: View {
+/// It takes a width rather than the fixed 96×54 slot because at accessibility sizes the card is a
+/// VStack: a 96-pt thumbnail stacked over 30-pt type is a stamp, and deleting it (what the shipped
+/// build did) leaves the card with no identity art at exactly the sizes where it matters most.
+/// Same rectangle, same aspect, one number different.
+struct NextUpStill: View {
     let url: String?
-    var slot: PosterSize = .hero
+    /// Already quieted — this sits over a `.art` ground.
+    let tint: Color?
+    /// `nil` fills the width it is offered (the accessibility-size layout); a number pins the
+    /// thumbnail slot beside the text.
+    var width: CGFloat? = EpisodeArtwork.slot.width
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var image: UIImage?
-    @State private var mode: ContentMode = .fit
-    @State private var tint: Color?
+    @State private var stillTint: Color?
 
-    private var decodePixels: CGFloat { max(slot.size.width, slot.size.height) * 3 }
+    private var hasStill: Bool { !(url ?? "").isEmpty }
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: slot.radius, style: .continuous)
-                .fill(image == nil ? (tint ?? ThemeColor.surfaceRaised) : ThemeColor.surfaceRaised)
-            Color.clear
-                .overlay {
-                    if let image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: mode)
-                    } else if (url ?? "").isEmpty {
-                        Image(systemName: "photo")
-                            .font(.system(size: min(slot.size.width, slot.size.height) * 0.28))
-                            .foregroundStyle(ThemeColor.textTertiary)
-                    }
-                }
-                .clipped()
+            RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
+                .fill(stillTint ?? tint ?? ThemeColor.surfaceRaised)
+            if hasStill {
+                RemoteImageView(url: url, contentMode: .fill, maxPixel: (width ?? 400) * 3)
+            } else {
+                // No still anywhere in the catalogue for this episode: the show's own colour under
+                // a quiet glyph, never a grey box and never an invented identifier.
+                LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.34)],
+                               startPoint: .top, endPoint: .bottom)
+                Image(systemName: "play.rectangle")
+                    .font(.system(size: width == nil ? 24 : 17, weight: .regular))
+                    .foregroundStyle(ThemeColor.textPrimary.opacity(0.34))
+            }
         }
-        .frame(width: slot.size.width, height: slot.size.height)
-        .clipShape(RoundedRectangle(cornerRadius: slot.radius, style: .continuous))
-        // `posterEdge` (5 % white), never `separator` — a 12 % line over someone's illustration.
-        .overlay(RoundedRectangle(cornerRadius: slot.radius, style: .continuous)
+        // 16:9 either way. A width pins the slot; no width takes the card's own width, so the
+        // still grows with the type instead of vanishing.
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
             .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-        .shadow(slot.shadow)
-        .task(id: url) { await load() }
-        .accessibilityHidden(true)
-    }
-
-    private func load() async {
-        image = nil
-        tint = DetailTint.quiet(await PaletteCache.shared.resolve(url: url, maxPixel: decodePixels))
-        guard let url, !url.isEmpty, let u = URL(string: url) else { return }
-        var decoded = ImageCache.shared.image(for: u, atLeast: decodePixels)
-        if decoded == nil { decoded = try? await ImageLoader.shared.image(for: u, maxPixel: decodePixels) }
-        guard let decoded, decoded.size.width > 0, decoded.size.height > 0 else { return }
-        let art = decoded.size.width / decoded.size.height
-        let want = slot.size.width / slot.size.height
-        let fits = abs(art / want - 1) < 0.08
-        withAnimation(ThemeMotion.pick(ThemeMotion.uiPoster, reduceMotion: reduceMotion)) {
-            mode = fits ? .fill : .fit
-            image = decoded
+        .task(id: url) {
+            guard hasStill else { stillTint = nil; return }
+            stillTint = DetailTint.quiet(await PaletteCache.shared.resolve(url: url, maxPixel: 288))
         }
+        .accessibilityHidden(true)
     }
 }
 
-// MARK: - No-still episode tile
+// MARK: - Withheld still
 
-/// The 96×54 rectangle an episode row or the Next up card shows when there is no still — or when
-/// there is one and it is being withheld for spoilers.
+/// The 96×54 rectangle that stands in for a still the app is deliberately NOT showing.
 ///
-/// The shared `EpisodeGlyphTile` puts a `play.rectangle` at 34 % over the raw show tint, which
-/// reads as an image that failed to load: the first object inside the screen's one action card
-/// looked broken. A withheld still is not a broken still. So the tile carries the one thing that
-/// is true about the episode and safe to print — its number — on the show's own colour, and the
-/// shape and rhythm of the list stay intact.
-struct EpisodeIdentifierTile: View {
+/// The tile it replaces printed an identifier — `S7 · E2` — built from `sequence`, the raw ordinal
+/// among all parts, where OVAs and films occupy slots. On every AniList franchise with an OVA it
+/// disagreed with the fact line 8 pt away ("Season 4 · Episode 19" beside "S5 · E19"), broke the
+/// copy table's own notation rule twice over, and was the screenshot attached to the one-star
+/// review. A string that cannot contradict its neighbour is the one that does not exist: the
+/// episode's identity is stated once, in the row's text, and the rectangle says only what it is
+/// doing — withholding a picture.
+///
+/// Distinct from the shared `EpisodeGlyphTile` (`play.rectangle` = there is no still at all): a
+/// withheld still is a choice the user can reverse, and `eye.slash` is the glyph on the control
+/// that reverses it.
+struct WithheldStillTile: View {
     /// Already quieted — this sits over a `.art` ground and must not out-shout it.
     let tint: Color?
-    /// "S7 · E2" in a card, "E2" in a row. A numeral is information; a glyph over nothing is not.
-    let identifier: String
 
     var body: some View {
-        (tint ?? ThemeColor.surfaceRaised)
-            .opacity(DetailTint.tileOverGround)
+        RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
+            .fill(tint ?? ThemeColor.surfaceRaised)
             .frame(width: EpisodeArtwork.slot.width, height: EpisodeArtwork.slot.height)
             .overlay {
-                Text(identifier)
-                    .type(ThemeType.cardFact)
-                    .foregroundStyle(ThemeColor.textTertiary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .padding(.horizontal, 6)
+                LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.34)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            .overlay {
+                Image(systemName: "eye.slash")
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(ThemeColor.textPrimary.opacity(0.62))
             }
             .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
                 .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
             .accessibilityHidden(true)
-    }
-}
-
-extension FranchisePart {
-    /// The compact identifier a tile prints: `S7 · E2` where a season number exists, `E2` where it
-    /// does not (a film, an OVA run, a single-season show).
-    func tileIdentifier(episode: Int) -> String {
-        guard kind == .season, sequence > 0 else { return "E\(episode)" }
-        return "S\(sequence) · E\(episode)"
     }
 }
