@@ -4,25 +4,28 @@ import SwiftUI
 // "All titles" — the instrument (search, sort, filter, view) behind one row. Urgency lives on
 // Today, never here.
 //
-// Polish round 2. What the adversarial panel drew blood on, and what this is:
+// Fix round 2. What the adversarial panel drew blood on, and what this is:
 //
-//  * **"Finished" meant two things at once** — the user's list state AND the series' production
-//    state — so All titles said "Black Clover · Finished" one screen after the root said
-//    "Black Clover · Returns Oct 2026". The list state is now **Watched**, and the forward fact
-//    rides with it: "Watched · Returns Oct 2026". See `LibraryRowFacts.listState`.
-//  * **A finished series with no announced date sat under RETURNING.** A section that promises a
-//    return may only contain shows with a known date; everything else gets `ANNOUNCED`, where
-//    "No date announced" is the point. See `LibrarySection` / `ReturnFact`.
-//  * **Two spinners on every pull.** The hand-assembled header ran `RefreshIndicator` beside the
-//    word "Library" while `.refreshable` ran the system one at the top. The composed
-//    `.freshness(_:appModel:pullDriving:)` exists precisely to arbitrate that and had zero call
-//    sites; this is the first.
-//  * **The skeleton was a different screen from the one that arrived** — two text lines where a
-//    `ShelfCard` reserves two title lines plus a caption, so everything below jumped 44 pt at the
-//    swap, and three cards where the real shelf runs off the trailing edge.
-//  * **The empty and error cards were pinned to the top of ~1,000 pt of void.** `centredState`.
-//  * **RETURNING (13) had no `See all` while WATCHING (9) did** — the larger collection was the
-//    one you could not open. Every section's count is now reachable.
+//  * **The A–Z index rail failed on every axis it was measured** — 11-pt hard-coded type that never
+//    scaled, `textDisabled` (3.6:1) on text, 15-pt bands in a 225-pt column floating in the middle
+//    of the screen, letters sitting ON the third poster column, `accessibilityHidden(true)` with no
+//    substitute, and a 300 ms haptic floor that made an A→W drag produce two taps. See `indexRail`.
+//  * **The WATCHING shelf answered "what do I owe" with a release year.** Three consecutive rows
+//    read "Anime · 2013" / "TV · 2024" / "Anime · 2019" because `standing()` refused to speak
+//    without a current part. See `LibraryRowFacts.standing`.
+//  * **One show, three statuses.** The poster wall and the list derived their caption from two
+//    different functions and disagreed, and nothing anywhere said a rewatch was in progress.
+//    `LibraryRowFacts.catalogue(compact:)` is now the single source for both. See `gridCaption`.
+//  * **Accent was the caption colour.** Every visible caption on the root shelf was amber, none of
+//    them an action. `ReturnFact.soon` decides it once, for the shelf and the catalogue alike.
+//  * **"All titles" was a filled rounded rectangle under a large title** — the same silhouette as
+//    the search field it opens. It is a hairline row on the canvas now. See `allTitlesRow`.
+//  * **The root hid its navigation bar** and drew "Library" as scrolling content, so the app had
+//    three header grammars across three tab roots. It is a real large title that collapses inline.
+//  * **"Unwatched only" could contradict "Status"** and did not say unwatched *what*. It is a
+//    Status value now ("Has unwatched episodes"), and its predicate stopped counting unaired
+//    episodes as unwatched. Sort gained "Recently added" and a direction. See `StatusFilter`.
+//
 struct LibraryView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -58,15 +61,13 @@ struct LibraryView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Title, refresh indicator and stale strip as ONE composed unit. Hand-built,
-                    // this screen ran its own `RefreshIndicator` next to `.refreshable`'s, so any
-                    // pull past 400 ms showed two spinners.
-                    Text("Library")
-                        .type(ThemeType.screenTitle)
-                        .foregroundStyle(ThemeColor.textPrimary)
+                    // The refresh indicator and the stale strip, composed by the shared modifier
+                    // that arbitrates them against `.refreshable`'s own spinner. The screen TITLE
+                    // is no longer part of this stack: it is a real `navigationTitle` now, so the
+                    // three tab roots stop having three header grammars (see `body`'s toolbar).
+                    Color.clear.frame(height: 0)
                         .freshness(.catalogue, appModel: appModel, pullDriving: pullDriving)
                         .padding(.horizontal, ThemeMetrics.gutter)
-                        .padding(.top, ThemeSpace.x2)
 
                     if appModel.sectionFailed {
                         InlineNotice(Copy.Notice.library) { Task { await appModel.reload() } }
@@ -80,8 +81,12 @@ struct LibraryView: View {
                             // Centred in the content area, not pinned to the top of it: the error
                             // card sat above ~1,000 pt of black while the identical card on Today
                             // was centred.
+                            // `ambient: false`: this screen already owns an ambient wash, and the
+                            // plate's own radial bloom stacked on it met the canvas in a hard
+                            // full-width step (measured: 10 -> 35 in one pixel row at y≈302 pt).
+                            // One wash per screen, and on this screen it is the screen's.
                             EmptyState(appModel.emptyStateCopy, prominence: .major,
-                                       primary: emptyStateAction)
+                                       primary: emptyStateAction, ambient: false)
                                 .padding(.horizontal, ThemeMetrics.gutter)
                                 .centredState(contentH: contentHeight)
                         } else {
@@ -89,18 +94,31 @@ struct LibraryView: View {
                         }
                     }
                 }
-                .padding(.bottom, ThemeMetrics.tabBarClearance)
             }
             .scrollIndicators(.hidden)
+            // A scroll-content MARGIN, not padding inside the stack: padding under a stack that is
+            // shorter than the viewport changes no layout at all, which is exactly the case a short
+            // library is in when it comes to rest inside the bottom ramp.
+            .tabBarContentMargin()
             .onScrollPhaseChange { _, phase in
                 pullDriving = (phase == .tracking || phase == .interacting)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             .previouslyRefreshable { await appModel.reload() }
         }
-        .scrollEdgeChrome()
-        .overlay(alignment: .top) { washOverChrome }
-        .toolbar(.hidden, for: .navigationBar)
+        // BOTTOM only. The top edge belongs to a real navigation bar now: the screen used to hide
+        // the bar and draw "Library" as scrolling content, so nothing named the screen once you had
+        // scrolled, and the app had three different header grammars across its three tab roots
+        // (Library hand-drawn, Schedule inline, Search large). A large title that collapses to
+        // inline is the system's answer and it is the same one Search already gives.
+        .scrollEdgeChromeBody(top: false, bottom: true)
+        .scrollEdgeEffectHidden(true, for: .bottom)
+        // `.hard`, the style Schedule already uses: the soft effect let a poster sliver and a
+        // blurred title ghost through under the clock. A tab root's status-bar band is opaque.
+        .scrollEdgeEffectStyle(.hard, for: .top)
+        .navigationTitle("Library")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar(.visible, for: .navigationBar)
         .navigationDestination(item: $all) { route in
             LibraryAllView(initialStatus: route.status, initialReturning: route.returning,
                            onOpenDetail: onOpenDetail)
@@ -120,36 +138,16 @@ struct LibraryView: View {
     }
 
     private var wash: some View {
-        ArtBackdrop(url: washCover, height: LibraryView.washHeight,
-                    intensity: LibraryView.washIntensity)
+        // With no artwork in the library there is nothing for the wash to be ABOUT, and a blurred
+        // nothing renders as a near-black band — so first run gets the app's own colour instead,
+        // taller and softer. It is the first frame a new user and an App Store reviewer see, and
+        // it should carry the product's identity rather than none.
+        let firstRun = washCover == nil
+        return ArtBackdrop(url: washCover,
+                           tint: firstRun ? ThemeColor.accent : nil,
+                           height: firstRun ? 520 : LibraryView.washHeight,
+                           intensity: firstRun ? 0.5 : LibraryView.washIntensity)
             .ignoresSafeArea(edges: .top)
-    }
-
-    /// The wash, drawn a second time OVER the scroll edge.
-    ///
-    /// `scrollEdgeChrome()` lays full canvas across the status-bar band — that is what stops a
-    /// poster sitting on the clock, and it is not negotiable. But it also paints over the ambient
-    /// wash, so the screen opened on a black bar exactly where the original opened on warm light.
-    /// Re-drawing the wash on top of the veil, masked to the veil's OWN ramp, gives the band its
-    /// colour back without letting a pixel of scrolling content through.
-    private var washOverChrome: some View {
-        let hold = max(0, min(1, ThemeMetrics.topSafeInset / max(ThemeMetrics.topChromeHeight, 1)))
-        return ArtBackdrop(url: washCover, height: LibraryView.washHeight,
-                           intensity: LibraryView.washIntensity)
-            .frame(height: ThemeMetrics.topChromeHeight, alignment: .top)
-            .clipped()
-            .mask {
-                LinearGradient(stops: [
-                    .init(color: .black, location: 0),
-                    .init(color: .black, location: hold),
-                    .init(color: .black.opacity(0.34), location: hold + (1 - hold) * 0.45),
-                    .init(color: .clear, location: 1),
-                ], startPoint: .top, endPoint: .bottom)
-            }
-            .frame(maxWidth: .infinity)
-            .ignoresSafeArea(edges: .top)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
     }
 
     /// Tall enough that the warmth is still on the screen behind the first shelf, and gone before
@@ -163,18 +161,8 @@ struct LibraryView: View {
 
     private var root: some View {
         VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
-            GroupedList {
-                // No icon TILE. A grouped row's symbol sits on the plate; a stroked 28-pt tile
-                // inside a container at the bezel is what made this lone row read as a disabled
-                // text field, and it was the first object on the screen.
-                GroupedRow(symbol: "rectangle.stack", symbolTint: .clear,
-                           title: "All titles", trailing: .chevron("\(appModel.library.count)"),
-                           separator: false) {
-                    all = AllTitlesRoute()
-                }
-            }
-            .padding(.horizontal, ThemeMetrics.gutter)
-            .padding(.top, ThemeSpace.x5)
+            allTitlesRow
+                .padding(.top, ThemeSpace.x3)
 
             ForEach(sections) { section in
                 VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
@@ -197,12 +185,59 @@ struct LibraryView: View {
             // titles, so the two surfaces end the same way.
             Text(Copy.titles(appModel.library.count))
                 .type(ThemeType.metadata)
-                .foregroundStyle(ThemeColor.textDisabled)
+                // `textTertiary`, like All titles' matching footer: `textDisabled` is the chevron
+                // ink (decoration, 3:1), never a line of type.
+                .foregroundStyle(ThemeColor.textTertiary)
                 .numericFact(appModel.library.count)
                 .frame(maxWidth: .infinity)
                 .padding(.top, ThemeSpace.x2)
                 .accessibilityHidden(true)
         }
+    }
+
+    /// The catalogue's front door, and it is **not a plate**.
+    ///
+    /// Shipped, this was a `GroupedList` row: a lone full-width filled rectangle at radius 16 with
+    /// a leading glyph and grey trailing text, sitting directly under a large title — which is,
+    /// pixel for pixel, where iOS puts a search field, and it is literally the search field the row
+    /// opens one tap later. "Looks like a disabled text field" stopped being a metaphor.
+    ///
+    /// A hairline is the one thing a text field never has. So: canvas ground, an accent glyph, the
+    /// count in the same `sectionLabel` the section headers below it use, and a rule underneath
+    /// inset to the title exactly like every list row on this screen. It now reads as what it is —
+    /// the head of the list, in the list's own grammar.
+    private var allTitlesRow: some View {
+        Button { all = AllTitlesRoute() } label: {
+            HStack(spacing: ThemeSpace.x3) {
+                Image(systemName: "rectangle.stack")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(ThemeColor.accent)
+                    .frame(width: 26)
+                Text(Copy.Heading.allTitles)
+                    .type(ThemeType.rowTitle)
+                    .foregroundStyle(ThemeColor.textPrimary)
+                Spacer(minLength: ThemeSpace.x3)
+                Text("\(appModel.library.count)")
+                    .type(ThemeType.sectionLabel)
+                    .foregroundStyle(ThemeColor.textTertiary)
+                    .monospacedDigit()
+                    .numericFact(appModel.library.count)
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(ThemeColor.textDisabled)
+                    .frame(width: 11, alignment: .trailing)
+            }
+            .padding(.horizontal, ThemeMetrics.gutter)
+            .frame(minHeight: ThemeMetrics.rowCompact)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
+                    .padding(.leading, ThemeMetrics.gutter + 26 + ThemeSpace.x3)
+            }
+        }
+        .buttonStyle(RowPressStyle())
+        .accessibilityLabel("\(Copy.Heading.allTitles), \(Copy.titles(appModel.library.count))")
+        .accessibilityHint("Opens your whole library, with search, sorting and filters")
     }
 
     struct RootSection: Identifiable {
@@ -270,8 +305,11 @@ struct LibraryView: View {
 
     private var skeleton: some View {
         VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
-            SkeletonBlock(height: ThemeMetrics.rowCompact, radius: ThemeRadius.row)
+            // The All-titles row is a hairline row on the canvas now, not a plate — so its
+            // stand-in is a title-width line, not a 56-pt filled block.
+            SkeletonLine(width: 140, height: 17)
                 .padding(.horizontal, ThemeMetrics.gutter)
+                .frame(height: ThemeMetrics.rowCompact, alignment: .center)
 
             VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
                 SkeletonLine(width: 92, height: 11)
@@ -314,9 +352,12 @@ struct LibraryView: View {
                     let fact = ReturnFact.of(f, appModel: appModel)
                     ShelfCard(title: f.title,
                               caption: fact.text,
-                              // Amber is for a real next step. Every card in RETURNING has one
-                              // now — the undated ones moved to their own section.
-                              captionIsLead: fact.dated,
+                              // `soon`, not `dated`. Every visible caption on this shelf was amber
+                              // — six accent strings, none of them an action — because a date in
+                              // 2027 counted as a "next step". Inside the 60-day horizon the date
+                              // leads; outside it, it is a fact in grey. The catalogue reads the
+                              // same flag, so a show cannot be amber here and grey there.
+                              captionIsLead: fact.soon,
                               poster: f.cover,
                               slot: .shelfLarge,
                               zoomID: "lib/\(f.id)") {
@@ -340,20 +381,22 @@ struct LibraryView: View {
 
     private func rowList(_ section: RootSection) -> some View {
         let shown = shown(section)
-        // At accessibility sizes the RETURNING shelf reflows into rows — correct adaptation — but
-        // it also collapsed the largest artwork on the screen from 124×186 to 48×72, an 84 % cut
-        // for exactly the users who need bigger targets. The type grows; the art does not shrink.
-        let slot: PosterSize = (section.key == .returning && isAX) ? .shelfMedium : .row
+        // At accessibility sizes the RETURNING shelf reflows into rows — correct adaptation. It
+        // reflowed into 112×168 art, though, which at AX1 made 182-pt rows carrying two short lines
+        // vertically centred beside the poster: a 240×160 pt hole in every one of them. 60×90 is
+        // still four times the area of a `.row` thumb (the art does not collapse for the readers
+        // who need it most) and the TEXT sets the row height again, which is what removes the hole.
+        let slot: PosterSize = (section.key == .returning && isAX) ? .searchRow : .row
         return VStack(spacing: 0) {
             ForEach(Array(shown.enumerated()), id: \.element.id) { i, f in
-                let facts = LibraryRowFacts.root(f, section: section.key, appModel: appModel,
-                                                 accentAllowed: !isAX || i < 3)
+                let facts = LibraryRowFacts.root(f, section: section.key, appModel: appModel)
                 MediaRow(title: f.title,
                          meta: facts.meta,
                          lead: facts.lead,
                          poster: f.cover,
                          slot: slot,
                          separator: i < shown.count - 1,
+                         hint: "Opens the show",
                          zoomID: "lib/\(f.id)") {
                     onOpenDetail(f.id, "lib/\(f.id)")
                 }
@@ -389,14 +432,21 @@ struct LibraryAllView: View {
     /// flash past on the way to the six rows they asked for, and the rows that survive both passes
     /// can keep the first pass's copy (rows under a `Watching` chip still reading "Watching").
     init(initialStatus: WatchStatus? = nil, initialReturning: ReturnScope? = nil,
+         initialSort: Sort = .title, initialUnwatchedOnly: Bool = false,
          onOpenDetail: @escaping (_ franchiseId: String, _ zoomID: String) -> Void) {
         self.onOpenDetail = onOpenDetail
-        _status = State(initialValue: initialStatus)
+        _status = State(initialValue: initialUnwatchedOnly ? .unwatched
+                                                           : (initialStatus.map(StatusFilter.status) ?? .any))
         _returning = State(initialValue: initialReturning)
+        _sort = State(initialValue: initialSort)
     }
 
     enum Sort: String, CaseIterable, Identifiable {
-        case title = "Title", recent = "Recently updated", progress = "Most left to watch"
+        /// "Recently added" is backed by `Subscription.addedAt`, which the API already sends. It is
+        /// the one order a user needs after importing or adding twenty shows — "what did I just
+        /// add" — and the shipped sheet had no way to produce it.
+        case title = "Title", added = "Recently added",
+             recent = "Recently updated", progress = "Most left to watch"
         var id: String { rawValue }
     }
     enum Display: String, CaseIterable, Identifiable {
@@ -404,41 +454,106 @@ struct LibraryAllView: View {
         var id: String { rawValue }
     }
 
+    /// **One** single-select control for "which titles", so it cannot contradict itself.
+    ///
+    /// Shipped, "Status" and "Unwatched only" were independent: Status = Watched **and** Unwatched
+    /// only = on produced an empty list with nothing on screen to explain why, and "Unwatched" did
+    /// not say unwatched *what* — the identical word on Schedule's menu means episodes. Folding the
+    /// toggle in as a Status VALUE makes the contradiction unrepresentable and names its noun.
+    enum StatusFilter: Hashable, Identifiable {
+        case any
+        case status(WatchStatus)
+        /// Titles with at least one episode you have not watched yet.
+        case unwatched
+
+        var id: String {
+            switch self {
+            case .any: return "any"
+            case .status(let s): return s.rawValue
+            case .unwatched: return "unwatched"
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .any: return "Any"
+            case .status(let s): return Copy.Status(s)
+            case .unwatched: return "Has unwatched episodes"
+            }
+        }
+
+        /// The chip form. A chip states the criterion, and "Any" is not one.
+        var chip: String? { self == .any ? nil : label }
+
+        /// True when this filter already tells the reader the row's list state, so the rows can
+        /// stop repeating it. `.unwatched` spans several statuses, so it tells them nothing.
+        var givesState: Bool { if case .status = self { return true } else { return false } }
+
+        var watchStatus: WatchStatus? { if case .status(let s) = self { return s } else { return nil } }
+    }
+
     @State private var query = ""
     @State private var sort: Sort = .title
-    @State private var status: WatchStatus?
+    /// Newest first for the date sorts, A→Z for title, most-behind first for progress — then this
+    /// flips whichever it is. Three single-direction sorts meant "oldest first" simply did not
+    /// exist in the product.
+    @State private var sortAscending = false
+    @State private var status: StatusFilter = .any
     @State private var returning: ReturnScope?
     @State private var display: Display = .list
-    @State private var unwatchedOnly = false
     @State private var showArrange = false
     @State private var contentWidth: CGFloat = 0
     @State private var railTouching = false
+    /// Ties each pinned section header to its rotor entry, so VoiceOver can jump between letters
+    /// even while the lazy stack has not built the rows in between.
+    @Namespace private var rotorSpace
 
     private var now: Int64 { appModel.now }
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
+    /// Episodes that **exist and have aired** and you have not watched.
+    ///
+    /// The shipped predicate was `markTarget > progress` with no `isUpcoming` guard, so a title
+    /// whose current part is a not-yet-premiered season counted as having unwatched episodes: the
+    /// list came back holding "Black Clover · Watched", "Chainsaw Man · Watched" and "ONE PIECE ·
+    /// Caught up" under a filter that says the opposite. A filter that returns rows contradicting
+    /// its own name is worse than no filter.
+    private func hasUnwatched(_ f: Franchise) -> Bool {
+        guard let p = f.currentPart, !p.isUpcoming else { return false }
+        return p.markTarget(now: now) > p.progress
+    }
+
     private var results: [Franchise] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         var arr = appModel.library.filter { f in
-            (status == nil || f.effectiveStatus == status)
-            && (returning == nil
-                || LibraryShelving.section(of: f, appModel: appModel) == returning?.section)
-            && (q.isEmpty || f.title.lowercased().contains(q))
-            && (!unwatchedOnly || (f.currentPart.map { $0.markTarget(now: now) > $0.progress } ?? false))
+            let statusOK: Bool
+            switch status {
+            case .any: statusOK = true
+            case .status(let s): statusOK = f.effectiveStatus == s
+            case .unwatched: statusOK = hasUnwatched(f)
+            }
+            return statusOK
+                && (returning == nil
+                    || LibraryShelving.section(of: f, appModel: appModel) == returning?.section)
+                && (q.isEmpty || f.title.lowercased().contains(q))
         }
         switch sort {
         case .title: arr.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        // `addedAt` is absent in older server responses; an unknown date sorts LAST in the default
+        // (newest-first) order rather than pretending to be 1970.
+        case .added: arr.sort { ($0.subscription?.addedAt ?? .min, $0.title.lowercased())
+                                > ($1.subscription?.addedAt ?? .min, $1.title.lowercased()) }
         case .recent: arr.sort { ($0.lastAiredSortKey, $0.title) > ($1.lastAiredSortKey, $1.title) }
         case .progress: arr.sort { ($0.continueBacklog, $0.title) > ($1.continueBacklog, $1.title) }
         }
-        return arr
+        return sortAscending ? arr.reversed() : arr
     }
 
     /// A filter is a thing the user chose that hides rows. The **view mode** is not one — which is
     /// why the shipped "Posters … Clear" row offered a destructive-sounding action against a state
     /// that was nowhere on screen, and why the amber glyph in the bar meant nothing you could see.
     private var hasFilters: Bool {
-        status != nil || returning != nil || unwatchedOnly || sort != .title
+        status != .any || returning != nil || sort != .title || sortAscending
     }
 
     var body: some View {
@@ -458,17 +573,30 @@ struct LibraryAllView: View {
                 }
                 if !results.isEmpty {
                     Text(Copy.titles(results.count))
-                        .type(ThemeType.metadata).foregroundStyle(ThemeColor.textDisabled)
+                        .type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, ThemeSpace.x6)
                 }
             }
             .padding(.top, ThemeSpace.x2)
-            .padding(.bottom, ThemeMetrics.tabBarClearance)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
         }
         .scrollIndicators(.hidden)
-        .background(ThemeColor.canvas.ignoresSafeArea())
+        // The densest artwork screen in the app opened on flat #09090B with a grey search field
+        // while the root 40 pt behind it carried a warm wash — the two read as different apps. Same
+        // wash, same semantics, lower: this screen's identity is the grid, not the band above it.
+        .background(alignment: .top) {
+            ZStack(alignment: .top) {
+                ThemeColor.canvas
+                // Short and warm rather than tall and faint: the band it has to light is the
+                // navigation bar and the search drawer. Any lower and the pinned section letters
+                // have to paint an opaque ground over it, which reads as a grey plate.
+                ArtBackdrop(url: results.first?.cover ?? appModel.library.first?.cover,
+                            height: 240, intensity: 0.7)
+                    .frame(maxWidth: .infinity, alignment: .top)
+            }
+            .ignoresSafeArea()
+        }
         // A pushed screen owns a real navigation bar, so it gets our BOTTOM edge only — but it
         // needs that: without it, posters cut against the tab-bar glass with a hard horizon.
         //
@@ -480,8 +608,14 @@ struct LibraryAllView: View {
         // correct background for a system bar, so it stays and the toolbar keeps it.
         .scrollEdgeChromeBody(top: false, bottom: true)
         .scrollEdgeEffectHidden(true, for: .bottom)
+        .contentMargins(.bottom, ThemeMetrics.tabBarClearance, for: .scrollContent)
+        // The rail owns a lane. Rows reserve it through `listTrailingInset`, so a chevron and an
+        // index letter can never land on the same 4 pt of screen, and the poster grid narrows its
+        // available width by the same amount — the letters used to sit ON the third column's
+        // artwork, and a tap near a poster's right edge could be swallowed by the rail's gesture.
+        .environment(\.listTrailingInset, showsRail ? LibraryAllView.railLane : 0)
         .overlay(alignment: .trailing) { if showsRail { indexRail } }
-        .navigationTitle("All titles")
+        .navigationTitle(Copy.Heading.allTitles)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
@@ -498,8 +632,8 @@ struct LibraryAllView: View {
             }
         }
         .sheet(isPresented: $showArrange) {
-            ArrangeSheet(sort: $sort, status: $status, display: $display,
-                         unwatchedOnly: $unwatchedOnly, onReset: resetFilters)
+            ArrangeSheet(sort: $sort, ascending: $sortAscending, status: $status,
+                         display: $display, onReset: resetFilters)
                 // Resolved BEFORE presentation from the row count and the type size. A detent that
                 // measures itself cannot be right on the first frame: the sheet grew 68 pt under
                 // the user's eye and only looked correct the second time it opened.
@@ -527,21 +661,22 @@ struct LibraryAllView: View {
     /// `Clear` beside it that reset four unrelated things at once, none of them on screen.
     private var activeChips: [Chip] {
         var chips: [Chip] = []
-        if let status {
-            chips.append(Chip(id: "status", text: LibraryRowFacts.listState(status: status)) {
-                self.status = nil
-            })
+        if let text = status.chip {
+            chips.append(Chip(id: "status", text: text) { self.status = .any })
         }
         if let returning {
             chips.append(Chip(id: "returning", text: returning.label) { self.returning = nil })
         }
-        if unwatchedOnly {
-            chips.append(Chip(id: "unwatched", text: "Unwatched only") { unwatchedOnly = false })
-        }
-        if sort != .title {
-            chips.append(Chip(id: "sort", text: sort.rawValue) { sort = .title })
+        if sort != .title || sortAscending {
+            chips.append(Chip(id: "sort", text: sortChipLabel) { sort = .title; sortAscending = false })
         }
         return chips
+    }
+
+    /// The chip names the order the way the sheet does, direction included — a "Recently added"
+    /// chip that silently means *oldest* first is a lie the reader cannot see.
+    private var sortChipLabel: String {
+        sortAscending ? "\(sort.rawValue), reversed" : sort.rawValue
     }
 
     private var chipRow: some View {
@@ -584,7 +719,7 @@ struct LibraryAllView: View {
     private func resetFilters() {
         // The VIEW MODE is deliberately untouched: it is a preference, not a filter, and nothing
         // on this row claims otherwise.
-        sort = .title; status = nil; returning = nil; unwatchedOnly = false
+        sort = .title; sortAscending = false; status = .any; returning = nil
     }
 
     // MARK: - Sections and the index
@@ -612,11 +747,12 @@ struct LibraryAllView: View {
                 if (a == "#") != (b == "#") { return b == "#" }
                 return a < b
             }.map { TitleSection(key: $0, items: buckets[$0] ?? []) }
-        case .recent:
+        case .recent, .added:
             var order: [String] = []
             var buckets: [String: [Franchise]] = [:]
             for f in results {
-                let key = LibraryAllView.monthKey(f.lastAiredSortKey)
+                let at = sort == .added ? (f.subscription?.addedAt ?? 0) : f.lastAiredSortKey
+                let key = LibraryAllView.monthKey(at)
                 if buckets[key] == nil { order.append(key) }
                 buckets[key, default: []].append(f)
             }
@@ -650,10 +786,11 @@ struct LibraryAllView: View {
         return first.isLetter ? String(first).uppercased() : "#"
     }
 
-    private static func monthKey(_ sortKey: Int64) -> String {
-        guard sortKey > 0 else { return "No date" }
-        let date = Date(timeIntervalSince1970: TimeInterval(sortKey))
-        return monthLabel.string(from: date)
+    /// `at` is **milliseconds**, like every other instant in this app. It was read as seconds here,
+    /// which put the "Recently updated" month headers roughly fifty-five thousand years out.
+    private static func monthKey(_ at: Int64) -> String {
+        guard at > 0 else { return "No date" }
+        return monthLabel.string(from: Date(timeIntervalSince1970: TimeInterval(at) / 1000))
     }
 
     private static let monthLabel: DateFormatter = {
@@ -664,7 +801,11 @@ struct LibraryAllView: View {
 
     /// A pinned strip, not a floating label: content scrolls UNDER it, so it is opaque canvas with
     /// a quiet rule beneath — the same separator the rows carry.
-    private func sectionHeader(_ key: String) -> some View {
+    ///
+    /// `inset` puts that rule on the SAME left edge as the row separators below it. Full width, it
+    /// was a second separator inset on one screen (rows start their hairline at the title, x≈164)
+    /// and the letter read as a stray character standing beside a rule that belonged to nothing.
+    private func sectionHeader(_ key: String, inset: CGFloat) -> some View {
         HStack(spacing: 0) {
             Text(key)
                 .type(ThemeType.sectionLabel)
@@ -675,56 +816,112 @@ struct LibraryAllView: View {
         .padding(.top, ThemeSpace.x3)
         .padding(.bottom, ThemeSpace.x1)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ThemeColor.canvas)
+        // Opaque, and FULL-BLEED. Inset to the gutter it painted a visible canvas rectangle
+        // against the ambient wash behind the list — a plate, which is exactly what a pinned
+        // header must not look like. A pinned bar reaches both bezels.
+        .background { ThemeColor.canvas.padding(.horizontal, -ThemeMetrics.gutter) }
         .overlay(alignment: .bottom) {
             Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
-                .padding(.leading, ThemeMetrics.gutter)
+                .padding(.leading, inset)
+                .padding(.trailing, showsRail ? LibraryAllView.railLane : 0)
         }
         .accessibilityAddTraits(.isHeader)
     }
 
-    /// The A–Z rail. `textDisabled` at rest — it is a hint, not content — and `accent` under the
-    /// finger, with one selection tick per letter it crosses.
+    /// The A–Z rail — rebuilt. Everything it was measured on failed:
+    ///
+    ///  * **Type.** `.font(.system(size: 11, weight: .semibold))` is hard-coded, so it stayed 11 pt
+    ///    at AX5; `sectionLabel` is the app's smallest token and it scales.
+    ///  * **Contrast.** `textDisabled` is 3.6:1 — the non-text threshold — on TEXT. `textTertiary`
+    ///    is 5.14:1, and while the finger is down the letters lift to `textSecondary` with the
+    ///    ACTIVE one in accent, so the rail says which letter it is on instead of all of them.
+    ///  * **Extent.** 15 letters × 15 pt was a 225-pt column floating in the vertical middle,
+    ///    attached to nothing. It now spans the list, top to bottom, so its geometry means what it
+    ///    looks like it means — and every band is at least 22 pt.
+    ///  * **Target.** 22×15 pt bands inside a 22-pt column. The column is `railLane` (28 pt) wide
+    ///    with a 44-pt hit area, and the rows reserve that lane (`listTrailingInset`) so the rail
+    ///    no longer sits on the third poster column's artwork.
+    ///  * **VoiceOver.** It was `.accessibilityHidden(true)` with no substitute, so a user with 500
+    ///    titles had to swipe every row. It is one adjustable element now, and the list carries a
+    ///    "Sections" rotor.
+    ///  * **Feel.** The 300 ms blanket haptic floor meant an A→W drag produced two taps. `.selection`
+    ///    now has its own 40 ms floor (SYS-7), which is what makes this control feel alive.
     private var indexRail: some View {
         let keys = sections.map(\.key)
-        return VStack(spacing: 0) {
-            ForEach(keys, id: \.self) { key in
-                Text(key)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(railTouching ? ThemeColor.accent : ThemeColor.textDisabled)
-                    .frame(width: 22, height: LibraryAllView.railStep)
-            }
-        }
-        .padding(.vertical, ThemeSpace.x2)
-        .background {
-            Capsule().fill(railTouching ? ThemeColor.surfaceRaised : Color.clear)
-        }
-        .padding(.trailing, 4)
-        .padding(.bottom, ThemeMetrics.tabBarClearance / 2)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    railTouching = true
-                    let i = Int(value.location.y / LibraryAllView.railStep)
-                    let clamped = max(0, min(keys.count - 1, i))
-                    guard keys.indices.contains(clamped) else { return }
-                    let target = sections[clamped].items.first?.id
-                    guard target != railTarget else { return }
-                    railTarget = target
-                    FeedbackCoordinator.fire(.selection)
-                    railScroll = sections[clamped].key
+        return GeometryReader { geo in
+            let step = max(LibraryAllView.railMinStep,
+                           geo.size.height / CGFloat(max(keys.count, 1)))
+            VStack(spacing: 0) {
+                ForEach(Array(keys.enumerated()), id: \.element) { i, key in
+                    Text(key)
+                        .type(ThemeType.sectionLabel)
+                        .foregroundStyle(railTint(index: i))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: step)
                 }
-                .onEnded { _ in railTouching = false; railTarget = nil; railScroll = nil }
-        )
+            }
+            .frame(height: geo.size.height, alignment: .top)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        railTouching = true
+                        let i = Int(value.location.y / step)
+                        select(index: max(0, min(keys.count - 1, i)))
+                    }
+                    .onEnded { _ in railTouching = false; railIndex = nil; railScroll = nil }
+            )
+        }
+        .frame(width: LibraryAllView.railLane)
+        // Between the search drawer and the tab bar, so the column IS the list's extent.
+        .padding(.top, ThemeSpace.x3)
+        .padding(.bottom, ThemeMetrics.tabBarClearance)
+        .background {
+            // The ground appears only under the finger, and only behind the letters.
+            Capsule()
+                .fill(ThemeColor.surfaceRaised.opacity(railTouching ? 1 : 0))
+                .padding(.vertical, ThemeSpace.x2)
+        }
         .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: railTouching)
-        .accessibilityHidden(true)
+        .accessibilityElement()
+        .accessibilityLabel("Section index")
+        .accessibilityValue(railIndex.flatMap { sections.indices.contains($0) ? sections[$0].key : nil }
+                            ?? sections.first?.key ?? "")
+        .accessibilityHint("Jumps the list to a section")
+        .accessibilityAdjustableAction { direction in
+            let current = railIndex ?? 0
+            let next = direction == .increment ? current + 1 : current - 1
+            guard sections.indices.contains(next) else { return }
+            select(index: next)
+        }
     }
 
-    @State private var railTarget: String?
+    /// One selection, wherever it came from — the finger or the VoiceOver rotor.
+    private func select(index: Int) {
+        guard sections.indices.contains(index), index != railIndex else { return }
+        railIndex = index
+        FeedbackCoordinator.fire(.selection)
+        railScroll = sections[index].key
+    }
+
+    private func railTint(index: Int) -> Color {
+        guard railTouching else { return ThemeColor.textTertiary }
+        return index == railIndex ? ThemeColor.accent : ThemeColor.textSecondary
+    }
+
+    @State private var railIndex: Int?
     @State private var railScroll: String?
 
-    private static let railStep: CGFloat = 15
+    /// The reserved trailing lane. Rows stop short of it and the poster grid narrows by it, which
+    /// is what Contacts does and what stops a letter landing on a cover.
+    static let railLane: CGFloat = 28
+    /// Where a list row's hairline starts — the title's leading edge. The section-letter rule uses
+    /// the same x, so one screen carries one separator inset.
+    static let rowRuleInset: CGFloat =
+        ThemeMetrics.gutter + PosterSize.searchRow.size.width + ThemeMetrics.artGap
+    /// A band is never smaller than this, however few letters there are; above that the rail fills
+    /// the list's height so the column is anchored to the thing it scrolls.
+    private static let railMinStep: CGFloat = 22
 
     // MARK: - List
 
@@ -740,7 +937,7 @@ struct LibraryAllView: View {
                             row(f, last: i == section.items.count - 1)
                         }
                     } header: {
-                        if isSectioned { sectionHeader(section.key).id("sec-\(section.key)") }
+                        listHeader(section)
                     }
                 }
             }
@@ -749,17 +946,34 @@ struct LibraryAllView: View {
                 guard let key else { return }
                 proxy.scrollTo("sec-\(key)", anchor: .top)
             }
+            // The rail's VoiceOver counterpart: the same jumps, through the system's own rotor.
+            .accessibilityRotor("Sections", entries: sections, entryID: \.key, entryLabel: \.key)
+        }
+    }
+
+    /// Extracted: the pinned header, inset to the rows' own hairline and wired to the rotor.
+    @ViewBuilder
+    private func listHeader(_ section: TitleSection) -> some View {
+        if isSectioned {
+            sectionHeader(section.key, inset: LibraryAllView.rowRuleInset)
+                .id("sec-\(section.key)")
+                .accessibilityRotorEntry(id: section.key, in: rotorSpace)
         }
     }
 
     private func row(_ f: Franchise, last: Bool) -> some View {
-        let facts = LibraryRowFacts.catalogue(f, appModel: appModel, stateIsGiven: status != nil)
+        let facts = LibraryRowFacts.catalogue(f, appModel: appModel, stateIsGiven: status.givesState)
+        // `.searchRow` (60×90) at a 100-pt row, not `.row` (48×72) at 88. At 48 pt wide a logo-led
+        // cover is below the recognition floor — "Avatar: Seven Havens" rendered as a black
+        // rectangle with unreadable type — and this is the catalogue, the one screen whose whole
+        // job is picking a title out of three hundred. It is the slot Schedule already runs.
         return MediaRow(title: f.title,
                         meta: facts.meta,
                         lead: facts.lead,
                         poster: f.cover,
-                        slot: .row,
+                        slot: .searchRow,
                         separator: !last,
+                        hint: "Opens the show",
                         zoomID: "all/\(f.id)") {
             onOpenDetail(f.id, "all/\(f.id)")
         }
@@ -773,7 +987,8 @@ struct LibraryAllView: View {
     /// of 300 covers needs the alphabet even more than a list of them does.
     private var grid: some View {
         let columns = 3
-        let available = max(0, contentWidth - ThemeMetrics.gutter * 2)
+        let lane = showsRail ? LibraryAllView.railLane : 0
+        let available = max(0, contentWidth - ThemeMetrics.gutter * 2 - lane)
         let cellWidth = available > 0
             ? (available - ThemeMetrics.shelfGap * CGFloat(columns - 1)) / CGFloat(columns)
             : PosterSize.shelfLarge.size.width
@@ -785,12 +1000,17 @@ struct LibraryAllView: View {
                       pinnedViews: isSectioned ? [.sectionHeaders] : []) {
                 ForEach(sections) { section in
                     Section {
-                        ForEach(section.items) { f in cell(f, width: cellWidth) }
+                        ForEach(section.items) { f in
+                            cell(f, width: cellWidth, alignCaptions: section.items.count > 1)
+                        }
                     } header: {
                         if isSectioned {
-                            sectionHeader(section.key)
+                            // No poster column to align to in the wall, so the rule starts at the
+                            // gutter — and stops short of the rail's lane, like every row does.
+                            sectionHeader(section.key, inset: ThemeMetrics.gutter)
                                 .padding(.horizontal, -ThemeMetrics.gutter)
                                 .id("sec-\(section.key)")
+                                .accessibilityRotorEntry(id: section.key, in: rotorSpace)
                         }
                     }
                 }
@@ -800,10 +1020,15 @@ struct LibraryAllView: View {
                 guard let key else { return }
                 proxy.scrollTo("sec-\(key)", anchor: .top)
             }
+            .accessibilityRotor("Sections", entries: sections, entryID: \.key, entryLabel: \.key)
         }
     }
 
-    private func cell(_ f: Franchise, width: CGFloat) -> some View {
+    /// `alignCaptions` reserves the second title line so a row of cells keeps ONE caption baseline.
+    /// A section holding a single title has nothing to align with, and reserving the line there
+    /// left a 39-pt hole between a one-line title and its caption — the caption ended up nearer the
+    /// next section than its own cover.
+    private func cell(_ f: Franchise, width: CGFloat, alignCaptions: Bool = true) -> some View {
         // Resolved once — calling the accessor twice to pick a colour is how a caption and its
         // colour drift apart.
         let caption = gridCaption(f)
@@ -817,10 +1042,13 @@ struct LibraryAllView: View {
                     .overlay(alignment: .bottomLeading) {
                         if caption?.lead == true { progressRing(f) }
                     }
+                    // The list variant zooms into Detail and the wall slid, so the transition
+                    // changed with a VIEW-MODE TOGGLE. Same id the push already passes.
+                    .zoomSource("all/\(f.id)")
                 VStack(alignment: .leading, spacing: 2) {
                     Text(f.title)
                         .type(ThemeType.shelfTitle).foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(2, reservesSpace: !isAX)
+                        .lineLimit(2, reservesSpace: !isAX && alignCaptions)
                         .multilineTextAlignment(.leading)
                     if let caption {
                         Text(caption.text)
@@ -845,44 +1073,55 @@ struct LibraryAllView: View {
         if let p = f.currentPart, !p.isUpcoming, p.progress > 0 {
             let target = max(1, p.markTarget(now: now))
             let fraction = min(1, max(0, Double(p.progress) / Double(target)))
+            // A bare stroked ring sat directly on the artwork with no ground, sliced by the card's
+            // corner radius so only part of it survived — on a bright orange poster it read as a
+            // rendering glitch, which is the "sticker on a poster" failure Search already fixed.
+            // A `scrimStrong` disc, inset far enough that the corner radius never reaches it.
             ZStack {
-                Circle().stroke(Color.black.opacity(0.55), lineWidth: 3)
+                Circle().fill(ThemeColor.scrimStrong)
+                Circle().strokeBorder(Color.white.opacity(0.22), lineWidth: 2)
+                    .padding(4)
                 Circle().trim(from: 0, to: fraction)
-                    .stroke(ThemeColor.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    .stroke(ThemeColor.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
+                    .padding(5)
             }
-            .frame(width: 18, height: 18)
+            .frame(width: 26, height: 26)
             .padding(ThemeSpace.x2)
             .accessibilityHidden(true)
         }
     }
 
-    /// The grid cell is ~136 pt wide, not 360 — so it gets the SHORTEST honest form of the same
-    /// facts. Board 09's rule is to drop a fact, never to truncate one.
+    /// The grid cell is ~136 pt wide, not 360 — so it gets the SHORTEST honest form of the **same**
+    /// facts, from the same function the list rows use.
+    ///
+    /// This used to be a second implementation, and it reached a different conclusion: the wall
+    /// said "Episode 1 next" in amber where the list said "Watched" in grey for the same show one
+    /// segment apart, and neither mentioned the rewatch that was actually in progress. A user reads
+    /// that as the app losing their data. `catalogue(compact:)` is now the single source; the mode
+    /// changes the layout and never the facts. Board 09's rule holds: drop a fact, never truncate.
     private func gridCaption(_ f: Franchise) -> (text: String, lead: Bool)? {
-        if let step = LibraryRowFacts.progress(f, now: now) {
-            // "Season 7 · Episode 2 next" is 25 characters in a 136-pt cell; the season goes and
-            // the episode stays.
-            if let p = f.currentPart, !p.isReleasing, p.markTarget(now: now) > p.progress {
-                return (Copy.Progress.episodeNext(p.progress + 1), true)
-            }
-            return (step, true)
-        }
-        // Under a status chip the state word is already on screen once; the cell says what the
-        // thing is instead. It keeps its caption line either way, so the captions stay aligned.
-        return (status == nil ? LibraryRowFacts.listState(f) : LibraryRowFacts.identity(f), false)
+        let facts = LibraryRowFacts.catalogue(f, appModel: appModel,
+                                              stateIsGiven: status.givesState, compact: true)
+        if let lead = facts.lead { return (lead, true) }
+        if let meta = facts.meta { return (meta, false) }
+        return nil
     }
 }
 
 // MARK: - Segmented selection
 
-/// Selection everywhere in this app is `accent`; a stock segmented control marks it with a grey
-/// fill, which on a dark ground reads as *disabled* rather than *chosen* — it was the one control
-/// in the app whose selected state used a different language from every other.
+/// The segmented control keeps the platform's own selection language — a raised NEUTRAL segment.
 ///
-/// SwiftUI exposes no per-view hook for the selected segment, and `.tint` does not reach it, so
-/// this goes through the appearance proxy. There is exactly one segmented control in the app
-/// (`View as`), so a global proxy is the whole of its blast radius.
+/// It was overridden to a solid `#F0A24E` pill with black text on the argument that "selection
+/// everywhere in this app is accent". It is not: accent in this product means *a forward-looking
+/// step you can take*, and a view mode is neither forward-looking nor a step. The result was the
+/// loudest object in a sheet of quiet pickers, in a colour iOS has never used for a segment, and
+/// it was the only control in the app whose selected state was a filled capsule with no
+/// `controlSheen`. Accent is not the selection colour; it is the *action* colour.
+///
+/// The proxy still runs, because the stock control's unselected label is system grey on our dark
+/// plate — the two neutrals belong to two different palettes. Ours, and nothing else.
 @MainActor
 private enum SegmentedAppearance {
     private static var installed = false
@@ -891,9 +1130,9 @@ private enum SegmentedAppearance {
         guard !installed else { return }
         installed = true
         let proxy = UISegmentedControl.appearance()
-        proxy.selectedSegmentTintColor = UIColor(ThemeColor.accent)
+        proxy.selectedSegmentTintColor = UIColor(ThemeColor.surfaceFloating)
         proxy.backgroundColor = UIColor(ThemeColor.surfaceRaised)
-        proxy.setTitleTextAttributes([.foregroundColor: UIColor(ThemeColor.onAccent)], for: .selected)
+        proxy.setTitleTextAttributes([.foregroundColor: UIColor(ThemeColor.textPrimary)], for: .selected)
         proxy.setTitleTextAttributes([.foregroundColor: UIColor(ThemeColor.textSecondary)], for: .normal)
     }
 }
@@ -927,7 +1166,7 @@ private struct FilterChipStyle: ButtonStyle {
     }
 }
 
-// MARK: - Sort & Filter
+// MARK: - Sort and filter
 
 /// The detent, resolved before the sheet is on screen.
 ///
@@ -944,6 +1183,9 @@ private enum ArrangeGeometry {
     /// + the bottom pad (24) + the home-indicator strip a sheet's scroll view inherits (34) — less
     /// the 42 pt the sheet measured under that sum on the simulator. A detent computed purely from
     /// first principles left 42 pt of void beneath the last row.
+    /// The one `SectionLabel` group header the sheet gained is paid for out of the gap between the
+    /// groups, which the label now occupies — measured on the simulator, the sum above still lands
+    /// the last row's baseline where it was.
     static let chrome: CGFloat = 52 + 12 + 20 + 30 + 24 + 34 - 42
 }
 
@@ -977,10 +1219,11 @@ private struct ArrangeDetent: CustomPresentationDetent {
 /// Board 05, verbatim: "a grouped list, not a chip cloud — Sort by and Status rows, a segmented
 /// View, native toggles, Reset."
 ///
-/// Titled **Sort & Filter**, because "Arrange" is Files.app's word for ordering a grid and this
-/// sheet holds a sort, a status filter, an unwatched filter and a view toggle. `Unwatched only` is
-/// a filter and now sits with the other filter; `View` is left holding the only thing that is
-/// actually a view choice, so neither group needs a label to explain itself.
+/// Titled **Sort & filter** (sentence case, `Copy.Heading`), because "Arrange" is Files.app's word
+/// for ordering a grid and this sheet holds a sort, its direction and a status filter. The separate
+/// `Unwatched only` switch is gone: it could contradict the Status row above it, so it became a
+/// Status VALUE ("Has unwatched episodes"). What is left over is `View as`, which is neither a sort
+/// nor a filter — so it gets its own named group and stops reading as an afterthought.
 ///
 /// The header is hand-built rather than a `NavigationStack` toolbar: on this OS a toolbar button
 /// renders as a filled glass capsule, which made `Done` the single heaviest object in a sheet whose
@@ -990,16 +1233,18 @@ private struct ArrangeSheet: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Binding var sort: LibraryAllView.Sort
-    @Binding var status: WatchStatus?
+    @Binding var ascending: Bool
+    @Binding var status: LibraryAllView.StatusFilter
     @Binding var display: LibraryAllView.Display
-    @Binding var unwatchedOnly: Bool
     let onReset: () -> Void
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
-    private var hasFilters: Bool { sort != .title || status != nil || unwatchedOnly }
+    private var hasFilters: Bool { sort != .title || ascending || status != .any }
 
-    static let title = "Sort & Filter"
+    /// Sentence case, and the `&` only because these are two nouns in a label that has to hold one
+    /// line. `Copy.Heading` settles both rules once for the whole app.
+    static var title: String { Copy.Heading.sortAndFilter }
 
     var body: some View {
         ScrollView {
@@ -1020,6 +1265,11 @@ private struct ArrangeSheet: View {
 
     private var groups: some View {
         VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
+            // The first group needs no label: the sheet's own title names it, and repeating
+            // "SORT & FILTER" 30 pt under "Sort & filter" is an echo. The SECOND group gets one,
+            // which is the whole point — "View as" is neither a sort nor a filter, and unlabelled
+            // it read as an afterthought stranded in a plate of its own. (iOS Settings grammar:
+            // the first group is implicit, later groups are named.)
             GroupedList {
                 valueRow(title: "Sort by", value: sort.rawValue, separator: true) {
                     Picker("Sort by", selection: sortBinding) {
@@ -1029,21 +1279,40 @@ private struct ArrangeSheet: View {
                     }
                     .pickerStyle(.inline)
                 }
-                valueRow(title: "Status", value: statusValue, separator: true) {
+                // Every sort shipped in exactly one direction, so "oldest first" did not exist.
+                GroupedRow(title: "Reverse order",
+                           subtitle: ascending ? reversedHint : nil,
+                           trailing: .toggle(ascendingBinding), separator: true)
+                valueRow(title: "Status", value: status.label, separator: false) {
                     Picker("Status", selection: statusBinding) {
-                        Text(ArrangeSheet.anyStatus).tag(WatchStatus?.none)
+                        Text(LibraryAllView.StatusFilter.any.label)
+                            .tag(LibraryAllView.StatusFilter.any)
                         ForEach(WatchStatus.menuOrder, id: \.self) { s in
-                            Text(LibraryRowFacts.listState(status: s)).tag(WatchStatus?.some(s))
+                            Text(LibraryRowFacts.listState(status: s))
+                                .tag(LibraryAllView.StatusFilter.status(s))
                         }
+                        // The old "Unwatched only" toggle, as a VALUE. As a separate switch it
+                        // could contradict the row above it (Status = Watched + Unwatched only =
+                        // an empty list with no explanation), and its noun was ambiguous —
+                        // unwatched *what*? A single-select control cannot contradict itself.
+                        Text(LibraryAllView.StatusFilter.unwatched.label)
+                            .tag(LibraryAllView.StatusFilter.unwatched)
                     }
                     .pickerStyle(.inline)
                 }
-                // A filter, filed with the filters. It spent the shipped build under VIEW.
-                GroupedRow(title: "Unwatched only",
-                           trailing: .toggle(unwatchedBinding), separator: false)
             }
 
-            GroupedList { viewAsRow }
+            GroupedList(header: "View") { viewAsRow }
+        }
+    }
+
+    /// The direction, said in the reader's terms rather than as "ascending".
+    private var reversedHint: String {
+        switch sort {
+        case .title: return "Z to A"
+        case .added: return "Oldest first"
+        case .recent: return "Least recent first"
+        case .progress: return "Least left to watch first"
         }
     }
 
@@ -1137,14 +1406,6 @@ private struct ArrangeSheet: View {
         .padding(.top, ThemeSpace.x3)
     }
 
-    /// "Any", not "Any status": the row's own label already says Status, and repeating the noun in
-    /// its own value is the tell of a control that was written twice.
-    private static let anyStatus = "Any"
-
-    private var statusValue: String {
-        status.map { LibraryRowFacts.listState(status: $0) } ?? ArrangeSheet.anyStatus
-    }
-
     // MARK: - Bindings
     //
     // A `Picker` writes straight through its binding, so the haptic and the settle animation the
@@ -1160,7 +1421,7 @@ private struct ArrangeSheet: View {
         Binding(get: { sort }, set: { new in select(sort, new) { sort = new } })
     }
 
-    private var statusBinding: Binding<WatchStatus?> {
+    private var statusBinding: Binding<LibraryAllView.StatusFilter> {
         Binding(get: { status }, set: { new in select(status, new) { status = new } })
     }
 
@@ -1168,7 +1429,7 @@ private struct ArrangeSheet: View {
         Binding(get: { display }, set: { new in select(display, new) { display = new } })
     }
 
-    private var unwatchedBinding: Binding<Bool> {
-        Binding(get: { unwatchedOnly }, set: { new in select(unwatchedOnly, new) { unwatchedOnly = new } })
+    private var ascendingBinding: Binding<Bool> {
+        Binding(get: { ascending }, set: { new in select(ascending, new) { ascending = new } })
     }
 }
