@@ -833,7 +833,7 @@ struct SeasonEpisodesView: View {
             .buttonStyle(.plain)
             if !spoilerSafe, (episode?.title?.isEmpty == false || episode?.still != nil) {
                 Button {
-                    withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { revealed.insert(n) }
+                    _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { revealed.insert(n) }
                 } label: {
                     Image(systemName: "eye").font(.system(size: 15)).frame(width: 44, height: 44).foregroundStyle(ThemeColor.textTertiary)
                 }

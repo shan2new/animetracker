@@ -54,8 +54,8 @@ extension AppModel {
                     library.removeAll { $0.id == f.id }
                 }
                 SyncCenter.shared.record(command: Copy.Action.add, title: f.title,
-                                         reason: Copy.Notice.reason(error)) { [weak self] in
-                    self?.undoTapped(state)
+                                         reason: Copy.Notice.reason(error)) {
+                    self.undoTapped(state)
                 }
             }
         }

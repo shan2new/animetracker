@@ -618,7 +618,8 @@ extension RecapState {
 /// is earned (an exact-time episode is airing right now).
 struct Wordmark: View {
     var body: some View {
-        (Text("Previously").foregroundStyle(ThemeColor.textPrimary) + Text(".").foregroundStyle(ThemeColor.accent))
+        Text("Previously\(Text(".").foregroundStyle(ThemeColor.accent))")
+            .foregroundStyle(ThemeColor.textPrimary)
             .type(ThemeType.brandWordmark)
             .accessibilityLabel("Previously")
     }

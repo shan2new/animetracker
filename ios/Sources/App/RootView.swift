@@ -13,17 +13,17 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            AppBackground()
+            ThemeColor.canvas.ignoresSafeArea()
             // The app settles in from a hair small as the splash leaves — the exit reads as
             // moving THROUGH the splash into the app, not a fade between two stills.
             Group {
                 if auth.isSignedIn {
                     MainTabView()
                         .task(id: auth.isSignedIn) { appModel.start() }
-                        .transition(.opacity.animation(.uiGentle))
+                        .transition(.opacity.animation(ThemeMotion.uiGentle))
                 } else {
                     SignInView()
-                        .transition(.opacity.animation(.uiGentle))
+                        .transition(.opacity.animation(ThemeMotion.uiGentle))
                 }
             }
             // Emerges from inside the ident's light: a hair small and slightly defocused,
@@ -36,7 +36,7 @@ struct RootView: View {
                 // The splash animates its own zoom-through exit (the camera push in
                 // SplashView's timeline), so the container just crossfades over it — the
                 // app emerges from inside the icon as it scales past the viewer.
-                SplashView { withAnimation(.uiSmooth) { splashDone = true }; appModel.surfaceReady = true }
+                SplashView { withAnimation(ThemeMotion.uiSettle) { splashDone = true }; appModel.surfaceReady = true }
                     .zIndex(10)
                     .transition(.opacity)
             }
@@ -151,8 +151,8 @@ struct MainTabView: View {
             .sensoryFeedback(.selection, trigger: selectedTab)
             .task {
                 // One freshness source for every stale strip and Profile's sync line.
-                SyncCenter.shared.signals = { [weak appModel] in
-                    .init(lastLoadedAt: appModel?.lastLoadedAt ?? 0, loading: appModel?.loading ?? false)
+                SyncCenter.shared.signals = {
+                    .init(lastLoadedAt: appModel.lastLoadedAt, loading: appModel.loading)
                 }
                 SyncCenter.shared.startMonitoring()
             }

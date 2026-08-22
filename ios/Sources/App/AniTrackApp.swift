@@ -31,7 +31,7 @@ struct AniTrackApp: App {
                 .environment(auth)
                 .environment(appModel)
                 .preferredColorScheme(.dark)
-                .tint(Theme.accent)
+                .tint(ThemeColor.accent)
                 // Outfit as the inherited default so any text not already using `.scaledFont`
                 // (and SwiftUI TextField input) still renders in the brand typeface, scaled.
                 .font(.custom("Outfit-Regular", size: 17, relativeTo: .body))

@@ -21,14 +21,14 @@ struct PreviouslyMark: View {
         ZStack {
             BookmarkShape()
                 .fill(
-                    LinearGradient(colors: [Color(hex: 0xFFD6A0), Theme.accent, Color(hex: 0xC9702E)],
+                    LinearGradient(colors: [Color(hex: 0xFFD6A0), ThemeColor.accent, Color(hex: 0xC9702E)],
                                    startPoint: .topLeading,
                                    endPoint: .bottomTrailing)
                 )
 
             if detail == .progress {
                 Capsule()
-                    .fill(Theme.background)
+                    .fill(ThemeColor.canvas)
                     .frame(width: slotWidth, height: slotHeight)
                     .offset(y: -height * 0.24)
 

@@ -250,7 +250,7 @@ final class AppModel {
     /// Surface a write failure. Every optimistic mutation calls this after rolling itself back,
     /// so the UI never silently disagrees with the server.
     func showError(_ message: String) {
-        Haptics.error()
+        FeedbackCoordinator.fire(.directError)
         errorToast = message
         errorTask?.cancel()
         errorTask = Task { [weak self] in
@@ -419,7 +419,7 @@ final class AppModel {
                 guard let part = $0.releasingPart else { return false }
                 // A just-caught-up row has to survive its celebration: `episodesBehind` drops to 0
                 // the instant progress is written, which would otherwise yank the row (and the
-                // frame CaughtUpOverlay renders on) before the overlay is ever seen.
+                // frame its result state renders on) before it is ever seen.
                 guard part.episodesBehind > 0 || justCaught.contains($0.id) else { return false }
                 return now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow
             }
@@ -792,8 +792,7 @@ final class AppModel {
                 // A mark is a fact about the user: it stays. The failure goes to the SyncBanner
                 // with a Retry that re-issues exactly this write.
                 SyncCenter.shared.record(command: Copy.Action.markAsWatched, title: f.title,
-                                         reason: Copy.Notice.reason(error)) { [weak self] in
-                    guard let self else { return }
+                                         reason: Copy.Notice.reason(error)) {
                     if let _ = try? await self.api.setProgress(mediaId: part.mediaId, episodes: target) {
                         self.settleLocalProgress(mediaId: part.mediaId, episodes: target)
                     }
@@ -842,7 +841,7 @@ final class AppModel {
     /// optimistic via `pendingAdds` so the card flips to "In library" instantly.
     func addToLibrary(franchiseId: String, title: String, isReleasing: Bool) {
         guard !isInLibrary(franchiseId) else { return }
-        Haptics.success()
+        FeedbackCoordinator.fire(.success)
         pendingAdds.insert(franchiseId)
         let status: WatchStatus = isReleasing ? .watching : .planned
         let label = status == .watching ? "Watching" : "Plan to watch"
@@ -886,8 +885,8 @@ final class AppModel {
                     library[i] = library[i].withStatus(prevStatus)
                 }
                 SyncCenter.shared.record(command: Copy.Toast.movedTo(status.displayName), title: self.franchise(id: franchiseId)?.title ?? "",
-                                         reason: Copy.Notice.reason(error)) { [weak self] in
-                    self?.setStatus(franchiseId: franchiseId, status: status)
+                                         reason: Copy.Notice.reason(error)) {
+                    self.setStatus(franchiseId: franchiseId, status: status)
                 }
             }
         }
@@ -912,8 +911,8 @@ final class AppModel {
                     library.insert(removed, at: min(idx ?? library.count, library.count))
                 }
                 SyncCenter.shared.record(command: Copy.Action.removeFromLibrary, title: removed?.title ?? "",
-                                         reason: Copy.Notice.reason(error)) { [weak self] in
-                    self?.removeFromLibrary(franchiseId: franchiseId, haptic: false)
+                                         reason: Copy.Notice.reason(error)) {
+                    self.removeFromLibrary(franchiseId: franchiseId, haptic: false)
                 }
             }
         }

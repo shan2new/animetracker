@@ -4,6 +4,15 @@ import UIKit
 // The interaction-system tokens (spec v8, board 10/11). Exact values, no ranges. The legacy
 // `Theme` statics stay for screens not yet migrated; new surfaces use these namespaces only.
 
+extension Color {
+    init(hex: UInt32, alpha: Double = 1.0) {
+        let r = Double((hex >> 16) & 0xFF) / 255.0
+        let g = Double((hex >> 8) & 0xFF) / 255.0
+        let b = Double(hex & 0xFF) / 255.0
+        self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
+    }
+}
+
 enum ThemeColor {
     // Canvas
     static let canvas = Color(hex: 0x09090B)

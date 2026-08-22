@@ -465,13 +465,13 @@ struct ScheduleView: View {
     /// The button is replaced in place by the tick; the row never moves (a calendar keeps its
     /// history) unless "Unwatched only" is on, in which case it leaves after a 650 ms hold.
     private func commit(_ e: Event, then present: @escaping () -> Void) {
-        withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
+        _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
             committed.insert(e.id)
         } completion: {
             if unwatchedOnly {
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(650))
-                    withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
+                    _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
                         committed.remove(e.id)
                     } completion: { present() }
                 }
