@@ -65,7 +65,12 @@ authenticated user's progress.
                               // source flipping status) the latest episode in `episodes` whose
                               // `airDate` has passed, or `totalEpisodes` when the list is undated.
   "nextEpisodeNumber": null,  // 1 on a dated NOT_YET_RELEASED part — the premiere is the next slot
-  "nextAiringAt": null,       // ms epoch or null
+  "nextAiringAt": null,       // ms epoch or null. DERIVED compatibility field: always == release.at
+  "release": {                // how precisely the next release is known — state it, never infer it
+    "precision": "exact",     // exact | date_only | unknown
+    "at": 1700000000000,      // ms epoch; authoritative only when precision is "exact"
+    "date": null              // "YYYY-MM-DD" (UTC); authoritative only when precision is "date_only"
+  },
   "lastAiredAt": 1372000000000, // ms epoch or null
   "synopsis": "…",
   "genres": ["Action","Drama"],
@@ -90,7 +95,7 @@ authenticated user's progress.
   "isReleasing": true,             // any part currently releasing
   "partCounts": { "season": 4, "movie": 2, "ova": 3, "special": 1 },
   "parts": [ FranchisePart, … ],   // ordered by kind then sequence; each part carries its `episodes`
-  "subscription": { "status": "watching" } | null,
+  "subscription": { "status": "watching", "addedAt": 1700000000000 } | null,  // addedAt = ms epoch the user subscribed
   "year": 2013,                    // premiere year (earliest dated part), or null
   "studios": ["Wit Studio"]        // primary installment's studios (anime) / networks (TV)
 }
@@ -109,7 +114,7 @@ authenticated user's progress.
   "nextAiringAt": 1700000000000,   // soonest upcoming across parts, or null
   "year": 2013,                    // premiere year (for "Anime · 2023" / "TV · 2024"), or null
   // present only in /me/library:
-  "status": "watching",            // watching | completed | planned
+  "status": "watching",            // watching | completed | planned | paused | dropped
   "behind": 2,                      // unwatched aired eps across releasing parts
   "newParts": 1                     // parts added since user last opened (badge)
 }
@@ -120,8 +125,8 @@ authenticated user's progress.
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
 | GET | `/health` | — | `{ ok: true }` |
-| GET | `/franchises/trending?limit=30` | — | `{ franchises: FranchiseSummary[] }` |
-| GET | `/search?q=` | — | `{ franchises: FranchiseSummary[] }` — empty `q` = trending; fans out to AniList + TMDB `/search/tv` in parallel, lazily groups/materializes ungrouped matches, suppresses TMDB results that are Japanese animation (AniList owns those), and interleaves the two relevance-ordered lists |
+| GET | `/franchises/trending?limit=30` | — | `FranchiseListResponse` |
+| GET | `/search?q=&exact=1` | — | `FranchiseListResponse` — empty `q` = trending; fans out to AniList + TMDB `/search/tv` in parallel, lazily groups/materializes ungrouped matches, suppresses TMDB results that are Japanese animation (AniList owns those), and interleaves the two relevance-ordered lists. `exact=1` opts out of the spell-correction below |
 | GET | `/franchises/:id` | — | `Franchise` |
 | GET | `/me/library` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }` where `LibraryFranchise` = full `Franchise` + `status` + `behind` + `newParts` |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |
@@ -131,6 +136,25 @@ authenticated user's progress.
 | POST | `/me/opened` | — | `{ prevOpenedAt: Int }` (returns the value *before* this call, then stamps now) |
 | GET | `/me/notifications?limit=50` | — | `{ items: NotificationItem[], unread: Int }` newest-first |
 | POST | `/me/notifications/read` | `{ ids?: [uuid] }` | `{ marked: Int }` — omit `ids` to mark all unread as read |
+
+### FranchiseListResponse
+The envelope every franchise-list route returns. `franchises` is the only guaranteed field; the
+other three are **optional — present only on `/search`**, the one route that fans out across
+catalogues. `/franchises/trending` returns `{ franchises }` alone. They exist so the client can be
+honest rather than silently plausible:
+```jsonc
+{
+  "franchises": [ FranchiseSummary, … ],
+  "correctedQuery": "Mushoku Tensei",  // optional — /search only; present only when the query was
+                                       // spell-corrected AND the rewrite actually found something
+  "originalQuery": "Mushuko Tensei",   // optional — /search only; echoed alongside correctedQuery
+  "sources": {                          // optional — /search only. Per-catalogue outcome: a
+    "anilist": "ok",                    // catalogue that FAILED is not a catalogue with no
+    "tmdb": "disabled"                  // matches. ok | failed | disabled; "disabled" =
+  }                                     // TMDB_ACCESS_TOKEN unset (anime-only mode)
+}
+```
+A client must treat an absent `sources` as "nothing to report", never as a failure.
 
 ### NotificationItem
 
@@ -180,6 +204,40 @@ All time math is **IST (Asia/Kolkata)** — port `istParts`, `istDayKey`, `istMo
 
 iOS uses the Clerk iOS SDK; attaches the session JWT as `Authorization: Bearer …`.
 Backend verifies via `@clerk/backend` `verifyToken` (JWKS / networkless `CLERK_JWT_KEY`),
-maps `sub` (Clerk user id) → `users` row (upsert on first request), exposes `req.userId`.
-A `DEV_AUTH_BYPASS=1` env lets the backend accept `Authorization: Bearer dev:<clerkId>`
-for local testing before real Clerk keys are wired in.
+maps `sub` (Clerk user id) → `users` row (upsert on first request), exposes `req.user`.
+
+### Two issuers, and only one of them is a JWT
+
+`dev:<clerkId>` is a **distinct, non-production issuer**, not a relaxed mode of the real one. It is
+not a JWT and never will be, so:
+
+- The server accepts it only when `APP_ENV` is not `production` **and** `DEV_AUTH_BYPASS` is set.
+- **A production process rejects `dev:` tokens with `401 {"error":"invalid token"}` regardless of
+  `DEV_AUTH_BYPASS`**, and never forwards a dev id to Clerk.
+- A production process **refuses to start** if it sets `DEV_AUTH_BYPASS`, or if it has neither
+  `CLERK_JWT_KEY` nor `CLERK_SECRET_KEY` (nothing could verify a real token). Fail closed, loudly,
+  at deploy time.
+
+The policy lives in `src/auth/authConfig.ts` (`devBypassAllowed`, `assertAuthConfig`) and
+`src/auth/identity.ts` (`resolveIdentity`); `DEV_AUTH_BYPASS` is read nowhere else.
+
+Deploy test — `npm run auth:smoke -- https://<host>` asserts `GET /health` → 200 and
+`GET /me/library` with a `dev:` bearer → **401**, exiting non-zero otherwise.
+
+### Client failure semantics
+
+`401` means the session is gone (the client refreshes its token once, retries, and only then signs
+out). `403` — including a Cloudflare/WAF HTML challenge — is an **infrastructure** failure: the
+session is kept and the surface shows a stale/error frame. Any response whose body is HTML is
+treated the same way at any status, including 2xx (captive portals).
+
+Two things that look like `401` but are not. A client that cannot **mint** a token (an expired
+session JWT with no network to renew it) never reaches the server and reports a *transport*
+failure — being offline must not sign anyone out. A forced refresh that could not reach the token
+issuer is likewise transport, not a dead session. Only an issuer that answers — with the same token,
+or with none — turns a `401` into a sign-out.
+
+Every request is bounded by one wall-clock budget (~16.6 s: a 15 s attempt plus at most ~1.6 s of
+backoff), shared across retries, so a black-holed upstream can never hold a skeleton on screen.
+`429` and `5xx` are retried twice while that budget lasts (`Retry-After` honoured, capped at 8 s);
+an exhausted `5xx` whose body is HTML lands as infrastructure.

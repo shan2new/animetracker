@@ -1,6 +1,10 @@
 import type { PartKind } from '../grouping/partKind.js'
 
-export type WatchStatus = 'watching' | 'completed' | 'planned'
+/**
+ * The user's own verdict on a franchise. Stored in `subscriptions.status`, which is a `text()`
+ * column — adding a value needs no migration.
+ */
+export type WatchStatus = 'watching' | 'completed' | 'planned' | 'paused' | 'dropped'
 
 /** Which catalogue a franchise (and all its parts) came from. A franchise never mixes sources. */
 export type MediaSource = 'anilist' | 'tmdb'
@@ -34,6 +38,21 @@ export interface EpisodeMeta {
   runtime: number | null // minutes
 }
 
+/**
+ * How precisely the next release instant is known. Sources differ in kind, not just in quality:
+ * AniList publishes a real broadcast instant, TMDB publishes a calendar date that the sync
+ * synthesizes to 17:00 UTC. Stating it here is what stops a client from inferring precision from
+ * `source` — and from ever rendering a clock time that nobody published.
+ */
+export interface ReleasePrecision {
+  /** exact = `at` is a real instant · date_only = `date` is the fact, `at` is synthesized · unknown = nothing scheduled. */
+  precision: 'exact' | 'date_only' | 'unknown'
+  /** ms epoch. Authoritative only when `precision` is "exact"; synthesized when "date_only". */
+  at: number | null
+  /** "YYYY-MM-DD" (UTC). Authoritative only when `precision` is "date_only". */
+  date: string | null
+}
+
 export interface FranchisePart {
   mediaId: number
   kind: PartKind
@@ -48,7 +67,10 @@ export interface FranchisePart {
   totalEpisodes: number
   airedEpisodes: number
   nextEpisodeNumber: number | null
+  /** Derived compatibility field: always `release.at`. Prefer `release` for anything user-facing. */
   nextAiringAt: number | null
+  /** The honest shape of the next release date. See ReleasePrecision. */
+  release: ReleasePrecision
   lastAiredAt: number | null
   synopsis: string
   genres: string[]
@@ -81,7 +103,7 @@ export interface Franchise {
   isReleasing: boolean
   partCounts: Partial<Record<PartKind, number>>
   parts: FranchisePart[]
-  subscription: { status: WatchStatus } | null
+  subscription: { status: WatchStatus; addedAt: number } | null
   upcoming: FranchiseUpcoming | null
   /** Premiere year of the franchise (earliest dated part). */
   year: number | null
@@ -107,6 +129,20 @@ export interface FranchiseSummary {
 }
 
 export type LibraryFranchise = Franchise & { status: WatchStatus; behind: number; newParts: number }
+
+/** Per-catalogue outcome for a fan-out search, so the client can say which half failed. */
+export type SourceOutcome = 'ok' | 'failed' | 'disabled'
+
+/** The envelope every franchise list route returns (`/franchises/trending`, `/search`). */
+export interface FranchiseListResponse {
+  franchises: FranchiseSummary[]
+  /** Set when the query was spell-corrected/completed before searching (see queryCorrect.ts). */
+  correctedQuery?: string
+  /** The query the caller sent, echoed when `correctedQuery` is present. */
+  originalQuery?: string
+  /** Per-catalogue outcome. Absent on routes that do not fan out. */
+  sources?: { anilist: SourceOutcome; tmdb: SourceOutcome }
+}
 
 /** A stored per-user notification (announcement news for a subscribed franchise). */
 export interface NotificationItem {
