@@ -71,11 +71,19 @@ final class PaletteCache {
         }
         guard let best = buckets.values.max(by: { $0.n < $1.n }), best.n > 0 else { return fallback }
         var l = best.l / Double(best.n), a = best.a / Double(best.n), bb = best.b / Double(best.n)
-        // Clamp lightness and chroma.
+        // Clamp lightness and chroma, and lean the hue toward the brand's warmth so the app's
+        // atmosphere never swings olive or steel from tab to tab.
         l = min(max(l, 0.24), 0.38)
         let c = (a * a + bb * bb).squareRoot()
-        let cc = min(max(c, 0.04), 0.12)
-        if c > 0 { a *= cc / c; bb *= cc / c }
+        let cc = min(max(c, 0.035), 0.075)
+        if c > 0 {
+            var ua = a / c, ub = bb / c
+            let (_, wa, wb) = oklab(r: 0xF0 / 255.0, g: 0xA2 / 255.0, b: 0x4E / 255.0)
+            let wn = (wa * wa + wb * wb).squareRoot()
+            ua = 0.65 * ua + 0.35 * (wa / wn); ub = 0.65 * ub + 0.35 * (wb / wn)
+            let un = (ua * ua + ub * ub).squareRoot()
+            a = ua / un * cc; bb = ub / un * cc
+        }
         let (r, g, b2) = srgb(l: l, a: a, b: bb)
         return Color(.sRGB, red: r, green: g, blue: b2, opacity: 1)
     }
@@ -164,10 +172,15 @@ struct ArtBackdrop: View {
                     .frame(height: height)
                     .clipped()
                     .blur(radius: 56, opaque: true)
-                    .saturation(1.25)
-                    .opacity(0.60 * intensity)
+                    .saturation(0.85)
+                    .opacity(0.46 * intensity)
             }
             LinearGradient(colors: [base.opacity(0.42 * intensity), base.opacity(0.06 * intensity), .clear],
+                           startPoint: .top, endPoint: .bottom)
+            // A constant breath of the brand's warmth under every wash, so Schedule, Search and
+            // Profile share one atmosphere instead of borrowing a different hue from whichever
+            // poster happens to lead.
+            LinearGradient(colors: [ThemeColor.accent.opacity(0.07 * intensity), .clear],
                            startPoint: .top, endPoint: .bottom)
             // The handover to the canvas. It must reach FULL canvas well before the content that
             // sits over it, or the first section looks like it is floating on a stain.

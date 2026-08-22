@@ -132,9 +132,20 @@ struct PosterSlot: View {
 
     var body: some View {
         ZStack {
+            // The mat is neutral with a whisper of the art's colour — never a saturated bar of
+            // tint beside an aspect-fit poster.
             RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(tint ?? ThemeColor.surfaceRaised)
+                .fill(ThemeColor.surfaceRaised)
+            if let tint {
+                RoundedRectangle(cornerRadius: radius, style: .continuous).fill(tint.opacity(0.22))
+            }
             if let url, !url.isEmpty {
+                if width >= 72 {
+                    RemoteImageView(url: url, contentMode: .fill, maxPixel: max(width, height) * 2)
+                        .blur(radius: 14, opaque: true)
+                        .opacity(0.45)
+                        .accessibilityHidden(true)
+                }
                 RemoteImageView(url: url, contentMode: .fit, maxPixel: max(width, height) * 3)
                     .transition(.opacity.animation(ThemeMotion.uiPoster))
             } else {
@@ -715,7 +726,14 @@ struct ChromeGlassBox<S: Shape, Content: View>: View {
 extension View {
     /// Give a scrolling root screen its status-bar and tab-bar edges. Every root screen gets this;
     /// a pushed screen with a real navigation bar does not need it.
+        /// Our edge chrome replaces the system scroll-edge effect; both together dim the last ~190 pt
+    /// of every scroll view (a primary CTA at the bottom read as disabled).
     func scrollEdgeChrome(top: Bool = true, bottom: Bool = true,
+                          topHeight: CGFloat = ThemeMetrics.topChromeHeight) -> some View {
+        scrollEdgeChromeBody(top: top, bottom: bottom, topHeight: topHeight).scrollEdgeEffectHidden(true, for: .all)
+    }
+
+    func scrollEdgeChromeBody(top: Bool = true, bottom: Bool = true,
                           topHeight: CGFloat = ThemeMetrics.topChromeHeight) -> some View {
         modifier(ScrollEdgeChromeModifier(top: top, bottom: bottom, topHeight: topHeight))
     }

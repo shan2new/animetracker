@@ -805,14 +805,10 @@ struct ScheduleView: View {
             .transition(.opacity.combined(with: .scale(scale: 0.6)))
         } else if let time {
             VStack(alignment: isAX ? .leading : .trailing, spacing: 1) {
-                HStack(spacing: 4) {
-                    if hasReminder {
-                        Image(systemName: "bell.fill").font(.system(size: 10))
-                            .foregroundStyle(ThemeColor.textDisabled)
-                            .accessibilityHidden(true)
-                    }
-                    Text("Airs").type(ThemeType.sectionLabel).textCase(.uppercase)
+                if hasReminder {
+                    Image(systemName: "bell.fill").font(.system(size: 10))
                         .foregroundStyle(ThemeColor.textDisabled)
+                        .accessibilityHidden(true)
                 }
                 Text(time).type(ThemeType.time).foregroundStyle(ThemeColor.textSecondary)
             }
