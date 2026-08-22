@@ -59,17 +59,7 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
                 skeleton()
                     .opacity(reduceMotion ? 0.92 : (breathing ? 1.0 : 0.88))
                     .animation(reduceMotion ? nil : skeletonBreath, value: breathing)
-                    .overlay(alignment: .top) {
-                        // HIG: an indeterminate wait past ~800 ms needs a progress affordance, not
-                        // just structure. Below that it would be a flicker.
-                        if slow {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(ThemeColor.textTertiary)
-                                .padding(.top, ThemeSpace.x2)
-                                .transition(.opacity)
-                        }
-                    }
+                    
                     .onAppear { breathing = true }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Copy.Accessibility.loading)

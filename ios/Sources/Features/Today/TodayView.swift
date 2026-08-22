@@ -201,7 +201,7 @@ struct TodayView: View {
         }
         .background(ThemeColor.canvas.ignoresSafeArea())
         .overlay(alignment: .bottom) { ScrollEdgeChrome(side: .bottom) }
-        .sheet(isPresented: $showProfile) { ProfileView() }
+        .sheet(isPresented: $showProfile) { ProfileView(onOpenLibrary: { _ in onSeeAllWatching() }) }
         .onChange(of: appModel.loading) { _, loading in
             if !loading { evaluateRecap() }
         }

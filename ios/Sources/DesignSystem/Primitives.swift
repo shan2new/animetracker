@@ -820,29 +820,6 @@ private struct ShelfScroller: ViewModifier {
 
 // MARK: - Recap strip
 
-/// The compact recap: 44-pt minimum, full-width target, opens the digest. Persists until the
-/// first mark or leaving Today.
-struct RecapStrip: View {
-    let text: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(text).type(ThemeType.metadataEmphasis).foregroundStyle(ThemeColor.textPrimary)
-                Spacer()
-                Image(systemName: "chevron.forward").font(.system(size: 12, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
-            }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
-            .surface(.plate, radius: ThemeRadius.row)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(RowPressStyle())
-        .accessibilityLabel(text)
-    }
-}
-
 // MARK: - Toast
 
 /// The canonical toast: a content-width glass **capsule**, centred over the tab bar's own margin.
