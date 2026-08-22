@@ -5,9 +5,22 @@ import os
 // (Clerk session token, or a `dev:<clerkId>` token for local DEV_AUTH_BYPASS testing).
 protocol TokenProvider: Sendable {
     func currentToken() async -> String?
-    /// A FRESH token, skipping any cache. `nil` when this issuer cannot mint one (a `dev:` token
-    /// is not refreshable — a 401 against it is final).
-    func refreshedToken() async -> String?
+    /// Whether an identity exists at all, independent of whether a token can be MINTED right now.
+    /// Offline, a Clerk session still exists on this device; its ~60 s JWT does not. The two must
+    /// never be confused: one is a signed-out user, the other is a user on a train.
+    func hasSession() async -> Bool
+    /// A FRESH token, skipping any cache.
+    func refreshedToken() async -> TokenRefreshOutcome
+}
+
+/// What a forced refresh learned. `.notRefreshable` is a FINAL answer from the issuer (a `dev:`
+/// token has nothing to renew; Clerk says there is no session) — a 401 against it ends the
+/// session. `.failed` is a network problem, which says nothing about the credentials, so the
+/// session is KEPT and the request reports `.transport`.
+enum TokenRefreshOutcome: Sendable {
+    case token(String)
+    case notRefreshable
+    case failed(Error)
 }
 
 /// What the transport layer learned about a failed request. The distinction that matters is
@@ -25,19 +38,30 @@ enum APIError: LocalizedError {
     case decoding(Error)
     case transport(Error)
 
-    /// Diagnostic text, for logs and for the one case that is genuinely a message to the user
-    /// (`.unauthorized`). **Nothing else here is user-facing copy** — a surface renders
-    /// `failureReason` or a `Copy.Notice` string, never a status code or a MIME type (board 14).
+    /// User-facing text, and nothing else. `APIError` is a `LocalizedError`, so this IS what
+    /// `error.localizedDescription` yields — which makes it the one place a status code or a MIME
+    /// type could leak into the UI (board 14 forbids both). It therefore cannot contain one: every
+    /// case answers with plain language, and the technical detail lives in `diagnostic`, which only
+    /// the logger reads. A surface may render this or a `Copy.Notice` string; either is safe.
     var errorDescription: String? {
         switch self {
-        case .invalidURL: return "Invalid URL."
         // Verbatim board 09. Post-A2 this reads `Copy.State.signedOut` — see the report.
         case .unauthorized: return "You\u{2019}re signed out. Sign in again to continue."
-        case let .infrastructure(code, kind): return "The server returned \(kind) (\(code))."
-        case let .rateLimited(after): return "Too many requests.\(after.map { " Retry in \(Int($0))s." } ?? "")"
-        case let .http(code, body): return "Server error (\(code)). \(body)"
-        case let .decoding(err): return "Couldn't read the server response. \(err.localizedDescription)"
-        case let .transport(err): return "Network error. \(err.localizedDescription)"
+        case .invalidURL, .infrastructure, .rateLimited, .http, .decoding, .transport:
+            return failureReason
+        }
+    }
+
+    /// Log-only detail: status codes, MIME types, body text. Never rendered anywhere.
+    var diagnostic: String {
+        switch self {
+        case .invalidURL: return "invalid-url"
+        case .unauthorized: return "unauthorized"
+        case let .infrastructure(code, kind): return "infrastructure status=\(code) kind=\(kind)"
+        case let .rateLimited(after): return "rate-limited retryAfter=\(after.map { String(Int($0)) } ?? "-")"
+        case let .http(code, body): return "http status=\(code) body=\(body.prefix(200))"
+        case let .decoding(err): return "decoding \(err)"
+        case let .transport(err): return "transport \(err)"
         }
     }
 
@@ -67,6 +91,8 @@ struct SearchResponse: Sendable {
     let franchises: [FranchiseSummary]
     /// The query the server actually searched, when it silently corrected ours.
     let correctedQuery: String?
+    /// What we typed, echoed back — the "Search instead for X" half of board 07's correction line.
+    let originalQuery: String?
     /// Per-catalogue outcome — `ok` / `failed` / `disabled`. A catalogue that FAILED is not a
     /// catalogue with no matches.
     let sources: [String: String]?
@@ -90,19 +116,26 @@ actor TokenRefresher {
     /// Long enough to cover one screen's fan-out, short enough that a genuinely new 401 refetches.
     private static let reuseWindow: TimeInterval = 3
 
-    private var inFlight: Task<String?, Never>?
+    private var inFlight: Task<TokenRefreshOutcome, Never>?
     private var lastToken: String?
     private var lastAt: Date?
 
-    func token(from provider: TokenProvider) async -> String? {
-        if let lastAt, Date().timeIntervalSince(lastAt) < TokenRefresher.reuseWindow { return lastToken }
+    func token(from provider: TokenProvider) async -> TokenRefreshOutcome {
+        if let lastAt, let lastToken, Date().timeIntervalSince(lastAt) < TokenRefresher.reuseWindow {
+            return .token(lastToken)
+        }
         if let inFlight { return await inFlight.value }
         let task = Task { await provider.refreshedToken() }
         inFlight = task
         let value = await task.value
         inFlight = nil
-        lastToken = value
-        lastAt = Date()
+        // ONLY a success primes the reuse window. Caching a refresh that failed because Clerk was
+        // unreachable would replay that failure to every 401 for the next 3 s, turning one network
+        // blip into a session-wide teardown.
+        if case let .token(fresh) = value {
+            lastToken = fresh
+            lastAt = Date()
+        }
         return value
     }
 }
@@ -112,6 +145,19 @@ actor TokenRefresher {
 enum RetryPolicy {
     static let maxRetries = 2
     private static let base: [TimeInterval] = [0.4, 1.2]
+
+    /// The whole LOGICAL request's wall-clock budget: one full 15 s attempt plus at most ~1.6 s of
+    /// backoff. Every attempt and every sleep is spent from this one budget, because a per-attempt
+    /// timeout stacks — three fresh 15 s attempts against a black hole is 45 s of skeleton.
+    static let budget: TimeInterval = 16.6
+    /// A retry is only worth starting if this much of the budget survives the backoff sleep;
+    /// it is also the floor on any single attempt's timeout.
+    static let minAttempt: TimeInterval = 2
+
+    /// Whether another attempt fits: retries left, AND enough budget after the sleep to make one.
+    static func canRetry(attempt: Int, delay: TimeInterval, deadline: Date) -> Bool {
+        attempt < maxRetries && deadline.timeIntervalSinceNow - delay >= minAttempt
+    }
 
     /// `attempt` is 1-based (the delay BEFORE retry #1). ±20 % jitter de-synchronises a fan-out.
     static func delay(attempt: Int) -> TimeInterval {
@@ -141,11 +187,15 @@ final class APIClient: @unchecked Sendable {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
+    /// The longest any single attempt may wait. `send` clamps each attempt to whatever is left of
+    /// the whole-request budget, so this is a ceiling, never an addend.
+    static let requestTimeout: TimeInterval = 15
+
     /// Owned, not `.shared`: the default 60 s request timeout means a black-holed upstream leaves a
     /// skeleton on screen for a minute. 15 s bounds the failure; the frame moves on.
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForRequest = APIClient.requestTimeout
         config.timeoutIntervalForResource = 30
         config.waitsForConnectivity = false
         config.httpAdditionalHeaders = ["Accept": "application/json"]
@@ -184,7 +234,10 @@ final class APIClient: @unchecked Sendable {
         // (searching "X & Y" truncated at the ampersand). Escape the value strictly.
         let q = query.addingPercentEncoding(withAllowedCharacters: .strictQueryValueAllowed) ?? ""
         let res: SearchEnvelope = try await request("/search?q=\(q)" + (exact ? "&exact=1" : ""), idempotent: true)
-        return SearchResponse(franchises: res.franchises, correctedQuery: res.correctedQuery, sources: res.sources)
+        return SearchResponse(franchises: res.franchises,
+                              correctedQuery: res.correctedQuery,
+                              originalQuery: res.originalQuery ?? query,
+                              sources: res.sources)
     }
 
     /// Results-only convenience for callers that do not render the honesty fields.
@@ -281,8 +334,13 @@ final class APIClient: @unchecked Sendable {
     /// The whole transport state machine.
     ///
     /// Exactly one RESPONSE path throws `.unauthorized` — a 401 that survived a forced refresh.
-    /// The only other site is the pre-flight guard below, which fires when there is no token to
-    /// send at all and no request is ever made. **403 is on neither.**
+    /// The only other site is the pre-flight guard below, and it fires only when there is no
+    /// SESSION: a token we merely failed to FETCH (offline, expired JWT, unreachable issuer) is
+    /// `.transport` and keeps the session. **403 is on neither.**
+    ///
+    /// The whole logical request — every attempt plus every backoff sleep — is bounded by one
+    /// wall-clock budget, and each attempt's own timeout is clamped to what is left of it. A
+    /// request that will fail, fails inside ~16.6 s however many attempts it made.
     private func send<Response: Decodable>(
         path: String,
         method: String,
@@ -292,6 +350,7 @@ final class APIClient: @unchecked Sendable {
     ) async throws -> Response {
         guard let url = URL(string: path, relativeTo: baseURL) else { throw APIError.invalidURL }
 
+        let deadline = Date().addingTimeInterval(RetryPolicy.budget)
         var attempt = 0            // retries consumed
         var refreshed = false      // the one forced token refresh this request is allowed
         var forcedToken: String?   // set by that refresh, so the retry does not re-read the cache
@@ -299,6 +358,10 @@ final class APIClient: @unchecked Sendable {
         while true {
             var req = URLRequest(url: url)
             req.httpMethod = method
+            // Spend from the shared budget, never restart it: a retry after a 15 s timeout gets
+            // only the seconds that are left, so attempts cannot stack up behind a skeleton.
+            req.timeoutInterval = min(APIClient.requestTimeout,
+                                      max(RetryPolicy.minAttempt, deadline.timeIntervalSinceNow))
             req.setValue("application/json", forHTTPHeaderField: "Accept")
             if let body {
                 req.httpBody = body
@@ -309,7 +372,16 @@ final class APIClient: @unchecked Sendable {
                 let resolved: String?
                 if let forcedToken { resolved = forcedToken } else { resolved = await tokenProvider.currentToken() }
                 guard let token = resolved else {
-                    APIClient.log.error("\(method) \(path): no auth token available (signed out or token fetch failed)")
+                    // No token, for one of two very different reasons — and only one of them ends
+                    // a session. Either there is no identity at all (signed out), or there IS one
+                    // and we could not mint a token right now: a cold launch in airplane mode,
+                    // where Clerk's ~60 s JWT has expired and nothing can renew it. Signing a user
+                    // out for being offline is the same failure class as the 2026-08-22 regression.
+                    if await tokenProvider.hasSession() {
+                        APIClient.log.error("\(method) \(path): token unavailable while signed in — transport, session kept")
+                        throw APIError.transport(URLError(.notConnectedToInternet))
+                    }
+                    APIClient.log.error("\(method) \(path): no session — unauthorized")
                     throw APIError.unauthorized
                 }
                 sentToken = token
@@ -323,9 +395,9 @@ final class APIClient: @unchecked Sendable {
             } catch {
                 // A request cancelled by the next keystroke is superseded, never retried.
                 if (error as? URLError)?.code == .cancelled { throw APIError.transport(error) }
-                if idempotent, attempt < RetryPolicy.maxRetries {
+                let delay = RetryPolicy.delay(attempt: attempt + 1)
+                if idempotent, RetryPolicy.canRetry(attempt: attempt, delay: delay, deadline: deadline) {
                     attempt += 1
-                    let delay = RetryPolicy.delay(attempt: attempt)
                     APIClient.log.error("retry scheduled attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=0")
                     try await Task.sleep(for: .seconds(delay))
                     continue
@@ -335,6 +407,7 @@ final class APIClient: @unchecked Sendable {
             }
 
             guard let http = response as? HTTPURLResponse else {
+                APIClient.log.error("infrastructure status=-1 contentType=no-http-response")
                 throw APIError.infrastructure(-1, "no-http-response")
             }
             let status = http.statusCode
@@ -347,12 +420,21 @@ final class APIClient: @unchecked Sendable {
                 if auth, !refreshed {
                     refreshed = true
                     APIClient.log.error("auth.refresh begin")
-                    let fresh = await refresher.token(from: tokenProvider)
-                    let changed = fresh != nil && fresh != sentToken
-                    APIClient.log.error("auth.refresh end(changed:\(changed))")
-                    if changed {
+                    let outcome = await refresher.token(from: tokenProvider)
+                    switch outcome {
+                    case let .token(fresh) where fresh != sentToken:
+                        APIClient.log.error("auth.refresh end(changed:true)")
                         forcedToken = fresh
                         continue
+                    case let .failed(err):
+                        // We never learned whether the credentials are dead — we only learned that
+                        // the issuer is unreachable. That is a network fact, not a session fact.
+                        APIClient.log.error("auth.refresh end(unreachable) — transport, session kept")
+                        throw APIError.transport(err)
+                    case .token, .notRefreshable:
+                        // The issuer answered, and the answer was final: the same token back, or
+                        // an issuer with nothing to renew (`dev:`, or no Clerk session).
+                        APIClient.log.error("auth.refresh end(changed:false)")
                     }
                 }
                 APIClient.log.error("unauthorized after refresh")
@@ -366,27 +448,28 @@ final class APIClient: @unchecked Sendable {
                 throw APIError.infrastructure(403, contentType.isEmpty ? "forbidden" : contentType)
             }
 
-            // 3 — an HTML body at ANY status (captive portal, WAF interstitial, a 200 sign-in page)
-            // is an infrastructure failure, not a decode failure.
-            if isHTML(data: data, contentType: contentType) {
-                APIClient.log.error("infrastructure status=\(status) contentType=\(contentType.isEmpty ? "html" : contentType, privacy: .public)")
-                throw APIError.infrastructure(status, "html")
-            }
-
-            // 4 — 429 and 5xx are worth one or two more attempts.
+            // 3 — 429 and 5xx are worth one or two more attempts. This runs BEFORE the HTML test
+            // because the ordinary production 502/503 arrives with an HTML error page from nginx or
+            // Cloudflare; classifying on the body first would spend the retry budget on nothing.
             if status == 429 || (500...504).contains(status) {
                 let after = status == 429 ? RetryPolicy.retryAfter(http.value(forHTTPHeaderField: "Retry-After")) : nil
-                if idempotent, attempt < RetryPolicy.maxRetries {
+                let delay = after ?? RetryPolicy.delay(attempt: attempt + 1)
+                if idempotent, RetryPolicy.canRetry(attempt: attempt, delay: delay, deadline: deadline) {
                     attempt += 1
-                    let delay = after ?? RetryPolicy.delay(attempt: attempt)
                     APIClient.log.error("retry scheduled attempt=\(attempt) delay=\(delay, format: .fixed(precision: 2)) status=\(status)")
                     try await Task.sleep(for: .seconds(delay))
                     continue
                 }
                 if status == 429 { throw APIError.rateLimited(retryAfter: after) }
-                let bodyText = String(data: data, encoding: .utf8) ?? ""
-                APIClient.log.error("\(method) \(path): HTTP \(status): \(bodyText, privacy: .public)")
-                throw APIError.http(status, bodyText)
+                // An exhausted 5xx falls through: if its body is HTML it is infrastructure (below),
+                // otherwise it is a server error we can report.
+            }
+
+            // 4 — an HTML body at ANY status (captive portal, WAF interstitial, a 200 sign-in page,
+            // a CDN's 503 page) is an infrastructure failure, not a decode failure.
+            if isHTML(data: data, contentType: contentType) {
+                APIClient.log.error("infrastructure status=\(status) contentType=\(contentType.isEmpty ? "html" : contentType, privacy: .public)")
+                throw APIError.infrastructure(status, "html")
             }
 
             guard (200..<300).contains(status) else {

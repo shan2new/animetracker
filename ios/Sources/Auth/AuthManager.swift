@@ -132,21 +132,51 @@ final class AuthManager: TokenProvider {
         await resolveToken()
     }
 
+    /// Whether an identity exists that this backend would accept — asked when there is no token
+    /// to send, to tell "signed out" apart from "offline". It must not consult the network: the
+    /// whole point is to answer while the network is down.
+    ///
+    /// Dev mode additionally requires a local backend, because a stored dev id is genuinely
+    /// unusable against production — that IS a signed-out state, not a connectivity one.
+    nonisolated func hasSession() async -> Bool {
+        await currentlyHasSession()
+    }
+
+    private func currentlyHasSession() -> Bool {
+        switch mode {
+        case let .dev(clerkId):
+            return !clerkId.isEmpty && AppConfig.isLocalBackend
+        case .clerk:
+            // The session record is stored on device; it outlives any individual JWT and survives
+            // a flight-mode launch. Its existence is exactly the question being asked.
+            return Clerk.shared.session != nil
+        }
+    }
+
     /// A forced refresh, bypassing Clerk's token cache. Called once per request by
     /// `APIClient` when a 401 comes back, so an expired-but-renewable session recovers invisibly.
     ///
-    /// Dev mode returns nil on purpose: `dev:<id>` is not a JWT and has nothing to renew, so a
-    /// 401 against it is final and the retry would only repeat the same rejection.
-    nonisolated func refreshedToken() async -> String? {
+    /// The three answers are deliberately distinct. `.notRefreshable` is FINAL — `dev:<id>` is not
+    /// a JWT and has nothing to renew, and a Clerk that returns no token has no session — so a 401
+    /// against it ends the session. `.failed` means we could not reach Clerk at all, which says
+    /// nothing about the credentials: the caller keeps the session and reports a transport failure.
+    nonisolated func refreshedToken() async -> TokenRefreshOutcome {
         await forceRefreshToken()
     }
 
-    private func forceRefreshToken() async -> String? {
+    private func forceRefreshToken() async -> TokenRefreshOutcome {
         switch mode {
         case .dev:
-            return nil
+            return .notRefreshable
         case .clerk:
-            return try? await Clerk.shared.auth.getToken(.init(skipCache: true))
+            do {
+                guard let token = try await Clerk.shared.auth.getToken(.init(skipCache: true)) else {
+                    return .notRefreshable
+                }
+                return .token(token)
+            } catch {
+                return .failed(error)
+            }
         }
     }
 

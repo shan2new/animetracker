@@ -227,3 +227,14 @@ Deploy test — `npm run auth:smoke -- https://<host>` asserts `GET /health` →
 out). `403` — including a Cloudflare/WAF HTML challenge — is an **infrastructure** failure: the
 session is kept and the surface shows a stale/error frame. Any response whose body is HTML is
 treated the same way at any status, including 2xx (captive portals).
+
+Two things that look like `401` but are not. A client that cannot **mint** a token (an expired
+session JWT with no network to renew it) never reaches the server and reports a *transport*
+failure — being offline must not sign anyone out. A forced refresh that could not reach the token
+issuer is likewise transport, not a dead session. Only an issuer that answers — with the same token,
+or with none — turns a `401` into a sign-out.
+
+Every request is bounded by one wall-clock budget (~16.6 s: a 15 s attempt plus at most ~1.6 s of
+backoff), shared across retries, so a black-holed upstream can never hold a skeleton on screen.
+`429` and `5xx` are retried twice while that budget lasts (`Retry-After` honoured, capped at 8 s);
+an exhausted `5xx` whose body is HTML lands as infrastructure.

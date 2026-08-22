@@ -41,8 +41,13 @@ export async function searchFranchises(
   limit = 30,
   opts: { exact?: boolean } = {},
 ): Promise<FranchiseListResponse> {
-  // A catalogue that threw is not a catalogue with no results — record which is which.
-  const sources: { anilist: SourceOutcome; tmdb: SourceOutcome } = { anilist: 'ok', tmdb: 'ok' }
+  // A catalogue that threw is not a catalogue with no results — record which is which. TMDB's
+  // outcome is known before any request: with no TMDB_ACCESS_TOKEN the whole catalogue is off, and
+  // the empty-query (trending) branch below returns this object without touching either source.
+  const sources: { anilist: SourceOutcome; tmdb: SourceOutcome } = {
+    anilist: 'ok',
+    tmdb: tmdbEnabled() ? 'ok' : 'disabled',
+  }
   if (!query.trim()) return { franchises: await getTrendingFranchises(limit), sources }
 
   const searchAniListSafe = (q: string) =>
@@ -51,10 +56,7 @@ export async function searchFranchises(
       return []
     })
   const searchTvSafe = (q: string) => {
-    if (!tmdbEnabled()) {
-      sources.tmdb = 'disabled'
-      return Promise.resolve([])
-    }
+    if (!tmdbEnabled()) return Promise.resolve([])
     return searchTv(q).catch(() => {
       sources.tmdb = 'failed'
       return []
