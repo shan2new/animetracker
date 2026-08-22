@@ -2,6 +2,7 @@ import SwiftUI
 
 // The shared "just caught up" celebration overlay — a popping accent disc with a drawn checkmark
 // and an expanding ring, over a blurred scrim. Ports the legacy CSS keyframes.
+@available(*, deprecated, message: "Retired - board 12 refuses the full-screen celebration. Use seasonCompleteSweep + one .success.")
 struct CaughtUpOverlay: View {
     var size: CGFloat = 52
 
@@ -55,6 +56,7 @@ struct CaughtUpOverlay: View {
 }
 
 // A checkmark path normalized to a unit-ish box (the legacy "M5 13l4 4L19 7").
+@available(*, deprecated, message: "Retired with CaughtUpOverlay.")
 struct CheckmarkShape: Shape {
     func path(in rect: CGRect) -> Path {
         var p = Path()
@@ -71,5 +73,6 @@ struct CheckmarkShape: Shape {
 }
 
 extension Color {
+    @available(*, deprecated, message: "Retired with CaughtUpOverlay - use ThemeColor.scrim / scrimStrong.")
     static let background70 = Theme.background.opacity(0.7)
 }

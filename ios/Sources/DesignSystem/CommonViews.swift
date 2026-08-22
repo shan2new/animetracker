@@ -2,6 +2,7 @@ import SwiftUI
 
 // Section header (the legacy `SectionHead`): optional accent dot, optional SF Symbol icon,
 // uppercase label, optional trailing text.
+@available(*, deprecated, message: "Retired by the interaction system - use SectionHeaderRow (Primitives+States.swift). Board 12 refuses the pulsing dot.")
 struct SectionHeader: View {
     var dot: Bool = false
     var systemIcon: String? = nil
@@ -36,6 +37,7 @@ struct SectionHeader: View {
 }
 
 // Gently breathing accent dot used in the "Out now" section header.
+@available(*, deprecated, message: "Retired - board 12 refuses pulsing every new item; SectionLabel's static 4-pt dot replaces it.")
 private struct PulsingDot: View {
     @State private var glowing = false
 
@@ -54,6 +56,7 @@ private struct PulsingDot: View {
 }
 
 // Friendly empty / first-run state with an optional call-to-action.
+@available(*, deprecated, message: "Retired - use EmptyState(_:prominence:) with copy from Copy.swift.")
 struct EmptyStateView: View {
     let title: String
     let message: String
@@ -104,6 +107,7 @@ struct EmptyStateView: View {
 }
 
 // Spinner loader.
+@available(*, deprecated, message: "Retired - a spinner is not a structural skeleton. Use SkeletonGate with a Skeleton composition.")
 struct Loader: View {
     @State private var spinning = false
     var body: some View {
@@ -120,6 +124,7 @@ struct Loader: View {
 }
 
 // Inline banner shown when live data couldn't be reached.
+@available(*, deprecated, message: "Retired - use InlineNotice(Copy.Notice.*) { retry }.")
 struct RetryBanner: View {
     let onRetry: () -> Void
     var body: some View {
@@ -148,6 +153,7 @@ struct RetryBanner: View {
 }
 
 // Primary accent button (the legacy `.at-btn-primary` filled style).
+@available(*, deprecated, message: "Retired - use PrimaryButtonStyle2 (48 pt, press 0.985, no accent glow).")
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -161,6 +167,7 @@ struct PrimaryButtonStyle: ButtonStyle {
 }
 
 // Subtle spring-scale press feedback for tappable cards and rows.
+@available(*, deprecated, message: "Retired - press scale is below the 0.985 floor (board 11). Use RowPressStyle or CompactActionButtonStyle.")
 struct SpringPressButtonStyle: ButtonStyle {
     var scale: CGFloat = 0.96
 
@@ -172,6 +179,7 @@ struct SpringPressButtonStyle: ButtonStyle {
 }
 
 // Pronounced elastic bounce for compact action buttons (steppers, circle buttons).
+@available(*, deprecated, message: "Retired - press scale 0.84 is far below the 0.985 floor (board 11). Use CompactActionButtonStyle.")
 struct BounceButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
