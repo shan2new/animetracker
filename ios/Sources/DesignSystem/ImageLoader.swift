@@ -126,15 +126,21 @@ struct CachedAsyncImage: View {
     let url: URL?
     var maxPixel: CGFloat
     var contentMode: ContentMode
+    /// Where a `.fill` image anchors inside the frame; hosts with their own ground hide the placeholder.
+    var alignment: Alignment
+    var placeholderHidden: Bool
 
     @State private var image: UIImage?
     @State private var loadedURL: URL?
     @State private var didFail = false
 
-    init(url: URL?, maxPixel: CGFloat = 700, contentMode: ContentMode = .fill) {
+    init(url: URL?, maxPixel: CGFloat = 700, contentMode: ContentMode = .fill,
+         alignment: Alignment = .center, placeholderHidden: Bool = false) {
         self.url = url
         self.maxPixel = maxPixel
         self.contentMode = contentMode
+        self.alignment = alignment
+        self.placeholderHidden = placeholderHidden
         // Synchronous cache hit → first frame already shows the poster, so recycled cells don't
         // flash. `atLeast:` so a hero never inherits a thumbnail-sized decode as its first frame.
         _image = State(initialValue: url.flatMap { ImageCache.shared.image(for: $0, atLeast: maxPixel) })
@@ -151,13 +157,13 @@ struct CachedAsyncImage: View {
         // intrinsic size and an overlay never contributes to its parent's size, so this view now
         // measures exactly what its container proposes — never more.
         Color.clear
-            .overlay {
+            .overlay(alignment: alignment) {
                 if let image {
                     Image(uiImage: image)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
                         .transition(.opacity)
-                } else {
+                } else if !placeholderHidden {
                     GradientPlaceholder()
                 }
             }

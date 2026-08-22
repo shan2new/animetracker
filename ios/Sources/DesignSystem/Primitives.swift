@@ -163,7 +163,7 @@ struct PosterSlot: View {
                 // `.fill`, and no blur backfill behind it. The blurred second copy existed purely
                 // to disguise the mat this crop removes — and it cost a second full decode plus a
                 // blur pass on every slot ≥ 72 pt, i.e. 60 of each on a 30-title poster grid.
-                RemoteImageView(url: url, contentMode: .fill, maxPixel: max(width, height) * 3)
+                RemoteImageView(url: url, contentMode: .fill, maxPixel: max(width, height) * 3, placeholderHidden: true)
                     .transition(.opacity.animation(ThemeMotion.uiPoster))
             } else {
                 Image(systemName: "photo")
@@ -825,7 +825,8 @@ struct ToastView: View {
         .frame(minHeight: 48)
         // Hugs its content — but never past the screen, and never at accessibility sizes where the
         // message legitimately needs the width.
-        .fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: false)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 420)
         .chromeGlass(in: Capsule())
         .shadow(.floating)
         .transition(.opacity)
@@ -1062,7 +1063,7 @@ struct ArtHeader<Overlay: View>: View {
         ZStack(alignment: .bottom) {
             (tint ?? PaletteCache.fallback)
             if let url, !url.isEmpty {
-                RemoteImageView(url: url, contentMode: .fill, maxPixel: 1200)
+                RemoteImageView(url: url, contentMode: .fill, maxPixel: 1536, alignment: .top, placeholderHidden: true)
                     .transition(.opacity)
             }
             ArtScrim(top: scrimTop, bottom: scrimBottom)
@@ -1273,7 +1274,7 @@ struct MarkSplitButton: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var showsMenu: Bool { behind > 1 && !committed }
+    private var showsMenu: Bool { behind > 1 }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1288,13 +1289,14 @@ struct MarkSplitButton: View {
                         // interpolate.
                         .contentTransition(.opacity)
                 }
-                .foregroundStyle(ThemeColor.onAccent)
+                .foregroundStyle(committed ? ThemeColor.accent : ThemeColor.onAccent)
                 .padding(.horizontal, ThemeSpace.x5)
                 .frame(maxWidth: .infinity, minHeight: 48)
                 .contentShape(Rectangle())
             }
             .buttonStyle(SplitHalfStyle())
             .allowsHitTesting(!committed)
+            .accessibilityRemoveTraits(committed ? .isButton : [])
             .accessibilityLabel(committed
                                 ? Copy.Progress.episodeWatched(episode)
                                 : "\(Copy.Action.markAsWatched), \(Copy.episode(episode)) of \(title)")
@@ -1317,10 +1319,15 @@ struct MarkSplitButton: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(SplitHalfStyle())
+                .allowsHitTesting(!committed)
+                .opacity(committed ? 0.45 : 1)
                 .accessibilityLabel("More ways to mark")
+                .accessibilityHidden(committed)
             }
         }
-        .background(ThemeColor.accent)
+        // A past-tense fact does not get the app's one primary colour: the committed capsule
+        // keeps its shape and drops to a soft tint with accent ink.
+        .background(committed ? ThemeColor.accent.opacity(0.18) : ThemeColor.accent)
         .clipShape(Capsule())
         // The lit top edge every filled control in this app carries: a flat #F0A24E rectangle is
         // a swatch, the same rectangle with one lit edge is an object.

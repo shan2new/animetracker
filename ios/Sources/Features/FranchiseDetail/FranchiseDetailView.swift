@@ -583,7 +583,7 @@ struct FranchiseDetailView: View {
         let episode = part.progress + 1
         let context = f.parts.count > 1 ? part.watchContext(episode: episode) : Copy.episode(episode)
         if behind > 1 {
-            return NextUp(kind: .backlog, part: part, line1: context, line2: Copy.Progress.behind(behind),
+            return NextUp(kind: .backlog, part: part, line1: context, line2: part.isReleasing ? Copy.Progress.behind(behind) : Copy.Progress.left(behind),
                           line3: nil, episode: episode, behind: behind)
         }
         let aired: String? = part.lastAiredAt.map { TemporalCopy.aired(at: $0, now: now, source: f.source) }

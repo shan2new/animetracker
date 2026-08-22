@@ -158,7 +158,7 @@ struct MainTabView: View {
                 }
             }
             .environment(\.zoomNamespace, zoom)
-            .sensoryFeedback(.selection, trigger: selectedTab)
+            .onChange(of: selectedTab) { _, _ in FeedbackCoordinator.fire(.selection) }
             .task {
                 // One freshness source for every stale strip and Profile's sync line.
                 SyncCenter.shared.signals = {
