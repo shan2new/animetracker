@@ -104,14 +104,16 @@ struct SectionLabel: View {
     let text: String
     var dot = false
     var tint: Color = ThemeColor.textTertiary
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if dot { Circle().fill(ThemeColor.accent).frame(width: 4, height: 4) }
             Text(text).type(ThemeType.sectionLabel).textCase(.uppercase)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .foregroundStyle(tint)
-        .lineLimit(1)
+        .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
     }
 }
 

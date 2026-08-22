@@ -60,7 +60,11 @@ struct ProfileView: View {
                 ZStack {
                     Circle().fill(ThemeColor.surfaceFloating)
                     Circle().stroke(ThemeColor.stroke, lineWidth: 1)
-                    Text(initials).type(ThemeType.bodyEmphasis).foregroundStyle(ThemeColor.textSecondary)
+                    if hasRealName {
+                        Text(initials).type(ThemeType.bodyEmphasis).foregroundStyle(ThemeColor.textSecondary)
+                    } else {
+                        Image(systemName: "person.fill").font(.system(size: 18, weight: .medium)).foregroundStyle(ThemeColor.textSecondary)
+                    }
                 }
                 .frame(width: 44, height: 44)
                 VStack(alignment: .leading, spacing: 2) {
@@ -162,6 +166,8 @@ struct ProfileView: View {
         let n = auth.displayName.trimmingCharacters(in: .whitespaces)
         return (n.isEmpty || n.hasPrefix("user_")) ? "Your account" : n
     }
+
+    private var hasRealName: Bool { accountName != "Your account" }
 
     private var initials: String {
         let parts = accountName.split(separator: " ").prefix(2).compactMap { $0.first }

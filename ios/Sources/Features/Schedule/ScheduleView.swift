@@ -13,6 +13,9 @@ struct ScheduleView: View {
     @State private var selectedDay = 0
     /// The day whose header is at the top of the feed; the strip follows it while scrolling.
     @State private var visibleDay = 0
+    @State private var barBottom: CGFloat = 160
+    /// The feed has landed on today; only then does scroll tracking drive the strip.
+    @State private var didLand = false
     @State private var typeFilter: MediaFilter = .all
     @State private var unwatchedOnly = false
     @State private var committed: Set<String> = []
@@ -98,52 +101,38 @@ struct ScheduleView: View {
                 .padding(.bottom, 120)
             }
             .coordinateSpace(name: "schedule.feed")
+            .onPreferenceChange(BarBottomKey.self) { barBottom = $0 }
             .onPreferenceChange(DayHeaderKey.self) { offsets in
-                // The last header that has scrolled under the sticky bar is the current day.
-                let threshold: CGFloat = 120
-                if let top = offsets.filter({ $0.value <= threshold }).max(by: { $0.value < $1.value })?.key ?? offsets.min(by: { $0.value < $1.value })?.key,
-                   top != visibleDay {
-                    visibleDay = top
-                    selectedDay = top
+                guard didLand else { return }
+                // The last header that has scrolled under the sticky bar is the current day; a
+                // header resting just below the bar has not passed it.
+                let passed = offsets.filter { $0.value < barBottom - 8 }
+                let current = passed.max(by: { $0.value < $1.value })?.key ?? offsets.min(by: { $0.value < $1.value })?.key ?? 0
+                if current != visibleDay {
+                    visibleDay = current
+                    selectedDay = current
                 }
             }
             .scrollIndicators(.hidden)
             .background(ThemeColor.canvas.ignoresSafeArea())
+            // Rows scrolling past the pinned bar must not show through the status-bar inset
+            // (the navigation bar would cover it; this header replaces the navigation bar).
+            .overlay(alignment: .top) {
+                ThemeColor.canvas.frame(height: 0.5)
+                    .background(ThemeColor.canvas.ignoresSafeArea(edges: .top))
+                    .allowsHitTesting(false)
+            }
             .refreshable { await appModel.reload() }
             .task { await ScheduleReminders.shared.refresh() }
-            .navigationTitle("Schedule")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar(.visible, for: .navigationBar)
-            .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if selectedDay != 0 {
-                        Button("Today") {
-                            FeedbackCoordinator.fire(.selection)
-                            selectedDay = 0
-                            withAnimation(reduceMotion ? nil : ThemeMotion.uiSnappy) { proxy.scrollTo("day-0", anchor: .top) }
-                        }
-                        .accessibilityHint("Scrolls to today")
-                        .transition(.opacity)
-                    }
-                    Menu {
-                        Picker("Type", selection: $typeFilter) {
-                            Text("All").tag(MediaFilter.all)
-                            Text("Anime").tag(MediaFilter.anime)
-                            Text("TV").tag(MediaFilter.tv)
-                        }
-                        .pickerStyle(.inline)
-                        Section("Watched state") {
-                            Toggle("Unwatched only", isOn: $unwatchedOnly)
-                        }
-                    } label: {
-                        Label("Filter", systemImage: "slider.horizontal.3")
-                            .foregroundStyle(filterActive ? ThemeColor.accent : ThemeColor.textPrimary)
-                    }
-                    .accessibilityLabel("Filter")
-                    .accessibilityValue(filterValue)
+            .onChange(of: appModel.loading, initial: true) { _, loading in
+                guard !loading, !didLand, !appModel.library.isEmpty else { return }
+                // Two frames so the lazy feed has laid out today's header before we jump to it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    proxy.scrollTo("day-0", anchor: .top)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { didLand = true }
                 }
             }
+            .toolbar(.hidden, for: .navigationBar)
             .onChange(of: typeFilter) { _, _ in FeedbackCoordinator.fire(.selection) }
             .onChange(of: unwatchedOnly) { _, _ in FeedbackCoordinator.fire(.selection) }
             .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: selectedDay != 0)
@@ -169,6 +158,44 @@ struct ScheduleView: View {
     private func stickyBar(_ proxy: ScrollViewProxy) -> some View {
         let week = weekCells()
         return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: ThemeSpace.x2) {
+                Text("Schedule").type(ThemeType.screenTitle).foregroundStyle(ThemeColor.textPrimary)
+                Spacer()
+                if selectedDay != 0 {
+                    Button("Today") {
+                        FeedbackCoordinator.fire(.selection)
+                        selectedDay = 0
+                        withAnimation(reduceMotion ? nil : ThemeMotion.uiSnappy) { proxy.scrollTo("day-0", anchor: .top) }
+                    }
+                    .buttonStyle(TertiaryButtonStyle2())
+                    .accessibilityHint("Scrolls to today")
+                    .transition(.opacity)
+                }
+                Menu {
+                    Picker("Type", selection: $typeFilter) {
+                        Text("All").tag(MediaFilter.all)
+                        Text("Anime").tag(MediaFilter.anime)
+                        Text("TV").tag(MediaFilter.tv)
+                    }
+                    .pickerStyle(.inline)
+                    Section("Watched state") {
+                        Toggle("Unwatched only", isOn: $unwatchedOnly)
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(filterActive ? ThemeColor.accent : ThemeColor.textPrimary)
+                        .frame(width: 34, height: 34)
+                        .glassChrome(in: Circle(), interactive: true)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Filter")
+                .accessibilityValue(filterValue)
+            }
+            .padding(.leading, ThemeSpace.x4)
+            .padding(.trailing, 9)
+            .padding(.top, ThemeSpace.x2)
+            .padding(.bottom, ThemeSpace.x2)
             SectionLabel(text: monthLabel(week))
                 .padding(.leading, ThemeSpace.x4)
                 .accessibilityLabel(monthLabel(week))
@@ -189,6 +216,9 @@ struct ScheduleView: View {
         .padding(.bottom, 10)
         .background(ThemeColor.canvas)
         .overlay(alignment: .bottom) { Rectangle().fill(ThemeColor.separator).frame(height: 1) }
+        .background(GeometryReader { geo in
+            Color.clear.preference(key: BarBottomKey.self, value: geo.frame(in: .named("schedule.feed")).maxY)
+        })
     }
 
     struct WeekCell: Identifiable {
@@ -247,7 +277,8 @@ struct ScheduleView: View {
                     .opacity(cell.hasContent || cell.isToday ? 1 : 0)
                     .frame(height: 4)
             }
-            .frame(width: 44, height: 50)
+            .frame(minWidth: 44, minHeight: 50)
+            .fixedSize(horizontal: false, vertical: true)
             .background(selected ? ThemeColor.accent : .clear, in: RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous))
             .frame(maxWidth: .infinity, minHeight: 50)
             .contentShape(Rectangle())
@@ -488,4 +519,9 @@ private struct DayHeaderKey: PreferenceKey {
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
         value.merge(nextValue(), uniquingKeysWith: { $1 })
     }
+}
+
+private struct BarBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat { 160 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

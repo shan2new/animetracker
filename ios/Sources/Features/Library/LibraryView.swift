@@ -5,9 +5,11 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
     @State private var all: AllTitlesRoute?
+    private var isAX: Bool { typeSize.isAccessibilitySize }
 
     private var now: Int64 { appModel.now }
 
@@ -80,16 +82,28 @@ struct LibraryView: View {
                         all = AllTitlesRoute(status: filterStatus(for: section.shelf))
                     }
                     .padding(.horizontal, ThemeSpace.x4)
-                    ScrollView(.horizontal) {
-                        HStack(alignment: .top, spacing: ThemeSpace.x3) {
-                            ForEach(section.franchises.prefix(12)) { f in
-                                shelfCard(f, shelf: section.shelf)
+                    if isAX {
+                        // Accessibility sizes: the shelf becomes compact rows so nothing truncates.
+                        VStack(spacing: 0) {
+                            ForEach(Array(section.franchises.prefix(6).enumerated()), id: \.element.id) { i, f in
+                                shelfRow(f, shelf: section.shelf, isLast: i == min(6, section.franchises.count) - 1)
                             }
                         }
+                        .background(ThemeColor.surfaceRaised, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous).stroke(ThemeColor.separator, lineWidth: 1))
                         .padding(.horizontal, ThemeSpace.x4)
+                    } else {
+                        ScrollView(.horizontal) {
+                            HStack(alignment: .top, spacing: ThemeSpace.x3) {
+                                ForEach(section.franchises.prefix(12)) { f in
+                                    shelfCard(f, shelf: section.shelf)
+                                }
+                            }
+                            .padding(.horizontal, ThemeSpace.x4)
+                        }
+                        .scrollIndicators(.hidden)
+                        .scrollClipDisabled()
                     }
-                    .scrollIndicators(.hidden)
-                    .scrollClipDisabled()
                 }
             }
         }
@@ -123,6 +137,28 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
         .accessibilityLabel("\(f.title), \(caption(f, shelf: shelf))")
+    }
+
+    private func shelfRow(_ f: Franchise, shelf: AppModel.LibShelf, isLast: Bool) -> some View {
+        Button { onOpenDetail(f.id, "lib/\(f.id)") } label: {
+            HStack(spacing: ThemeSpace.x3) {
+                PosterSlot(url: f.cover, width: 40, height: 60)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary).lineLimit(3)
+                    Text(caption(f, shelf: shelf)).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(2)
+                }
+                Spacer(minLength: ThemeSpace.x2)
+                Image(systemName: "chevron.forward").font(.system(size: 12, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
+            }
+            .padding(.horizontal, 14)
+            .frame(minHeight: 68)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                if !isLast { Rectangle().fill(ThemeColor.separator).frame(height: 1).padding(.leading, 66) }
+            }
+        }
+        .buttonStyle(GroupedRowPressStyle())
+        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
     }
 
     /// Calm captions: a fact about where you are, never a nudge.

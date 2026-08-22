@@ -178,7 +178,7 @@ struct FranchiseDetailView: View {
                 .padding(.horizontal, ThemeSpace.x4)
                 .padding(.bottom, ThemeSpace.x2)
             }
-            .padding(.top, 108)
+            .padding(.top, 124)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
