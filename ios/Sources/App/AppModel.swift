@@ -886,12 +886,18 @@ final class AppModel {
         undo = UndoState(mediaId: nil, franchiseId: franchiseId, prevProgress: 0,
                          title: title, episode: 0, added: true, statusLabel: label)
         scheduleUndoDismissal()
-        // First airing ANIME added: the moment notifications become valuable, so ask now. Both
-        // ambient layers are AniList-only (TMDB air times are synthesized, so an alert would fire
-        // at a fictitious instant) — asking a TV-only user for permission buys them nothing.
-        if isReleasing, source(of: franchiseId) == .anilist {
-            Task { _ = await EpisodeNotifications.shared.requestPermissionIfNeeded() }
-        }
+        // **An add never raises the system permission alert.**
+        //
+        // It used to: this line set the undo state and the next one asked iOS for notification
+        // permission, so a modal system alert appeared over the results with "Added … — Undo"
+        // counting down underneath it. The undo was unreachable for its whole six-second window,
+        // VoiceOver focus was stolen, and the app's first-ever permission ask arrived unprimed in
+        // the middle of an unrelated action — where the reflex answer is Don't Allow, after which
+        // iOS never asks again and episode alerts are dead for that account permanently.
+        //
+        // The ask now belongs to an explicit in-app affordance (`DiscoverView.notificationPrimer`,
+        // armed by an add that STUCK, raised only after the undo window has closed) and to
+        // Profile → Notifications. The system prompt only ever follows the user asking for it.
         Task {
             do {
                 _ = try await api.subscribe(franchiseId: franchiseId, status: nil)
