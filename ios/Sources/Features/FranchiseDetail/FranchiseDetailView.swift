@@ -537,7 +537,7 @@ struct FranchiseDetailView: View {
 
     // MARK: helpers
 
-    private func statusLabel(_ s: WatchStatus) -> String { Copy.Status(s) }
+    private func statusLabel(_ s: WatchStatus) -> String { s.displayName }
 
     /// "4 Seasons · 1 Movie · 2 OVAs" — only non-zero kinds, properly pluralised.
     private func partBreakdown(_ counts: PartCounts?) -> String? {
@@ -1152,18 +1152,8 @@ private struct LivePulseDot: View {
     }
 }
 
-private extension FranchisePart {
-    /// "Jun 24, 2026" for an announced part — the date the UI can actually promise.
-    ///
-    /// `premiereDateLabel` reads the catalogue's own premiere slot, which TMDB frequently leaves
-    /// null while still dating the season through its first episode. Falling back to the earliest
-    /// episode air date is the difference between a real date and a bare "TBA".
-    func announcedDateLabel(source: MediaSource) -> String? {
-        if let label = premiereDateLabel(source: source) { return label }
-        guard let first = episodes.compactMap({ $0.airDate }).min() else { return nil }
-        return Formatting.fmtFullDate(first, anchor: Episode.airDateAnchor)
-    }
-}
+// `announcedDateLabel(source:)` moved to `Models/Models+Shared.swift` (SP-7) — Schedule and
+// Library need the same fallback, and two copies would drift.
 
 private extension View {
     /// Frosted-glass chrome for the hero's overlaid controls (status chip, ⋯ button).
