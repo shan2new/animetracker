@@ -34,9 +34,31 @@ struct FranchiseDetailView: View {
     @State private var showStartRewatch = false
     /// Minted when a mark completes a season; the hairline sweep draws once per token.
     @State private var sweepToken: UUID?
+    /// True once the hero art has left the top of the screen.
+    ///
+    /// The hero bleeds under the status bar, so this screen hides the navigation bar's background
+    /// — and then nothing stops a season row from rendering at half opacity across the floating
+    /// toolbar. `scrollEdgeChrome` holds FULL canvas only through the status bar (by design: it is
+    /// a status-bar veil), and the ramp below it is exactly where the toolbar sits. So the bar
+    /// takes its own background back the moment there is content rather than artwork behind it —
+    /// which is what every shipping media app does, and is native rather than a second hand-rolled
+    /// veil stacked on the first.
+    @State private var scrolledUnderBar = false
 
     private var now: Int64 { appModel.now }
     private var isAX: Bool { typeSize.isAccessibilitySize }
+
+    /// The cover's palette, made fit to be a GROUND (see `DetailTint`). The raw palette colour at
+    /// full chroma composited to a saturated brown block on a warm poster — and to the *same*
+    /// brown block on a magenta-and-cyan one, so the screen's one action card was carrying a
+    /// colour that said nothing about the show it was derived from.
+    private var cardTint: Color? { DetailTint.quiet(tint) }
+
+    /// The floating sync banner is drawn OVER content rather than inset from it, so while a
+    /// failure is pending the last row of any screen is sliced through its glyphs. Until the
+    /// banner carries a presented-state content inset of its own, the screens that can show one
+    /// make room for it. (Shared-file request filed; this is the local half.)
+    private var bottomClearance: CGFloat { DetailMetrics.bottomClearance }
 
     enum DetailPush: Hashable {
         case episodes(franchiseId: String, mediaId: Int, focusEpisode: Int?)
@@ -69,7 +91,12 @@ struct FranchiseDetailView: View {
         // nothing else stops a scrolled season row from landing on the clock. The veil does — with
         // a longer ramp than the default, because here it is dissolving ARTWORK rather than a list,
         // and a 22-pt ramp over a photograph reads as a black bar laid across it.
-        .scrollEdgeChrome(topHeight: ThemeMetrics.topSafeInset + 44)
+        .scrollEdgeChrome(topHeight: ThemeMetrics.topSafeInset + 52)
+        // The toolbar's own edge, present only once there is content rather than artwork behind
+        // the bar. Above the chrome veil, below nothing — it is the last thing over the scroll.
+        .overlay(alignment: .top) {
+            if scrolledUnderBar { FloatingToolbarVeil().transition(.opacity) }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -153,12 +180,17 @@ struct FranchiseDetailView: View {
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
                 .padding(.top, ThemeMetrics.heroClearance)
-                .padding(.bottom, ThemeMetrics.tabBarClearance)
+                .padding(.bottom, bottomClearance)
                 .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: nextUpState(f)?.identity)
             }
         }
         .scrollIndicators(.hidden)
         .ignoresSafeArea(edges: .top)
+        .onScrollGeometryChange(for: Bool.self) { geo in
+            geo.contentOffset.y > Self.heroArtHeight - 130
+        } action: { _, under in
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) { scrolledUnderBar = under }
+        }
         .task(id: f.cover) { tint = await PaletteCache.shared.resolve(url: f.cover, maxPixel: 420) }
         .task(id: f.banner ?? f.cover) { heroTint = await PaletteCache.shared.resolve(url: f.banner ?? f.cover, maxPixel: 420) }
     }
@@ -186,7 +218,7 @@ struct FranchiseDetailView: View {
             ArtHeader(url: f.banner ?? f.cover, height: Self.heroArtHeight, tint: heroTint ?? tint,
                       scrimTop: 0.45, scrimBottom: 1) { EmptyView() }
             VStack(alignment: .leading, spacing: 0) {
-                PosterSlot(url: f.cover, .hero)
+                DetailPoster(url: f.cover, slot: .hero)
                 SectionLabel(text: eyebrow(f))
                     .padding(.top, ThemeMetrics.artGap)
                 Text(f.title)
@@ -357,7 +389,11 @@ struct FranchiseDetailView: View {
                 Button(Copy.Action.restartRewatch) { promptRestartRewatch(f, session: session) }
                 Button("Cancel rewatch\u{2026}") { promptCancelRewatch(f, session: session) }
             }
-            if !RewatchStore.shared.sessions(for: f.id).isEmpty || nextUpState(f)?.kind == .seriesComplete {
+            // Only when there is something to show. `RewatchStore` records the first watch
+            // implicitly, at the moment a REWATCH starts — so a finished show with no rewatch has
+            // no session, and this door led to "No watch history yet" on a screen whose card, 40 pt
+            // above, said "Watched once". Two answers to the same question.
+            if !RewatchStore.shared.sessions(for: f.id).isEmpty {
                 Button(Copy.Action.viewWatchHistory) { push(.history(franchiseId: f.id)) }
             }
             Divider()
@@ -464,8 +500,14 @@ struct FranchiseDetailView: View {
             // Episode 2" to wrap and orphaned the separator at the end of the first line; stacked
             // under the metadata it left the 96×54 tile beside 50 pt of empty card.
             HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x3) {
+                // One treatment, conditional on ACTIONABILITY rather than on nothing. The label
+                // was amber-with-a-dot on `.actionable` (exactly one episode pending) and plain
+                // grey on `.backlog` (six pending) — so two Detail screens showed the same card
+                // two ways, and the louder one was on the less urgent state. It is amber whenever
+                // there is an episode waiting, which is what "Next up" means.
+                let pending = state.episode != nil
                 SectionLabel(text: state.kind == .seasonComplete || state.kind == .seriesComplete ? "Complete" : (active.map { "\($0.title) · Next up" } ?? "Next up"),
-                             dot: state.kind == .actionable, tint: state.kind == .actionable ? ThemeColor.accent : ThemeColor.textTertiary)
+                             dot: pending, tint: pending ? ThemeColor.accent : ThemeColor.textTertiary)
                 Spacer(minLength: 0)
                 if !isAX, let part = state.part, let ep = state.episode, canReveal(part, episode: ep) {
                     revealButton(ep)
@@ -477,16 +519,34 @@ struct FranchiseDetailView: View {
                 if let part = state.part, let ep = state.episode {
                     let episode = part.episodes.first { $0.number == ep }
                     let safe = revealed.contains(ep)
-                    // The same 96×54 rectangle whether or not a still exists — filled with the
-                    // show's own colour when it does not, never a generic grey play-glyph.
-                    EpisodeArtwork(url: safe ? episode?.still : nil, spoilerSafe: safe, showTint: tint)
+                    // The same 96×54 rectangle whether or not a still exists. Where there is no
+                    // still — or where there is one and it is being withheld — the rectangle
+                    // carries the episode's IDENTIFIER on the show's colour. A `play.rectangle` at
+                    // 34 % over a brown block is what a failed image load looks like, and it was
+                    // the first object inside the only card on the screen that does anything.
+                    if safe, let still = episode?.still, !still.isEmpty {
+                        EpisodeArtwork(url: still, spoilerSafe: true, showTint: cardTint)
+                    } else if !isAX {
+                        // At AX sizes the card is a VStack, so the tile stops being a column
+                        // beside the text and becomes a 96-pt object stacked on top of it,
+                        // dominating the card — and it is saying exactly what the line under it
+                        // already says. A real still is content and stays; a repeat of the fact
+                        // does not. (In the episode LIST it always stays: there the tile is the
+                        // list's rhythm, not a decoration.)
+                        EpisodeIdentifierTile(tint: cardTint, identifier: part.tileIdentifier(episode: ep))
+                    }
                 } else {
                     // No episode to point at — waiting on an announced installment, caught up, or
                     // finished. The card still gets identity art: the part's own poster, or the
                     // franchise's. Without it these states rendered as a 200-pt empty box with two
                     // lines of text in the corner, which is what "Movie 2 / No date announced"
                     // looked like on a screen whose whole subject is artwork.
-                    PosterSlot(url: state.part?.cover ?? f.cover, .row)
+                    //
+                    // On the complete state there is no part, and `f.cover` is the poster already
+                    // hanging 400 pt above it in the hero: the card printed the same artwork
+                    // twice. The last installment's own cover is the same show and a different
+                    // picture, which is what "you finished all of this" should look like.
+                    DetailPoster(url: state.part?.cover ?? f.episodicPartsInOrder.last?.cover ?? f.cover, slot: .row)
                 }
                 VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                     // The fact the card exists to deliver is `textPrimary`. It was rendered in the
@@ -526,7 +586,7 @@ struct FranchiseDetailView: View {
         }
         .padding(ThemeSpace.x4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .surface(.art(tint), radius: ThemeRadius.card)
+        .surface(.art(cardTint), radius: ThemeRadius.card)
         .overlay(alignment: .top) {
             if state.kind == .seasonComplete, let token = sweepToken {
                 SeasonSweepHairline(token: token).padding(.horizontal, 1)
@@ -568,13 +628,13 @@ struct FranchiseDetailView: View {
     @ViewBuilder
     private func historyRow(_ f: Franchise) -> some View {
         let sessions = RewatchStore.shared.sessions(for: f.id)
-        if !sessions.isEmpty || nextUpState(f)?.kind == .seriesComplete {
+        if !sessions.isEmpty {
             GroupedList {
                 // The symbol tile keeps the default neutral. In `accentSoft` it was a third amber
                 // object on a screen whose only amber should be its one primary action — and a
                 // navigational row is not an action, it is a door.
                 GroupedRow(symbol: "clock.arrow.circlepath", title: Copy.Action.viewWatchHistory,
-                           subtitle: sessions.isEmpty ? Copy.Progress.watchedTimes(1) : Copy.watchSessions(sessions.count),
+                           subtitle: Copy.watchSessions(sessions.count),
                            trailing: .chevron(nil), separator: false) {
                     push(.history(franchiseId: f.id))
                 }
@@ -808,9 +868,11 @@ struct FranchiseDetailView: View {
                         lead: facts.lead,
                         poster: part.cover ?? f.cover,
                         slot: .row,
-                        // One trailing object, never two. A settled season states the fact; an
-                        // unsettled one offers the way in.
-                        chevron: episodic && !settled,
+                        // ONE glyph species down the column, and only where it says something.
+                        // A chevron on two rows of nine implied the other seven were not
+                        // tappable, and alternated glyph species down a list where every row goes
+                        // to the same place. Every row is the target; its title carries that.
+                        chevron: false,
                         separator: !isLast,
                         trailing: { if settled { PassiveTick() } }) {
             if episodic { push(.episodes(franchiseId: f.id, mediaId: part.mediaId, focusEpisode: nil)) }
@@ -826,6 +888,12 @@ struct FranchiseDetailView: View {
         if part.isUpcoming {
             if let d = part.announcedDateLabel(source: f.source) { return (nil, "Premieres \(d)") }
             return ("No date announced", nil)
+        }
+        // The specials bucket is a CATALOGUE, not a run. Game of Thrones ships 300 of them, and
+        // "0 of 300 watched" printed a 300-episode denominator as if it were progress — truthful,
+        // and it destroys trust in every other count on the screen. The count is the fact.
+        if part.kind == .special, part.totalEpisodes > 1 {
+            return (Copy.episodes(part.totalEpisodes), nil)
         }
         if part.kind != .season && part.totalEpisodes <= 1 {
             var bits = [part.kind.rawValue.uppercased() == "MOVIE" ? "Film" : part.kind.rawValue.capitalized]
@@ -879,6 +947,8 @@ struct SeasonEpisodesView: View {
     @State private var tint: Color?
 
     private var now: Int64 { appModel.now }
+    /// The show's colour, made fit to sit under type (see `DetailTint`).
+    private var quietTint: Color? { DetailTint.quiet(tint) }
     private var franchise: Franchise? { appModel.franchise(id: franchiseId) ?? fetched }
     private var part: FranchisePart? {
         guard let f = franchise else { return nil }
@@ -911,8 +981,8 @@ struct SeasonEpisodesView: View {
                             }
                         }
                         .padding(.horizontal, ThemeMetrics.gutter)
-                        .padding(.top, ThemeSpace.x3)
-                        .padding(.bottom, ThemeMetrics.tabBarClearance)
+                        .padding(.top, DetailMetrics.toolbarClearance)
+                        .padding(.bottom, DetailMetrics.bottomClearance)
                     }
                     .scrollIndicators(.hidden)
                     .onAppear {
@@ -928,6 +998,7 @@ struct SeasonEpisodesView: View {
             }
         }
         .scrollEdgeChrome()
+        .overlay(alignment: .top) { FloatingToolbarVeil() }
         // The FRANCHISE, not the season. The season is the subject of the content header below in
         // 20-pt type; printing it again in the navigation bar 30 pt above put the same two words
         // on the screen twice, and left the show's own name nowhere on a screen about it.
@@ -1018,7 +1089,7 @@ struct SeasonEpisodesView: View {
             }
         }
         .padding(.horizontal, ThemeMetrics.gutter)
-        .padding(.top, ThemeSpace.x3)
+        .padding(.top, DetailMetrics.toolbarClearance)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -1035,8 +1106,14 @@ struct SeasonEpisodesView: View {
                 HStack(spacing: ThemeMetrics.artGap) {
                     // One 96×54 rectangle for every row, still or not: the shipped list ran two
                     // photographs and then five 48-pt grey squares, so it physically changed shape
-                    // halfway down. `showTint` makes the no-still rows read as *this show*.
-                    EpisodeArtwork(url: episode?.still, spoilerSafe: spoilerSafe, showTint: tint)
+                    // halfway down. Where there is no still the rectangle carries the episode's
+                    // number on the show's colour — a withheld or missing still is not a broken
+                    // one, and a play glyph over nothing is what a broken one looks like.
+                    if spoilerSafe, let still = episode?.still, !still.isEmpty {
+                        EpisodeArtwork(url: still, spoilerSafe: true, showTint: quietTint)
+                    } else {
+                        EpisodeIdentifierTile(tint: quietTint, identifier: "E\(n)")
+                    }
                     VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                         HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
                             Text(rowTitle(episode, n: n, spoilerSafe: spoilerSafe))

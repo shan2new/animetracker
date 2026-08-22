@@ -23,7 +23,7 @@ struct StartRewatchSheet: View {
                     // its own artwork, before it asks anything. A modal that opens on a grey
                     // sentence and a list of radio rows could be about anything.
                     HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
-                        PosterSlot(url: franchise.cover, .queue)
+                        DetailPoster(url: franchise.cover, slot: .queue)
                         VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                             Text(franchise.title)
                                 .type(ThemeType.showTitleM)
@@ -74,9 +74,11 @@ struct StartRewatchSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    // A plain text button. iOS has never put a filled pill in a sheet's leading
-                    // position, and the toolbar's own glass treatment turned this one into one.
                     Button { dismiss() } label: {
+                        // `body`, not `listAction`: a sheet's Cancel is a navigation control and
+                        // iOS sets it at the same size as the sheet's own title. `listAction` is
+                        // for inline links inside content ("See all", "Read more"), and at 13 pt
+                        // beside a 17-pt title it reads as a caption rather than a control.
                         Text(Copy.Action.cancel)
                             .type(ThemeType.body)
                             .foregroundStyle(ThemeColor.accent)
@@ -85,6 +87,12 @@ struct StartRewatchSheet: View {
                     }
                     .buttonStyle(.plain)
                 }
+                // A plain text button — iOS has never put a filled pill in a sheet's leading
+                // position. `.buttonStyle(.plain)` alone does not get there: the toolbar gives
+                // every item its own glass capsule, which is what rendered rgb(26,27,29) behind
+                // this word on a rgb(13,14,17) sheet. The shared background has to be dropped
+                // from the item, not from the button inside it.
+                .sharedBackgroundVisibility(.hidden)
             }
         }
     }
@@ -119,7 +127,7 @@ struct WatchHistoryView: View {
                 // the content area it reads as the answer to the question the screen asks.
                 EmptyState(.noSessions, prominence: .major)
                     .padding(.horizontal, ThemeMetrics.gutter)
-                    .padding(.bottom, ThemeMetrics.tabBarClearance)
+                    .padding(.bottom, DetailMetrics.bottomClearance)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
             ScrollView {
@@ -141,9 +149,12 @@ struct WatchHistoryView: View {
                     } else {
                         HistoryRail {
                             ForEach(Array(sessions.enumerated()), id: \.element.id) { i, session in
+                                // No poster, for the same reason the solo row carries none: the
+                                // identity header above is already showing this exact artwork, and
+                                // a session is not a different show. Three identical posters down
+                                // one screen made a record read as a list of duplicates.
                                 HistorySessionRow(title: session.title,
                                                   subtitle: session.subtitle(nextEpisode: nextEpisode(session), now: now),
-                                                  poster: franchise?.cover,
                                                   active: session.isActive,
                                                   position: position(i, of: sessions.count)) {
                                     editing = session
@@ -153,13 +164,17 @@ struct WatchHistoryView: View {
                     }
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
-                .padding(.top, ThemeSpace.x3)
-                .padding(.bottom, ThemeMetrics.tabBarClearance)
+                // Clears the FLOATING toolbar, not just the status bar. This screen's content
+                // starts at the top of the safe area, which on a screen whose navigation bar has
+                // no background of its own puts the identity header under the back button.
+                .padding(.top, DetailMetrics.toolbarClearance)
+                .padding(.bottom, DetailMetrics.bottomClearance)
             }
             .scrollIndicators(.hidden)
             }
         }
         .scrollEdgeChrome()
+        .overlay(alignment: .top) { FloatingToolbarVeil() }
         .navigationTitle(Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -238,7 +253,7 @@ struct WatchHistoryView: View {
         if let f = franchise, !sessions.isEmpty {
             let completed = store.summary(for: franchiseId).completedCount
             HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
-                PosterSlot(url: f.cover, .row)
+                DetailPoster(url: f.cover, slot: .row)
                 VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                     Text(f.title)
                         .type(ThemeType.showTitleM)
@@ -336,13 +351,23 @@ struct SessionDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(Copy.Action.done) {
+                    // Plain bold text, for the same reason `Cancel` is plain text on the rewatch
+                    // sheet: the toolbar wraps every item in its own glass capsule, and a filled
+                    // pill is not what iOS puts in a sheet's confirm slot.
+                    Button {
                         let ts = Int64(startDate.timeIntervalSince1970 * 1000)
                         if ts != session.startedAt { store.setStartDate(session.id, to: ts) }
                         dismiss()
+                    } label: {
+                        Text(Copy.Action.done)
+                            .type(ThemeType.bodyEmphasis)
+                            .foregroundStyle(ThemeColor.accent)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
-                    .fontWeight(.semibold)
+                    .buttonStyle(.plain)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
             .confirmationDialog(Copy.Confirm.deleteSessionTitle, isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button(Copy.Confirm.deleteSessionConfirm, role: .destructive) {
