@@ -41,23 +41,55 @@ final class SyncCenter {
     }
 
     // MARK: - Freshness
+    //
+    // There is exactly ONE freshness stamp in this app and `SyncCenter` does not own it: the model
+    // that loads the library owns it (`AppModel.lastLoadedAt`) and `SyncCenter` reads it.
+    // COHERENCE §1.3 spells that read `AppModel.shared?.lastLoadedAt`; neither `AppModel.shared`
+    // nor `lastLoadedAt` exists in the tree yet — both are edits to `App/AppModel.swift`, a shared
+    // file this track may not touch (filed as sharedFileRequest R2/SP-2) — so the read goes through
+    // a closure the app installs once. The semantics are COHERENCE's: one stamp, owned by the
+    // model, never copied here. A stored copy is exactly what lets Profile's "Synced 2 min ago"
+    // and a screen's stale strip disagree, so both properties below are deliberately computed.
+
+    /// What the live model currently knows about freshness. Read through `signals`, never stored.
+    struct Signals: Equatable, Sendable {
+        /// Epoch-ms of the last library payload that actually arrived. `0` = never.
+        var lastLoadedAt: Int64 = 0
+        /// A library request is in flight.
+        var loading: Bool = false
+    }
+
+    /// Installed once, at the app root:
+    /// ```
+    /// SyncCenter.shared.signals = { [weak appModel] in
+    ///     .init(lastLoadedAt: appModel?.lastLoadedAt ?? 0, loading: appModel?.loading ?? false)
+    /// }
+    /// ```
+    /// Until it is installed, nothing can be stale and Profile reads "Not synced yet" — the honest
+    /// reading of "this build has no freshness source wired", not a silent claim of freshness.
+    /// Because the closure reads `@Observable` model properties, every SwiftUI view that renders
+    /// `lastSyncedAt` / `checking` re-evaluates when the model's stamp moves.
+    var signals: (@MainActor () -> Signals)?
+
+    private var current: Signals { signals?() ?? Signals() }
 
     /// When the last library payload actually arrived. `nil` until the first successful load.
-    private(set) var lastSyncedAt: Int64?
+    var lastSyncedAt: Int64? {
+        let ts = current.lastLoadedAt
+        return ts > 0 ? ts : nil
+    }
+
     /// A refresh is in flight. Drives Profile's "Checking for changes" line.
-    var checking: Bool = false
+    var checking: Bool { current.loading }
 
     private var stamps: [DataClass: Int64] = [:]
 
-    /// Records that this class of data just arrived. `markSynced()` stamps all three at once —
-    /// the library payload carries every class.
+    /// Optional per-class refinement: a surface that refreshes ONE class of data on its own (the
+    /// schedule feed, say) stamps it here and that class stops inheriting the library-wide stamp.
+    /// Nothing is required to call this — every class falls back to `lastSyncedAt`, so the stale
+    /// strip works on a screen that never stamps anything.
     func stamp(_ dataClass: DataClass, at ts: Int64 = .nowMs) {
         stamps[dataClass] = ts
-    }
-
-    func markSynced(at ts: Int64 = .nowMs) {
-        lastSyncedAt = ts
-        for c in DataClass.allCases { stamps[c] = ts }
     }
 
     /// Elapsed ms since this class of data last arrived, or `nil` when it never has.
@@ -197,10 +229,28 @@ final class SyncCenter {
     func retry(_ id: UUID) {
         guard let change = failedChanges.first(where: { $0.id == id }),
               let run = change.effectiveRetry(self) else { return }
-        userRetriedAt[change.key] = .nowMs
+        let key = change.key
+        userRetriedAt[key] = .nowMs
         failedChanges.removeAll { $0.id == id }
         persist()
-        Task { @MainActor in await run() }
+        Task { @MainActor in
+            await run()
+            self.settleRetry(key)
+        }
+    }
+
+    /// A retried write finished. If it failed it already re-recorded itself — `record` runs
+    /// synchronously inside the command's `catch`, consuming the stamp and firing the single
+    /// `.directError` — so by the time this runs the stamp means "the retry SUCCEEDED".
+    ///
+    /// It has to be dropped: the 30-s window is a safety net for a write that fails a moment after
+    /// the tap, never a licence to treat the next unrelated background failure on the same key as
+    /// something the user asked for. Board 11 says a background sync failure is silent.
+    private func settleRetry(_ key: String) {
+        userRetriedAt[key] = nil
+        // The attempt counter belongs to a standing failure. With no row left, a later unrelated
+        // failure must read "1st attempt", not inherit this key's history for the whole session.
+        if !failedChanges.contains(where: { $0.key == key }) { attempts[key] = nil }
     }
 
     func retryAll() {
@@ -221,7 +271,10 @@ final class SyncCenter {
         batchRetryToken = token
         batchErrorFired = false
         Task { @MainActor in
-            for (_, run) in runnable { await run() }
+            for (change, run) in runnable {
+                await run()
+                self.settleRetry(change.key)
+            }
             if batchRetryToken == token { batchRetryToken = nil }
         }
     }
@@ -276,15 +329,27 @@ final class SyncCenter {
     }
 
     /// Sign-out: the next account must not inherit this one's failures.
+    ///
+    /// `lastSyncedAt` and `checking` are not cleared here because they are not stored here — the
+    /// model's own teardown resets `lastLoadedAt`, and this centre follows it.
+    ///
+    /// `signals` is deliberately KEPT: it is the wiring, not session data, and it captures the
+    /// model weakly. The root re-installs it on the next sign-in either way.
     func teardown() {
         failedChanges = []
         stamps = [:]
-        lastSyncedAt = nil
-        checking = false
         attempts.removeAll()
         userRetriedAt.removeAll()
         batchRetryToken = nil
         batchErrorFired = false
+        // The path monitor runs a dispatch queue for as long as it is started; a signed-out app
+        // has nothing to be reachable to. The root restarts it on the next sign-in.
+        stopMonitoring()
+        // Holds a closure capturing the previous session's model. Never retry into a dead account.
+        onRestoredRetry = nil
+        // The milestone ledger is per-account too: the next user's first season completion is
+        // their own, not a token this one already spent.
+        SeasonSweepLedger.reset()
         persist()
     }
 }

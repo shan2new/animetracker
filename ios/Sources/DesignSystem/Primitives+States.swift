@@ -259,11 +259,17 @@ struct RefreshIndicator: View {
 /// Retry is optimistic, like every other write in the app: the banner leaves as soon as the retry
 /// is issued and returns if the write fails again. There is no spinner, because a local-first
 /// write returns before the network does — a spinner here could only be a lie about waiting.
+/// (Plan §2.6 asks for a spinner in place of the label; that half is escalated, not silently
+/// dropped. What plan §2.6 is actually protecting against — a second tap re-issuing the write —
+/// is handled by `retryInFlight` below, which is a real guard rather than a fictional wait.)
 struct SyncBanner: View {
     let count: Int
     var retry: (() -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// A retry has been issued. The button is inert until the banner's row has had time to leave,
+    /// so an impatient double-tap cannot send the same write twice.
+    @State private var retryInFlight = false
 
     init(count: Int, retry: (() -> Void)? = nil) {
         self.count = count
@@ -271,6 +277,17 @@ struct SyncBanner: View {
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
+
+    /// A timed hold, not a gate on a spring: the sync closure returns immediately, so there is no
+    /// completion to wait on. Long enough to swallow a double-tap, short enough that a banner
+    /// which comes straight back is pressable again.
+    private static let retryLockout: Duration = .milliseconds(800)
+
+    private func issueRetry(_ retry: @escaping () -> Void) {
+        guard !retryInFlight else { return }
+        retryInFlight = true
+        retry()
+    }
 
     var body: some View {
         let layout = isAX
@@ -284,15 +301,23 @@ struct SyncBanner: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let retry {
                 if isAX {
-                    Button(Copy.Action.retry, action: retry)
+                    Button(Copy.Action.retry) { issueRetry(retry) }
                         .buttonStyle(SecondaryButtonStyle2())
+                        .disabled(retryInFlight)
                         .accessibilityHint(Copy.Accessibility.retryHint)
                 } else {
-                    Button(Copy.Action.retry, action: retry)
+                    Button(Copy.Action.retry) { issueRetry(retry) }
                         .buttonStyle(TertiaryButtonStyle2())
+                        .disabled(retryInFlight)
                         .accessibilityHint(Copy.Accessibility.retryHint)
                 }
             }
+        }
+        .task(id: retryInFlight) {
+            guard retryInFlight else { return }
+            try? await Task.sleep(for: SyncBanner.retryLockout)
+            guard !Task.isCancelled else { return }
+            retryInFlight = false
         }
         .padding(.leading, 14)
         .padding(.trailing, isAX ? 14 : 6)
@@ -443,6 +468,9 @@ struct QueryProgressBar: View {
                 }
             }
         }
+        // The 28 %-wide segment travels from -0.28w to 1.0w, i.e. fully outside the track at both
+        // ends. Without this it paints over the 16-pt gutters and whatever sits beside the field.
+        .clipped()
         .frame(height: 1)
         .background(ThemeColor.accent.opacity(active ? 0.14 : 0))
         .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: active)
@@ -541,6 +569,11 @@ struct SectionHeaderRow: View {
                     .padding(.vertical, -12)
             }
         }
+        // That negative padding leaves the button DRAWING and HIT-TESTING 12 pt above and below
+        // the row's layout rect. Siblings laid out after the header would otherwise win the taps
+        // in the lower overlap band whenever the stack's spacing is under 12 pt, quietly eating
+        // the bottom quarter of a 44-pt target. The header paints (and tests) above them.
+        .zIndex(1)
         .accessibilityElement(children: .contain)
     }
 }
@@ -731,7 +764,8 @@ struct HistorySessionRow: View {
 /// scrim, no disc, no confetti. It fires no haptic of its own; the transaction's single
 /// `.success` is the confirmation.
 private struct SeasonCompleteSweep: ViewModifier {
-    let active: Bool
+    /// Identifies the COMMIT, not the state. `nil` = no milestone on this card.
+    let token: UUID?
     let reduceMotion: Bool
 
     @State private var progress: CGFloat = 0
@@ -749,9 +783,14 @@ private struct SeasonCompleteSweep: ViewModifier {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             }
-            // `onChange` (not a re-render) drives it, so the draw can never replay.
-            .onChange(of: active, initial: true) { _, isActive in
-                guard isActive else { progress = 0; return }
+            // Keyed on the commit token, and claimed against a ledger that outlives the view.
+            // `onChange` alone is not enough: a card scrolled off and back, a tab switch or a
+            // recycled row RE-CREATES this modifier with `progress` back at 0 and `initial: true`
+            // firing again, which would replay the whole 520-ms draw for a milestone the user
+            // already saw. A commit is acknowledged exactly once.
+            .onChange(of: token, initial: true) { _, token in
+                guard let token else { progress = 0; return }
+                guard SeasonSweepLedger.claim(token) else { progress = 1; return }
                 if reduceMotion {
                     progress = 1
                 } else {
@@ -761,10 +800,36 @@ private struct SeasonCompleteSweep: ViewModifier {
     }
 }
 
+/// Which sweep commits have already been drawn in this process.
+///
+/// It cannot be `@State`: `@State` dies with the view, and the case this exists for is precisely
+/// the view being re-created while the milestone is still true. Bounded to the last 32 commits —
+/// a token that has scrolled out of the ledger belongs to a milestone long past its card.
+@MainActor
+enum SeasonSweepLedger {
+    private static var drawn: [UUID] = []
+    private static let limit = 32
+
+    /// `true` exactly once per token: the caller owns the draw. Every later call snaps to done.
+    static func claim(_ token: UUID) -> Bool {
+        if drawn.contains(token) { return false }
+        drawn.append(token)
+        if drawn.count > limit { drawn.removeFirst(drawn.count - limit) }
+        return true
+    }
+
+    /// Sign-out. The next account's first season completion is its own.
+    static func reset() { drawn.removeAll() }
+}
+
 extension View {
-    /// Applied to the title of a card whose season just completed.
-    func seasonCompleteSweep(_ active: Bool, reduceMotion: Bool) -> some View {
-        modifier(SeasonCompleteSweep(active: active, reduceMotion: reduceMotion))
+    /// Applied to the title of a card whose season just completed. `token` identifies the WRITE
+    /// that completed the season — mint a fresh `UUID` when the mark lands, keep it for as long as
+    /// the card wants to carry the hairline, and pass `nil` when there is no milestone. Passing a
+    /// `Bool` was the earlier shape and could not survive the view being re-created: the sweep
+    /// replayed on every scroll back.
+    func seasonCompleteSweep(token: UUID?, reduceMotion: Bool) -> some View {
+        modifier(SeasonCompleteSweep(token: token, reduceMotion: reduceMotion))
     }
 
     /// `contentTransition(.numericText())` on the four numbers board 12 allows it on: the backlog
@@ -822,14 +887,17 @@ private struct Freshness: ViewModifier {
     let pullDriving: Bool
 
     func body(content: Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: ThemeSpace.x1) {
             HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
                 content
                 RefreshIndicator(isRefreshing: appModel.isRefreshing, suppressed: pullDriving)
                 Spacer(minLength: 0)
             }
             if let since = appModel.staleSince(dataClass) {
+                // 4 pt below the title (the VStack's own spacing), 8 pt above the first content
+                // block — the strip is part of the header's rhythm, not a band pressed into it.
                 StaleStrip(since: since, now: appModel.now)
+                    .padding(.bottom, ThemeSpace.x2)
             }
         }
         // Both halves arrive and leave on the same gentle curve; neither is ever a spring.
@@ -843,16 +911,27 @@ private struct PreviouslyRefreshable: ViewModifier {
     let action: @Sendable () async -> Void
 
     @State private var armed = false
+    /// A finger is on the glass. Scroll geometry alone cannot tell a pull from a momentum bounce.
+    @State private var dragging = false
 
     func body(content: Content) -> some View {
         let run = action
         return content
             .refreshable { await run() }
+            .onScrollPhaseChange { _, phase, _ in
+                dragging = (phase == .tracking || phase == .interacting)
+                // A bounce that ends without a refresh leaves nothing armed behind it.
+                if phase == .idle { armed = false }
+            }
             .onScrollGeometryChange(for: CGFloat.self) { geo in
                 -(geo.contentOffset.y + geo.contentInsets.top)
             } action: { _, pull in
                 let progress = pull / threshold
-                if !armed, progress >= 1 {
+                // `dragging` is the whole point: a fast flick to the top overshoots well past the
+                // threshold under momentum with no finger down, and the system `refreshable` does
+                // NOT fire for that. `.refreshArmed` promises "let go now and it refreshes", so it
+                // may only fire while there is something to let go of.
+                if !armed, dragging, progress >= 1 {
                     armed = true
                     FeedbackCoordinator.fire(.refreshArmed)
                 } else if armed, progress < 0.3 {
@@ -950,7 +1029,7 @@ private struct PreviouslyRefreshable: ViewModifier {
         Text("That Time I Got Reincarnated as a Slime")
             .type(ThemeType.showTitleM)
             .foregroundStyle(ThemeColor.textPrimary)
-            .seasonCompleteSweep(true, reduceMotion: true)
+            .seasonCompleteSweep(token: UUID(), reduceMotion: true)
         QueryProgressBar(active: true)
         HistoryRail {
             HistorySessionRow(title: Copy.Progress.ordinalWatch(2),
@@ -995,7 +1074,7 @@ private struct PreviouslyRefreshable: ViewModifier {
         Text("That Time I Got Reincarnated as a Slime")
             .type(ThemeType.showTitleM)
             .foregroundStyle(ThemeColor.textPrimary)
-            .seasonCompleteSweep(true, reduceMotion: false)
+            .seasonCompleteSweep(token: UUID(), reduceMotion: false)
             .padding(.bottom, ThemeSpace.x2)
     }
     .padding(ThemeSpace.x4)
