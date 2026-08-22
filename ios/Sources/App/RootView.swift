@@ -168,14 +168,21 @@ struct MainTabView: View {
             }
 
             // Undo / sync / error toasts float above the tab bar, over whatever is pushed.
+            //
             // 22 pt is the tab bar's OWN horizontal margin; the shipped 17 disagreed with it by
             // 5 pt, which is exactly the kind of gap that reads as "assembled" rather than
-            // "designed". Content clears the toast through `ThemeMetrics.toastClearance` rather
-            // than being covered by it — the shipped toast sat on top of the Watching shelf's
-            // captions for the whole 6-second window.
+            // "designed".
+            //
+            // The BOTTOM inset is measured from the window, not from the bar — this ZStack is
+            // aligned to the window's bottom edge, so a 12-pt pad put the toast at 858–935 against
+            // a tab pill at 873–935: it covered the tab bar outright on Today and Library, and on
+            // Search it covered the field with the user's own query still in it, plus the
+            // tab-return and dismiss controls. `toastClearance` was defined for exactly this and
+            // referenced nowhere. Measured after the fix: the toast lands at 815–856 pt against a
+            // pill whose top edge is 875, on all four tabs.
             ToastHost()
                 .padding(.horizontal, 22)
-                .padding(.bottom, ThemeSpace.x3)
+                .padding(.bottom, ThemeMetrics.toastClearance)
         }
     }
 
@@ -209,14 +216,23 @@ private extension View {
             .navigationDestination(for: DetailRoute.self) { route in
                 FranchiseDetailView(franchiseId: route.id, focus: route.focus, push: push)
                     .navigationTransition(.zoom(sourceID: route.zoomID, in: zoom))
+                    .pushedScreenChrome()
             }
             .navigationDestination(for: FranchiseDetailView.DetailPush.self) { p in
-                switch p {
-                case .episodes(let franchiseId, let mediaId, let focusEpisode):
-                    SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, focusEpisode: focusEpisode)
-                case .history(let franchiseId):
-                    WatchHistoryView(franchiseId: franchiseId)
+                Group {
+                    switch p {
+                    case .episodes(let franchiseId, let mediaId, let focusEpisode):
+                        SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, focusEpisode: focusEpisode)
+                    case .history(let franchiseId):
+                        WatchHistoryView(franchiseId: franchiseId)
+                    }
                 }
+                // A pushed screen is still inside the TabView, so the floating pill is still over
+                // it — but `scrollEdgeChrome` was applied on tab ROOTS only, so Detail's season and
+                // episode lists rendered whole rows at full opacity under and beside the bar, with
+                // no `bottomUnderfill` for its glass to refract. The treatment belongs to the
+                // pushed-screen scaffold, here, not to six per-screen opt-ins.
+                .pushedScreenChrome()
             }
     }
 }

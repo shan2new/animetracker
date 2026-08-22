@@ -153,6 +153,7 @@ extension Franchise {
 
 extension WatchStatus {
     /// Board 09's status vocabulary, for all five cases. `.completed` is an internal name; the
-    /// user's word is "Finished".
+    /// user's word is "Watched" (SYS-4 — "Finished" is out of the vocabulary; it was carrying both
+    /// the user's list state and the series' production state).
     var displayName: String { Copy.Status(self) }
 }

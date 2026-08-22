@@ -155,7 +155,17 @@ final class AuthManager: TokenProvider {
         let provenance: Provenance
 
         /// The symbol to draw when there is no initial.
+        ///
+        /// Deprecated as a *drawing*: `AccountDisc` no longer renders a generic person glyph inside
+        /// an accent ring — brand colour spent on a placeholder, on the one element that is supposed
+        /// to be the user. The constant stays because it is still the right symbol for a list row
+        /// or a menu item about the account, where a monogram would be wrong.
         static let fallbackSymbol = "person.fill"
+
+        /// The letter to draw, with the whole fallback chain in one place: the real initial, then
+        /// the first letter of whatever label the account is shown under ("Your account" → "Y").
+        /// `nil` means there is genuinely nothing nameable and the brand mark is drawn instead.
+        var monogram: String? { initial ?? AuthManager.letter(of: displayName) }
     }
 
     var identity: AccountIdentity {
@@ -184,7 +194,7 @@ final class AuthManager: TokenProvider {
     }
 
     /// The first LETTER of a name, or nil. A leading digit, punctuation or emoji is not an initial.
-    private static func letter(of raw: String) -> String? {
+    nonisolated static func letter(of raw: String) -> String? {
         guard let first = raw.trimmingCharacters(in: .whitespacesAndNewlines).first,
               first.isLetter else { return nil }
         return String(first).uppercased()

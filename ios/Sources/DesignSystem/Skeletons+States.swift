@@ -11,7 +11,11 @@ import SwiftUI
 
 /// The one motion a skeleton gets. Shimmer stays refused (board 12 names it); a 1.4-s ease-in-out
 /// breath says "still working" without a travelling highlight, and under Reduce Motion it collapses
-/// to a static 0.85. A file-level constant because `SkeletonGate` is generic and cannot hold one.
+/// to a static 0.92. A file-level constant because `SkeletonGate` is generic and cannot hold one.
+///
+/// The amplitude is 0.88 ↔ 1.0, not 0.65 ↔ 1.0. A 35 % oscillation across the WHOLE screen, forever,
+/// is not a reassurance that something is working — it is a pulse the eye cannot ignore and cannot
+/// look away from, on the frame the user is already waiting through. 12 % still visibly breathes.
 private let skeletonBreath = Animation.easeInOut(duration: 1.4).repeatForever(autoreverses: true)
 
 // MARK: - The gate
@@ -53,7 +57,7 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
         ZStack(alignment: .top) {
             if visible {
                 skeleton()
-                    .opacity(reduceMotion ? 0.85 : (breathing ? 1.0 : 0.65))
+                    .opacity(reduceMotion ? 0.92 : (breathing ? 1.0 : 0.88))
                     .animation(reduceMotion ? nil : skeletonBreath, value: breathing)
                     .overlay(alignment: .top) {
                         // HIG: an indeterminate wait past ~800 ms needs a progress affordance, not

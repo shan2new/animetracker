@@ -687,7 +687,10 @@ final class AppModel {
             case .watching: return "Watching"
             case .comingBack: return "Coming back"
             case .planned: return "Planned"
-            case .finished: return "Finished"
+            // "Watched", the same word `LibrarySection.finished` renders and the same word
+            // `Copy.statusLabel` now returns for `.completed`. "Finished" is out of the vocabulary
+            // (SYS-4): it was naming the user's list state and the series' production state at once.
+            case .finished: return "Watched"
             }
         }
     }
@@ -772,12 +775,20 @@ final class AppModel {
         applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: aired)
 
         // Preserve the original prev if an undo for this franchise is already pending.
+        //
+        // `count` is the number of episodes this transaction actually recorded, and it must be the
+        // real one: it was left at its default of 1, so catching up six episodes confirmed "Episode
+        // 12 marked as watched" — the app under-reporting its own write by five, on the one control
+        // whose whole purpose is a batch. It is derived from the SAME prev the undo restores, so
+        // the sentence and the rollback can never disagree.
         if let cur = undo, !cur.added, cur.franchiseId == franchiseId {
             undo = UndoState(mediaId: part.mediaId, franchiseId: franchiseId,
-                             prevProgress: cur.prevProgress, title: f.title, episode: aired)
+                             prevProgress: cur.prevProgress, title: f.title, episode: aired,
+                             count: max(1, aired - cur.prevProgress))
         } else {
             undo = UndoState(mediaId: part.mediaId, franchiseId: franchiseId,
-                             prevProgress: prev, title: f.title, episode: aired)
+                             prevProgress: prev, title: f.title, episode: aired,
+                             count: max(1, aired - prev))
         }
 
         celebrate(franchiseId)

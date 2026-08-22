@@ -32,7 +32,10 @@ enum ThemeColor {
     static let textPrimary = Color(hex: 0xF4F1EC)
     static let textSecondary = Color(hex: 0xAAA6A0)
     static let textTertiary = Color(hex: 0x85817C)
-    static let textDisabled = Color(hex: 0x6C6965)
+    /// The quietest ink that is still *read*. #6C6965 measured 3.29:1 on the canvas — legal for a
+    /// chevron (decoration, 3:1) and wrong for the section counts and index letters this token is
+    /// also assigned to. #807C77 is ≈4.6:1 and nothing else in the ramp moves.
+    static let textDisabled = Color(hex: 0x807C77)
     // Brand
     static let accent = Color(hex: 0xF0A24E)
     static let accentPressed = Color(hex: 0xD88D3B)
@@ -173,15 +176,32 @@ enum ThemeMetrics {
     static let heroClearance: CGFloat = 26
     /// Bottom inset that clears the floating tab bar AND the whole scroll-edge ramp above it.
     ///
-    /// At 108 against a 116-pt ramp the last block of every screen came to rest *inside* the ramp:
-    /// measured 1.60:1 on Detail's About paragraph, 1.69:1 on a Library row title, 4.29:1 on an
-    /// enabled Search "Add" button against 14.10:1 for the identical control higher up. Nothing
-    /// interactive, and no text, may ever settle inside the veil — so the clearance is the ramp's
-    /// full height plus a margin, not less than it.
-    static let tabBarClearance: CGFloat = 152
-    /// Extra clearance the toast claims when it is on screen, so it insets content rather than
-    /// covering the shelf captions it currently lands on top of.
-    static let toastClearance: CGFloat = 64
+    /// The rule is `bottomChromeHeight` + one gutter, and it is only ever that. At 152 against a
+    /// 140-pt ramp the clearance was itself the bug it was defending against: it cost every screen
+    /// 152 pt of vertical space *and* still let the ramp erase live content, because the ramp was
+    /// the thing that was too tall. With the ramp cut to the pill's own height (64) the honest
+    /// clearance is 76 — and ~76 pt of reading space comes back on all six screens.
+    static let tabBarClearance: CGFloat = bottomChromeHeight + ThemeSpace.x3
+    /// The tab bar's VISUAL height — pill plus the home-indicator strip under it.
+    ///
+    /// This is the divisor for optically centring a state block, and it is *not* `tabBarClearance`:
+    /// subtracting a scroll inset when centring pushed every empty state ~81 pt above true centre
+    /// on Today and Schedule.
+    static let tabBarVisualHeight: CGFloat = 90
+    /// How far above the SAFE AREA's bottom edge a floating toast sits, so it clears the tab bar
+    /// instead of landing on it: the 52-pt pill plus a 10-pt gap. (The 34-pt home-indicator strip is
+    /// already excluded — the toast's host respects the safe area; measured on device, a toast with
+    /// this inset lands at 812–860 pt against a pill whose top edge is at 875.)
+    ///
+    /// The token was defined and referenced nowhere while `ToastHost` was inset 12 pt — the toast
+    /// measured 858–935 against a pill at 873–935 and covered it outright, on Today, Library and
+    /// Search (where it also covered the field with the user's query still in it).
+    ///
+    /// One value for all four tabs. The search island was assumed to be taller than the pill and
+    /// measured on device is not: the pill occupies 882–923 pt and the search field 887–920, so a
+    /// second, larger constant for that tab would have moved the toast 24 pt for no reason and
+    /// made one tab's chrome sit differently from the other three.
+    static let toastClearance: CGFloat = 62
 
     // Row heights. A row's height is set by its ART, not by a hairline grid: 68 pt everywhere is
     // what makes a media app look like a list of settings.
@@ -234,7 +254,18 @@ enum ThemeMetrics {
     /// dim readable content, while the pill's own glass rim still had un-occluded body copy to
     /// refract (the mirrored/upside-down text on `finished.png`, `search.png`, `ax-schedule.png`,
     /// which reads as GPU corruption). It now starts where the pill does and finishes opaque.
-    static let bottomChromeHeight: CGFloat = 140
+    ///
+    /// 140 said the same thing in a comment and did not do it: the material lift began ~137 pt
+    /// above a pill whose top edge is at 873 pt, so at rest, with no scrolling, the ramp erased
+    /// Today's `WATCHING` label (1.26:1), an interactive `See all` (1.42:1), four lines of Detail's
+    /// synopsis (4.39 → 1.04:1) and Search's sixth `+` button (131 vs 241 for the identical enabled
+    /// control one row higher). Apple's own scroll-edge effect fades ~30–54 pt directly behind an
+    /// opaque bar and never erases 140 pt of visible text.
+    ///
+    /// 64 is the pill's own height. Nothing more than ~29 pt above the pill's top edge is touched
+    /// at all (see `ScrollEdgeChrome.veil`), and the ramp still reaches full canvas before the
+    /// glass rim so there is never un-occluded copy left for it to refract.
+    static let bottomChromeHeight: CGFloat = 64
 
     /// Solid canvas painted BELOW the ramp, i.e. behind the tab bar and across the home-indicator
     /// strip.
@@ -437,6 +468,46 @@ enum ThemeMotion {
     }
 }
 
+// MARK: - The handoff
+//
+// One card is replaced by the next one on four surfaces — Today's Focus card after a mark, Detail's
+// Next-up card, a Schedule row settling, Search's results replacing the launchpad. The build shipped
+// four different answers: Today's (correct) asymmetric construction, a symmetric 460 ms crossfade on
+// Detail that renders two show titles and two CTA labels superimposed for a quarter of a second, a
+// 40 % scale pop on Schedule, and SwiftUI's default crossfade of two whole view trees on Search.
+
+extension AnyTransition {
+    /// The one handoff: the outgoing card **leaves first** (`uiDismiss`, 160 ms), the incoming one
+    /// settles into the space it left (`uiSettle`, delayed past the removal). Asymmetry is the whole
+    /// point — a symmetric crossfade superimposes two different sentences, which is what a smear is.
+    ///
+    /// Under Reduce Motion both halves collapse to `uiReduced` with no delay: still a handover,
+    /// no travel.
+    static func handoff(reduceMotion: Bool) -> AnyTransition {
+        guard !reduceMotion else {
+            return .opacity.animation(ThemeMotion.uiReduced)
+        }
+        return .asymmetric(
+            insertion: .opacity.animation(ThemeMotion.uiSettle.delay(0.08)),
+            removal: .opacity.animation(ThemeMotion.uiDismiss)
+        )
+    }
+
+    /// The toast's own timing, owned by the toast rather than by whichever container happens to
+    /// mount it: a 4-pt rise on `uiSnappy` in, `uiDismiss` out. `uiDismiss` was minted for exactly
+    /// this moment and had one call site that was not this one — a toast leaving on the spring it
+    /// arrived on reads as a bounce, not a dismissal.
+    static func toast(reduceMotion: Bool) -> AnyTransition {
+        guard !reduceMotion else {
+            return .opacity.animation(ThemeMotion.uiReduced)
+        }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: 4)).animation(ThemeMotion.uiSnappy),
+            removal: .opacity.animation(ThemeMotion.uiDismiss)
+        )
+    }
+}
+
 /// Every haptic in the app goes through here. One-sentence justification per token (board 11).
 enum FeedbackToken {
     case selection      // a discrete selected value changed
@@ -451,7 +522,17 @@ enum FeedbackToken {
 @MainActor
 enum FeedbackCoordinator {
     private static var lastFire: TimeInterval = 0
-    private static let minInterval: TimeInterval = 0.3
+
+    /// The minimum gap between two feedback events, **per token**.
+    ///
+    /// A blanket 300 ms floor is right for a commit — two marks 100 ms apart are one transaction
+    /// and must buzz once. It is wrong for `.selection`, which is the token the A–Z index rail and
+    /// the week strip use: UIKit's own `UITableViewIndex` fires per section, unthrottled, and at
+    /// 300 ms an A→W drag yielded at most two taps out of twenty-odd. Selection is *tracking* a
+    /// finger, not confirming a write.
+    private static func floor(for token: FeedbackToken) -> TimeInterval {
+        token == .selection ? 0.04 : 0.3
+    }
     private static let light = UIImpactFeedbackGenerator(style: .light)
     private static let medium = UIImpactFeedbackGenerator(style: .medium)
     private static let notify = UINotificationFeedbackGenerator()
@@ -463,11 +544,11 @@ enum FeedbackCoordinator {
         set { UserDefaults.standard.set(newValue, forKey: "previously.haptics") }
     }
 
-    /// Fires at most one feedback event per 300 ms, never while the app is inactive.
+    /// Fires at most one feedback event per token floor, never while the app is inactive.
     static func fire(_ token: FeedbackToken) {
         guard enabled, UIApplication.shared.applicationState == .active else { return }
         let now = Date().timeIntervalSinceReferenceDate
-        guard now - lastFire >= minInterval else { return }
+        guard now - lastFire >= floor(for: token) else { return }
         lastFire = now
         switch token {
         case .selection: select.selectionChanged(); select.prepare()
