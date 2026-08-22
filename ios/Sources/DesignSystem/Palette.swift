@@ -73,14 +73,22 @@ final class PaletteCache {
         var l = best.l / Double(best.n), a = best.a / Double(best.n), bb = best.b / Double(best.n)
         // Clamp lightness and chroma, and lean the hue toward the brand's warmth so the app's
         // atmosphere never swings olive or steel from tab to tab.
-        l = min(max(l, 0.24), 0.38)
+        // The clamps the ambient wash regressed on. Measured against the baseline at (1200,300):
+        // Library new rgb(36,30,27) vs original rgb(45,32,22) — 20 % dimmer with R−B falling 23→9;
+        // Schedule new rgb(32,32,29) vs original rgb(71,64,59) — less than half the luminance,
+        // R−B 12→3. Chroma clamped to 0.035–0.075 and then blended 35 % toward brand amber makes
+        // "art-derived colour" arithmetically present and perceptually absent: neutral charcoal
+        // where the baseline had warm ember. The chroma ceiling doubles, the lightness floor rises,
+        // and the brand blend drops to a breath (0.15) that stops the app swinging olive or steel
+        // from tab to tab without erasing the show's own hue.
+        l = min(max(l, 0.30), 0.44)
         let c = (a * a + bb * bb).squareRoot()
-        let cc = min(max(c, 0.035), 0.075)
+        let cc = min(max(c, 0.075), 0.145)
         if c > 0 {
             var ua = a / c, ub = bb / c
             let (_, wa, wb) = oklab(r: 0xF0 / 255.0, g: 0xA2 / 255.0, b: 0x4E / 255.0)
             let wn = (wa * wa + wb * wb).squareRoot()
-            ua = 0.65 * ua + 0.35 * (wa / wn); ub = 0.65 * ub + 0.35 * (wb / wn)
+            ua = 0.85 * ua + 0.15 * (wa / wn); ub = 0.85 * ub + 0.15 * (wb / wn)
             let un = (ua * ua + ub * ub).squareRoot()
             a = ua / un * cc; bb = ub / un * cc
         }
@@ -168,14 +176,20 @@ struct ArtBackdrop: View {
     var body: some View {
         ZStack(alignment: .top) {
             if let url, !url.isEmpty {
+                // Centre-cropped BEFORE the blur. Blurring a view whose art has not been made to
+                // fill its frame samples whatever corner the image happened to land in — which is
+                // why Profile drew no image at all — and it is why the wash lost its warmth even
+                // where an image was present.
                 RemoteImageView(url: url, contentMode: .fill, maxPixel: 320)
+                    .frame(maxWidth: .infinity)
                     .frame(height: height)
                     .clipped()
                     .blur(radius: 56, opaque: true)
-                    .saturation(0.85)
-                    .opacity(0.46 * intensity)
+                    // No `.saturation(0.85)`: the tint clamp already holds chroma in a narrow band,
+                    // so desaturating on top of it is subtracting the one thing the wash is for.
+                    .opacity(0.70 * intensity)
             }
-            LinearGradient(colors: [base.opacity(0.42 * intensity), base.opacity(0.06 * intensity), .clear],
+            LinearGradient(colors: [base.opacity(0.60 * intensity), base.opacity(0.10 * intensity), .clear],
                            startPoint: .top, endPoint: .bottom)
             // A constant breath of the brand's warmth under every wash, so Schedule, Search and
             // Profile share one atmosphere instead of borrowing a different hue from whichever

@@ -120,8 +120,74 @@ final class AuthManager: TokenProvider {
     }
 
     /// Single-letter avatar initial derived from the display name.
+    ///
+    /// Kept only for source compatibility. **Do not call it** — use `identity` instead. It is what
+    /// produced "U" on Today (from the raw Clerk id `user_…`) while Profile independently produced
+    /// "Y" (from its own fallback label "Your account"): one user, two meaningless letters, one tap
+    /// apart. A wrong initial is worse than no initial.
+    @available(*, deprecated, message: "Use `identity` — an initial is never derived from an opaque id or from interface copy.")
     var avatarInitial: String {
-        displayName.first.map { String($0).uppercased() } ?? "•"
+        displayName.first.map { String($0).uppercased() } ?? "\u{2022}"
+    }
+
+    /// The ONE account identity. Both the Today avatar and the Profile monogram read this; neither
+    /// derives anything of its own.
+    ///
+    /// Precedence is strict: a real first name → the local part of an email address → **no letter
+    /// at all**, and a `person.fill` symbol in its place. An opaque provider id (`user_2xK…`) and a
+    /// piece of interface copy ("Your account", "Signed in", "Developer") are not names and may
+    /// never be reduced to a letter.
+    struct AccountIdentity: Equatable, Sendable {
+        enum Provenance: Equatable, Sendable {
+            /// A first name the user gave us.
+            case name
+            /// The local part of a verified email address.
+            case email
+            /// Nothing nameable. `initial` is nil; draw the symbol.
+            case anonymous
+            /// A local dev-bypass session. `#if DEBUG` surfaces only.
+            case developer
+        }
+
+        let displayName: String
+        /// `nil` means "draw `person.fill`", not "draw a bullet".
+        let initial: String?
+        let provenance: Provenance
+
+        /// The symbol to draw when there is no initial.
+        static let fallbackSymbol = "person.fill"
+    }
+
+    var identity: AccountIdentity {
+        switch mode {
+        case .clerk:
+            if let user = Clerk.shared.user {
+                if let name = user.firstName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   let letter = Self.letter(of: name) {
+                    return AccountIdentity(displayName: name, initial: letter, provenance: .name)
+                }
+                if let email = user.emailAddresses.first?.emailAddress,
+                   !email.isEmpty {
+                    let local = String(email.prefix(while: { $0 != "@" }))
+                    return AccountIdentity(displayName: email,
+                                           initial: Self.letter(of: local),
+                                           provenance: .email)
+                }
+            }
+            return AccountIdentity(displayName: "Your account", initial: nil, provenance: .anonymous)
+        case .dev:
+            // A `user_2xK…` id is neither a name nor an initial, so it is not `displayName` and
+            // it is not a letter. `provenance` is what says this is a dev session; the id itself
+            // belongs in a debug affordance, not in the account's heading.
+            return AccountIdentity(displayName: "Your account", initial: nil, provenance: .developer)
+        }
+    }
+
+    /// The first LETTER of a name, or nil. A leading digit, punctuation or emoji is not an initial.
+    private static func letter(of raw: String) -> String? {
+        guard let first = raw.trimmingCharacters(in: .whitespacesAndNewlines).first,
+              first.isLetter else { return nil }
+        return String(first).uppercased()
     }
 
     // MARK: - TokenProvider

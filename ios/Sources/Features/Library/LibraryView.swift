@@ -94,7 +94,7 @@ struct LibraryView: View {
                 .padding(.bottom, ThemeMetrics.tabBarClearance)
             }
             .scrollIndicators(.hidden)
-            .refreshable { await appModel.reload() }
+            .previouslyRefreshable { await appModel.reload() }
         }
         .scrollEdgeChrome()
         .overlay(alignment: .top) { washOverChrome }
@@ -312,17 +312,20 @@ struct LibraryView: View {
                               // renders in grey and the shipped `Announced` got backwards.
                               captionIsLead: caption.dated,
                               poster: f.cover,
-                              slot: .shelfLarge) {
+                              slot: .shelfLarge,
+                              zoomID: "lib/\(f.id)") {
                         onOpenDetail(f.id, "lib/\(f.id)")
                     }
                     .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
                 }
             }
-            .padding(.horizontal, ThemeMetrics.gutter)
+            .padding(.leading, ThemeMetrics.gutter)
             // The posters carry an `.art` shadow; without this the scroll view clips it into a
             // hard grey line down each card's left edge.
             .padding(.vertical, 2)
         }
+        // Art may run off the trailing edge; TYPE may not. See `shelfScroller`.
+        .shelfScroller()
         .scrollIndicators(.hidden)
         .scrollClipDisabled()
     }
@@ -626,14 +629,18 @@ struct LibraryAllView: View {
     }
 
     private var list: some View {
-        VStack(spacing: 0) {
+        // LAZY. At the stated 300-title library an eager `VStack` instantiates 300 `MediaRow`s and
+        // 300 `RemoteImageView`s on push — each with its own `PaletteCache.resolve` task — while
+        // its sibling poster path was already a `LazyVGrid`.
+        LazyVStack(spacing: 0) {
             ForEach(Array(results.enumerated()), id: \.element.id) { i, f in
                 MediaRow(title: f.title,
                          meta: rowMeta(f),
                          lead: rowLead(f),
                          poster: f.cover,
                          slot: .row,
-                         separator: i < results.count - 1) {
+                         separator: i < results.count - 1,
+                         zoomID: "all/\(f.id)") {
                     onOpenDetail(f.id, "all/\(f.id)")
                 }
                 .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }

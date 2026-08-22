@@ -15,8 +15,11 @@ final class AppModel {
     // Calendar feed span, in local days either side of today.
     static let scheduleBack = -7
     static let scheduleAhead = 14
-    static let undoSeconds: Double = 6
-    static let errorSeconds: Double = 4
+    // Toast lifetimes live on `SyncCenter` (`toastSeconds` / `errorSeconds`), which is the only
+    // thing that knows whether VoiceOver is running. These two constants were the reason that
+    // knowledge never reached the live timer: `SyncCenter.toastSeconds` was declared, documented
+    // and never called, while the sleep below used a hard-coded 6 — so an Undo a VoiceOver user
+    // could not reach in time was still exactly 6 seconds long.
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
     static let recentsKey = "recentSearches"
     static let maxRecents = 10
@@ -254,7 +257,7 @@ final class AppModel {
         errorToast = message
         errorTask?.cancel()
         errorTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(AppModel.errorSeconds))
+            try? await Task.sleep(for: .seconds(SyncCenter.shared.errorSeconds))
             if Task.isCancelled { return }
             await MainActor.run { self?.errorToast = nil }
         }
@@ -1012,7 +1015,7 @@ final class AppModel {
     private func scheduleUndoDismissal() {
         undoTask?.cancel()
         undoTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(AppModel.undoSeconds))
+            try? await Task.sleep(for: .seconds(SyncCenter.shared.toastSeconds))
             if Task.isCancelled { return }
             await MainActor.run { self?.undo = nil }
         }

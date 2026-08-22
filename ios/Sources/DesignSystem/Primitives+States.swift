@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // The shared component inventory for states, milestones and history (spec boards 09, 10, 12).
 //
@@ -17,13 +18,53 @@ extension ThemeMotion {
     static let uiCrossfade = ThemeMotion.uiReduced
 }
 
+// MARK: - Announcements
+
+/// VoiceOver announcements (WCAG 4.1.3, "status messages").
+///
+/// The shipped build had 45 labels, 10 hints, 6 values, 10 added traits and **zero** announcements
+/// and zero custom actions. A VoiceOver user typed a query and results arrived, or didn't, or
+/// failed — and nothing was spoken; marks committed silently; the undo toast appeared and expired
+/// unheard. Every state that SETTLES without the user having navigated to it announces here.
+@MainActor
+enum Announce {
+    /// A state settled where the user is already standing: results arrived, a mark committed, the
+    /// toast appeared. Polite — it waits for VoiceOver to finish whatever it is saying.
+    static func status(_ message: String) {
+        guard UIAccessibility.isVoiceOverRunning, !message.isEmpty else { return }
+        AccessibilityNotification.Announcement(message).post()
+    }
+
+    /// The stage changed under the user without a navigation: the recap card taking Today's hero,
+    /// a whole-surface state replacing content.
+    static func screenChanged(_ message: String? = nil) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        if let message, !message.isEmpty {
+            AccessibilityNotification.ScreenChanged(message).post()
+        } else {
+            AccessibilityNotification.ScreenChanged().post()
+        }
+    }
+}
+
 // MARK: - Empty state
 
-/// The one empty state. Always inside a card, always left-aligned: centring would introduce a
-/// second alignment grammar and the frame would jump when data arrives. The empty state occupies
-/// the rectangle the content will occupy — that *is* structural continuity.
+/// The one empty state.
 ///
-/// `primary` is the last parameter so the common single-action call reads as a trailing closure.
+/// Centred, not left-aligned. The shipped card was a left-aligned marketing plate with the symbol
+/// floating unattached at the top-left (its ink landing 2 pt right of the headline's x), a fixed
+/// `.system(size: 22)` that ignored Dynamic Type entirely, and a full-width accent capsule that
+/// read as a banner CTA. Centred with the symbol in its own tile is the shape every system
+/// `ContentUnavailableView` has, and it is the shape a user recognises as "there is nothing here"
+/// rather than as an advertisement.
+///
+/// **`primary` precedes `secondary`.** It used to be last, so `EmptyState(.serverNoCache) { retry }`
+/// — written at `ScheduleView:474` and `FranchiseDetailView:83` — bound the closure to `secondary`
+/// by Swift's forward-scan rule. `serverNoCache` has no secondary label, so the button was never
+/// drawn and **Schedule's and Detail's whole-screen server errors shipped with no Try again at
+/// all**, while the identical card on Today and Library (which pass `primary:` explicitly) was
+/// recoverable. Ordering makes the trailing-closure form correct by construction; the DEBUG
+/// assertion below catches the rest.
 struct EmptyState: View {
     enum Prominence {
         /// The whole surface has nothing to show.
@@ -34,42 +75,55 @@ struct EmptyState: View {
 
     let copy: EmptyStateCopy
     var prominence: Prominence = .major
-    var secondary: (() -> Void)? = nil
     var primary: (() -> Void)? = nil
+    var secondary: (() -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The symbol and its tile answer to Dynamic Type. The shipped card's `.system(size: 22)` was
+    /// the one piece of type on it that did not.
+    @ScaledMetric(relativeTo: .title3) private var glyphUnit: CGFloat = 1
 
     init(_ copy: EmptyStateCopy,
          prominence: Prominence = .major,
-         secondary: (() -> Void)? = nil,
-         primary: (() -> Void)? = nil) {
+         primary: (() -> Void)? = nil,
+         secondary: (() -> Void)? = nil) {
         self.copy = copy
         self.prominence = prominence
-        self.secondary = secondary
         self.primary = primary
+        self.secondary = secondary
+        #if DEBUG
+        // A state whose copy promises an action, wired to nothing, is the SYS-4 bug returning.
+        assert(copy.primaryLabel == nil || primary != nil || secondary != nil,
+               "EmptyState \u{201C}\(copy.title)\u{201D} declares \u{201C}\(copy.primaryLabel ?? "")\u{201D} but was given no handler")
+        #endif
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
-    private var minHeight: CGFloat { isAX ? 0 : (prominence == .major ? 212 : 132) }
-    private var pad: CGFloat { prominence == .major ? ThemeSpace.x5 : ThemeSpace.x4 }
+    /// `minHeight`, never `height`: at AX3–AX5 the card has to grow, not overflow.
+    private var minHeight: CGFloat { isAX ? 0 : (prominence == .major ? 236 : 148) }
+    private var pad: CGFloat { prominence == .major ? ThemeSpace.x6 : ThemeSpace.x5 }
     private var radius: CGFloat { prominence == .major ? ThemeRadius.focusCard : ThemeRadius.card }
-    private var titleToken: TypeToken { prominence == .major ? ThemeType.displayL : ThemeType.showTitleM }
+    private var titleToken: TypeToken { prominence == .major ? ThemeType.showTitleL : ThemeType.showTitleM }
     private var supportToken: TypeToken { prominence == .major ? ThemeType.callout : ThemeType.metadata }
-    private var titleGap: CGFloat { prominence == .major ? 6 : 4 }
-    private var actionGap: CGFloat { prominence == .major ? ThemeSpace.x5 : ThemeSpace.x4 }
+    private var tile: CGFloat { (prominence == .major ? 60 : 48) * glyphUnit }
+    private var glyph: CGFloat { (prominence == .major ? 26 : 20) * glyphUnit }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
                 if let symbol = copy.symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(ThemeColor.textTertiary)
-                        .padding(.bottom, ThemeSpace.x3)
+                        .font(.system(size: glyph, weight: .regular))
+                        .foregroundStyle(ThemeColor.accent)
+                        .frame(width: tile, height: tile)
+                        .background(ThemeColor.accentSoft,
+                                    in: RoundedRectangle(cornerRadius: tile / 3.2, style: .continuous))
+                        .padding(.bottom, ThemeSpace.x4)
                 }
                 Text(copy.title)
                     .type(titleToken)
                     .foregroundStyle(ThemeColor.textPrimary)
+                    .multilineTextAlignment(.center)
                     // At accessibility sizes the card grows instead of clipping the title.
                     .lineLimit(isAX ? nil : (prominence == .major ? 3 : 2))
                     .fixedSize(horizontal: false, vertical: true)
@@ -77,11 +131,12 @@ struct EmptyState: View {
                     Text(supporting)
                         .type(supportToken)
                         .foregroundStyle(ThemeColor.textSecondary)
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, titleGap)
+                        .padding(.top, ThemeSpace.x2)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 320)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(copy.spokenLabel)
 
@@ -90,26 +145,40 @@ struct EmptyState: View {
             // The button exists only when the caller supplied something for it to do.
             if (copy.primaryLabel != nil && primary != nil)
                 || (copy.secondaryLabel != nil && secondary != nil) {
-                VStack(alignment: .leading, spacing: ThemeSpace.x2) {
+                VStack(spacing: ThemeSpace.x1) {
                     if let label = copy.primaryLabel, let primary {
                         Button(label, action: primary)
                             .buttonStyle(PrimaryButtonStyle2())
+                            // Not full width: a 376-pt amber capsule under a "nothing here"
+                            // sentence is a banner, not a recovery action.
+                            .frame(maxWidth: isAX ? .infinity : 280)
                     }
                     if let label = copy.secondaryLabel, let secondary {
                         Button(label, action: secondary)
                             .buttonStyle(TertiaryButtonStyle2())
                     }
                 }
-                .padding(.top, actionGap)
+                .padding(.top, ThemeSpace.x5)
             }
         }
         .padding(pad)
-        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: minHeight)
         // A plate. "Nothing here" is the quietest thing on any screen; outlining it in grey was
         // the loudest way to draw it.
         .surface(.plate, radius: radius)
         // Opacity only: an empty state that scales in reads as a celebration of having nothing.
         .transition(.opacity)
+    }
+}
+
+extension View {
+    /// The shared placement for a state that owns its whole surface: vertically centred in the
+    /// content area, never top-pinned above 950–1100 pt of void (Library) or floated in the upper
+    /// third (Search). `contentH` is the scroll view's own height.
+    ///
+    /// `minHeight`, so AX3–AX5 grows the block instead of overflowing it.
+    func centredState(contentH: CGFloat, clearance: CGFloat = ThemeMetrics.tabBarClearance) -> some View {
+        frame(maxWidth: .infinity, minHeight: max(0, contentH - clearance), alignment: .center)
     }
 }
 
@@ -501,7 +570,18 @@ struct QueryProgressBar: View {
         .frame(height: 1)
         .background(ThemeColor.accent.opacity(active ? 0.14 : 0))
         .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: active)
+        // Hidden as a GRAPHIC, but not silent: a 1-pt bar is meaningless to VoiceOver, while "a
+        // request is running" is exactly what a VoiceOver user needs and had no way to observe.
         .accessibilityHidden(true)
+        .overlay(alignment: .leading) {
+            if active {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(Copy.Accessibility.loading)
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
+        }
     }
 }
 
@@ -582,7 +662,11 @@ struct SectionHeaderRow: View {
             if let count {
                 Text("\(count)")
                     .type(ThemeType.sectionLabel)
-                    .foregroundStyle(ThemeColor.textDisabled)
+                    // `textTertiary` (#85817C, 5.14:1), not `textDisabled` (#6C6965, 3.64:1): this
+                    // is the smallest type in the app and it was rendered in the dimmest ink, below
+                    // the 4.5:1 AA floor that applies to text at any size. `textDisabled` is
+                    // reserved for the chevron glyph, where the 3:1 non-text threshold applies.
+                    .foregroundStyle(ThemeColor.textTertiary)
                     .monospacedDigit()
             }
             Spacer(minLength: ThemeSpace.x2)
@@ -867,6 +951,17 @@ extension View {
         modifier(SeasonCompleteSweep(token: token, reduceMotion: reduceMotion))
     }
 
+    /// The app's emotional payoff, given the one motion token minted for it.
+    ///
+    /// `ThemeMotion.uiMilestone` — "one restrained overshoot for a meaningful milestone (series
+    /// complete only)" — had **zero call sites**, so finishing a series flipped the status chip
+    /// with an instant text swap. Applied to the chip (or whatever carries the status), keyed on
+    /// the WRITE that completed the last part of the last season and claimed through
+    /// `SeasonSweepLedger`, so it fires exactly once per commit and never replays on a scroll back.
+    func milestone(token: UUID?, reduceMotion: Bool) -> some View {
+        modifier(MilestoneSettle(token: token, reduceMotion: reduceMotion))
+    }
+
     /// `contentTransition(.numericText())` on the four numbers board 12 allows it on: the backlog
     /// count after a mark, the library count, a confirmation summary, and the foreground
     /// countdown. Nowhere else — constant movement turns state into spectacle.
@@ -898,6 +993,26 @@ extension View {
     func previouslyRefreshable(threshold: CGFloat = 80,
                                _ action: @escaping @Sendable () async -> Void) -> some View {
         modifier(PreviouslyRefreshable(threshold: threshold, action: action))
+    }
+}
+
+/// One restrained overshoot, once per commit. No scrim, no disc, no confetti — the same discipline
+/// `SeasonCompleteSweep` keeps, on the element that carries the new status.
+private struct MilestoneSettle: ViewModifier {
+    let token: UUID?
+    let reduceMotion: Bool
+
+    @State private var scale: CGFloat = 1
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(scale)
+            .onChange(of: token, initial: true) { _, token in
+                guard let token, SeasonSweepLedger.claim(token) else { scale = 1; return }
+                guard !reduceMotion else { scale = 1; return }
+                scale = 0.94
+                withAnimation(ThemeMotion.uiMilestone) { scale = 1 }
+            }
     }
 }
 

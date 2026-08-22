@@ -164,31 +164,20 @@ struct TodayView: View {
             Wordmark()
             Spacer(minLength: ThemeSpace.x4)
             Button { showProfile = true } label: {
-                Text(initial)
-                    .type(ThemeType.showTitleS)
-                    .foregroundStyle(ThemeColor.textPrimary)
-                    .frame(width: 34, height: 34)
-                    // Warmed with `accentSoft` — the same identity the Profile row uses, so the
-                    // account reads as a person rather than as an empty ring floating on the art.
-                    .background(ThemeColor.accentSoft, in: Circle())
+                AccountDisc(identity: auth.identity, diameter: 34)
                     .chromeGlass(in: Circle())
                     .shadow(.art)
                     .frame(width: 44, height: 44)
                     .contentShape(Circle())
             }
-            .buttonStyle(.plain)
+            // The largest targets on this screen had no press state at all. `OverArtPressStyle`
+            // dips and compresses instead of washing a grey rectangle over the artwork.
+            .buttonStyle(OverArtPressStyle())
             .accessibilityLabel("Profile")
         }
         .padding(.leading, ThemeMetrics.gutter)
         .padding(.trailing, ThemeSpace.x2)
         .frame(height: TodayView.headerBand)
-    }
-
-    /// One letter. "YA" in a 30-pt grey ring is a form field, not a person.
-    private var initial: String {
-        let name = auth.displayName.trimmingCharacters(in: .whitespaces)
-        guard let first = name.split(separator: " ").first?.first else { return "\u{2022}" }
-        return String(first).uppercased()
     }
 
     // MARK: - Content states
@@ -515,8 +504,12 @@ struct TodayView: View {
                          poster: f.cover,
                          slot: .row,
                          chevron: false,
-                         separator: index < shelf.count - 1) {
-                    onOpenDetail(f.id, "shelf/\(f.id)")
+                         separator: index < shelf.count - 1,
+                         // A distinct id from the poster shelf's: the same franchise must never
+                         // register two zoom sources in one namespace, even when only one of the
+                         // two layouts is mounted at a time.
+                         zoomID: "shelfrow/\(f.id)") {
+                    onOpenDetail(f.id, "shelfrow/\(f.id)")
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
             }
@@ -531,15 +524,18 @@ struct TodayView: View {
                               caption: shelfCaption(f),
                               captionIsLead: appModel.shelfState(of: f) == .newEpisode,
                               poster: f.cover,
-                              slot: .shelfMedium) {
+                              slot: .shelfMedium,
+                              zoomID: "shelf/\(f.id)") {
                         onOpenDetail(f.id, "shelf/\(f.id)")
                     }
                 }
             }
-            .padding(.horizontal, ThemeMetrics.gutter)
+            .padding(.leading, ThemeMetrics.gutter)
         }
         .scrollIndicators(.hidden)
         .scrollClipDisabled()
+        // Art may run off the trailing edge; TYPE may not. See `shelfScroller`.
+        .shelfScroller()
     }
 
     private func shelfCaption(_ f: Franchise) -> String? {
@@ -890,99 +886,6 @@ private struct HeroFocus: View {
                 // primary it has to hug its own label instead of claiming half the row.
                 .fixedSize(horizontal: !isAX, vertical: false)
         }
-    }
-}
-
-// MARK: - The split primary
-
-/// "Mark as watched" with the batch options behind a real split.
-///
-/// The shipped build drew a 48-pt accent capsule with a bare `chevron.down` floating at the right
-/// inset — no divider, no target boundary, no pressed state of its own. It read as a button with a
-/// decoration on it. This is one capsule containing two 44-pt targets separated by a hairline:
-/// tapping the label marks, tapping the chevron opens the batch menu.
-private struct MarkSplitButton: View {
-    let episode: Int
-    let committed: Bool
-    let behind: Int
-    let title: String
-    let onMark: () -> Void
-    let onMarkThrough: (Int) -> Void
-    let onMarkAll: () -> Void
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var showsMenu: Bool { behind > 1 && !committed }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onMark) {
-                HStack(spacing: ThemeSpace.x2) {
-                    if committed {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 14, weight: .bold))
-                            .transition(reduceMotion
-                                        ? .opacity
-                                        : .scale(scale: 0.6).combined(with: .opacity))
-                    }
-                    Text(committed ? TodayCopy.episodeWatched(episode) : Copy.Action.markAsWatched)
-                        .type(ThemeType.button)
-                        .contentTransition(.interpolate)
-                }
-                .foregroundStyle(ThemeColor.onAccent)
-                .padding(.horizontal, ThemeSpace.x5)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(SplitHalfStyle())
-            .allowsHitTesting(!committed)
-            .accessibilityLabel(committed
-                                ? TodayCopy.episodeWatched(episode)
-                                : "\(Copy.Action.markAsWatched), \(Copy.episode(episode)) of \(title)")
-
-            if showsMenu {
-                Rectangle()
-                    .fill(ThemeColor.onAccent.opacity(0.18))
-                    .frame(width: 1, height: 24)
-                Menu {
-                    let through = min(episode + 4, episode + behind - 1)
-                    if through > episode {
-                        Button(Copy.Action.markThrough(through)) { onMarkThrough(through) }
-                    }
-                    Button(Copy.Action.markAll(behind)) { onMarkAll() }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(ThemeColor.onAccent)
-                        .frame(width: 46, height: 48)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(SplitHalfStyle())
-                .accessibilityLabel("More ways to mark")
-            }
-        }
-        .background(ThemeColor.accent)
-        .clipShape(Capsule())
-        // The lit top edge every filled control in this app carries: a flat #F0A24E rectangle is
-        // a swatch, the same rectangle with one lit edge is an object.
-        .overlay(Capsule().strokeBorder(
-            LinearGradient(colors: [ThemeColor.controlSheen, .clear],
-                           startPoint: .top, endPoint: .center),
-            lineWidth: 1))
-        .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: committed)
-    }
-}
-
-/// One half of a split control: the press darkens only the half under the finger, inside the
-/// shared capsule, so the boundary the divider promises is real.
-private struct SplitHalfStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(configuration.isPressed ? ThemeColor.accentPressed : Color.clear)
-            .animation(ThemeMotion.pick(ThemeMotion.uiPress, reduceMotion: reduceMotion),
-                       value: configuration.isPressed)
     }
 }
 

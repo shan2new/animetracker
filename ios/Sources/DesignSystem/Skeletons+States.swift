@@ -1,11 +1,18 @@
 import SwiftUI
 
-// Structural skeletons (board 09). A skeleton is the shape of the content that is coming, drawn
-// once and never animated: no shimmer, no pulse, no breathing opacity, no spinner. Board 12
-// refuses shimmer on skeletons by name.
+// Structural skeletons (board 09). A skeleton is the shape of the content that is coming. Board 12
+// refuses SHIMMER on skeletons by name and that stands — a travelling highlight is decoration
+// pretending to be progress. What the gate does allow, and what a completely static skeleton could
+// not answer, is "is this still working?": a 1.4-s opacity breath (0.65 ↔ 1.0, static 0.85 under
+// Reduce Motion) and a small `ProgressView` once the wait passes 800 ms.
 //
 // The 240 / 320 / 120 rule lives in `SkeletonGate` and nowhere else. A screen composes its
 // skeleton from the atoms below and hands it to the gate; it never re-implements the timing.
+
+/// The one motion a skeleton gets. Shimmer stays refused (board 12 names it); a 1.4-s ease-in-out
+/// breath says "still working" without a travelling highlight, and under Reduce Motion it collapses
+/// to a static 0.85. A file-level constant because `SkeletonGate` is generic and cannot hold one.
+private let skeletonBreath = Animation.easeInOut(duration: 1.4).repeatForever(autoreverses: true)
 
 // MARK: - The gate
 
@@ -28,6 +35,11 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
     /// Monotonic: a wall-clock stamp could be moved by the system mid-window and compute a
     /// negative or absurd remainder. `ContinuousClock` cannot be adjusted.
     @State private var shownAt: ContinuousClock.Instant?
+    /// A wait long enough that the structure alone stops answering "is this working?".
+    @State private var slow = false
+    @State private var breathing = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(isLoading: Bool,
          @ViewBuilder skeleton: @escaping () -> Skeleton,
@@ -41,6 +53,20 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
         ZStack(alignment: .top) {
             if visible {
                 skeleton()
+                    .opacity(reduceMotion ? 0.85 : (breathing ? 1.0 : 0.65))
+                    .animation(reduceMotion ? nil : skeletonBreath, value: breathing)
+                    .overlay(alignment: .top) {
+                        // HIG: an indeterminate wait past ~800 ms needs a progress affordance, not
+                        // just structure. Below that it would be a flicker.
+                        if slow {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(ThemeColor.textTertiary)
+                                .padding(.top, ThemeSpace.x2)
+                                .transition(.opacity)
+                        }
+                    }
+                    .onAppear { breathing = true }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(Copy.Accessibility.loading)
             } else if isLoading {
@@ -60,7 +86,13 @@ struct SkeletonGate<Skeleton: View, Content: View>: View {
                 guard !Task.isCancelled, isLoading else { return }
                 shownAt = ContinuousClock.now
                 visible = true
+                try? await Task.sleep(for: .milliseconds(800))
+                guard !Task.isCancelled, isLoading else { return }
+                withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) {
+                    slow = true
+                }
             } else {
+                slow = false
                 guard visible else { return }
                 // Minimum visible window: a skeleton that blinks is worse than one that stays.
                 if let shownAt {
@@ -153,19 +185,42 @@ struct SkeletonCard<Content: View>: View {
 }
 
 /// A horizontal poster shelf.
+///
+/// `titleLines` must match what `ShelfCard` RESERVES, or the swap jumps. Measured on Library: the
+/// skeleton put "WATCHING" at 493 pt and the real content at 537 pt, because the skeleton emitted
+/// two text lines where a `ShelfCard` reserves two *title* lines **plus** a caption — so everything
+/// below moved 44 pt at the swap, and because `SkeletonGate` crossfades in a `ZStack` you saw both
+/// misaligned lists superimposed for 120 ms.
+///
+/// `count` defaults to 5, not 3: the real shelf runs off the trailing edge, and a skeleton that
+/// stops short of it promises a shorter shelf than the one that arrives.
 struct SkeletonShelf: View {
-    var count: Int = 3
+    var count: Int = 5
     var size: CGSize = PosterSize.shelfLarge.size
     var caption: Bool = false
+    /// Title lines the destination `ShelfCard` reserves. Two everywhere in this app today.
+    var titleLines: Int = 2
+
+    /// The same @ScaledMetric heights `ShelfCard`'s type occupies, so the handoff lands flush at
+    /// every Dynamic Type size rather than only at `.large`.
+    @ScaledMetric(relativeTo: .subheadline) private var titleLine: CGFloat = 13
+    @ScaledMetric(relativeTo: .caption) private var captionLine: CGFloat = 11
 
     var body: some View {
-        HStack(alignment: .top, spacing: ThemeSpace.x3) {
+        HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
             ForEach(0..<count, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: ThemeSpace.x2) {
                     SkeletonPoster(width: size.width, height: size.height)
-                    if caption {
-                        SkeletonLine(width: size.width * 0.78, height: 10)
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(0..<max(0, titleLines), id: \.self) { line in
+                            SkeletonLine(width: line == titleLines - 1 ? size.width * 0.62 : size.width,
+                                         height: titleLine)
+                        }
+                        if caption {
+                            SkeletonLine(width: size.width * 0.45, height: captionLine)
+                        }
                     }
+                    .frame(width: size.width, alignment: .leading)
                 }
             }
         }
@@ -209,9 +264,13 @@ enum Skeleton {
                 .padding(.horizontal, ThemeSpace.x4)
                 .padding(.top, ThemeSpace.x2)
 
-            SkeletonShelf()
-                .padding(.horizontal, ThemeSpace.x4)
+            // Captioned, and leading-inset only: the real shelf runs off the trailing edge, so a
+            // skeleton that stops short of it hands off to a wider list than it drew.
+            SkeletonShelf(size: PosterSize.shelfMedium.size, caption: true)
+                .padding(.leading, ThemeSpace.x4)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
     }
 
     /// Week strip, day rule, one group of dated rows.
@@ -248,8 +307,10 @@ enum Skeleton {
                 }
             }
         }
-        .padding(.horizontal, ThemeSpace.x4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, ThemeSpace.x4)
         .padding(.top, ThemeSpace.x2)
+        .clipped()
     }
 
     /// The compact instrument behind All titles.

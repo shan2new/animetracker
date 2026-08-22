@@ -102,6 +102,14 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .today
     /// One navigation path per tab; Detail and its episode list push onto the active tab's path.
     @State private var paths: [AppTab: NavigationPath] = [:]
+    /// The zoom-transition namespace, published to every card in every tab.
+    ///
+    /// `zoomSource(_:)` had zero call sites and `\.zoomNamespace` was never populated, so the
+    /// modifier was a permanent no-op — while a `zoomID` string was threaded through five view
+    /// signatures, `DetailRoute`, `openDetail`, `openEpisode` and every call site ("focus/…",
+    /// "shelf/…", "all/…") and read by nothing. All six routes into Detail were a plain slide, on
+    /// the single most-executed transition in the product.
+    @Namespace private var zoom
 
     private func path(_ tab: AppTab) -> Binding<NavigationPath> {
         Binding(get: { paths[tab] ?? NavigationPath() }, set: { paths[tab] = $0 })
@@ -122,14 +130,14 @@ struct MainTabView: View {
                         TodayView(onOpenDetail: openDetail,
                                   onSeeAllWatching: { selectedTab = .library },
                                   onAddShow: { selectedTab = .discover })
-                            .detailDestinations(push: { push(.today, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.today, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .today)
                 }
                 Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
                     NavigationStack(path: path(.schedule)) {
                         ScheduleView(onOpenDetail: openEpisode, onAddShow: { selectedTab = .discover })
-                            .detailDestinations(push: { push(.schedule, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.schedule, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .schedule)
                 }
@@ -137,18 +145,19 @@ struct MainTabView: View {
                     NavigationStack(path: path(.library)) {
                         LibraryView(onOpenDetail: openDetail,
                                     onAddShow: { selectedTab = .discover })
-                            .detailDestinations(push: { push(.library, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.library, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .library)
                 }
                 Tab(value: AppTab.discover, role: .search) {
                     NavigationStack(path: path(.discover)) {
                         DiscoverView(onOpenDetail: openDetail)
-                            .detailDestinations(push: { push(.discover, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.discover, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .discover)
                 }
             }
+            .environment(\.zoomNamespace, zoom)
             .sensoryFeedback(.selection, trigger: selectedTab)
             .task {
                 // One freshness source for every stale strip and Profile's sync line.
@@ -159,9 +168,14 @@ struct MainTabView: View {
             }
 
             // Undo / sync / error toasts float above the tab bar, over whatever is pushed.
+            // 22 pt is the tab bar's OWN horizontal margin; the shipped 17 disagreed with it by
+            // 5 pt, which is exactly the kind of gap that reads as "assembled" rather than
+            // "designed". Content clears the toast through `ThemeMetrics.toastClearance` rather
+            // than being covered by it — the shipped toast sat on top of the Watching shelf's
+            // captions for the whole 6-second window.
             ToastHost()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 58)
+                .padding(.horizontal, 22)
+                .padding(.bottom, ThemeSpace.x3)
         }
     }
 
@@ -184,10 +198,17 @@ struct MainTabView: View {
 
 private extension View {
     /// The two destinations every tab can reach: a franchise, and a season's episode list.
-    func detailDestinations(push: @escaping (FranchiseDetailView.DetailPush) -> Void) -> some View {
+    ///
+    /// Detail arrives by growing out of the poster that was tapped (`.zoom` has been the default
+    /// for media apps since iOS 18) — `route.zoomID` is the id the tapped card registered through
+    /// `zoomSource(_:)`, so the same franchise can be opened from several surfaces at once and each
+    /// one animates from its own artwork.
+    func detailDestinations(zoom: Namespace.ID,
+                            push: @escaping (FranchiseDetailView.DetailPush) -> Void) -> some View {
         self
             .navigationDestination(for: DetailRoute.self) { route in
                 FranchiseDetailView(franchiseId: route.id, focus: route.focus, push: push)
+                    .navigationTransition(.zoom(sourceID: route.zoomID, in: zoom))
             }
             .navigationDestination(for: FranchiseDetailView.DetailPush.self) { p in
                 switch p {

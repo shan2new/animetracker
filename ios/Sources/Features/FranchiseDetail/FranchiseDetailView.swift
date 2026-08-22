@@ -712,40 +712,23 @@ struct FranchiseDetailView: View {
     /// divider and no target of its own — a button with a decoration on it. The batch options now
     /// live on the capsule's long press (`Menu(primaryAction:)`) and in the overflow, where they
     /// are labelled; the capsule is just the action.
+    /// The SHARED split control (`DesignSystem/Primitives.swift`), identical to Today's.
+    ///
+    /// It was a `Menu(primaryAction:)` here: same amber capsule, but with no chevron, no divider
+    /// and no target boundary, so the batch options were reachable only by long press — on the one
+    /// surface where a user actually catches up six episodes at a time. The checkmark also drew on
+    /// an unbranched `.transition(.scale(0.6))` while Today's identical one was Reduce-Motion
+    /// branched, and the label used `.contentTransition(.interpolate)` to morph two unrelated
+    /// sentences into an unreadable smear. All three are fixed by using the one implementation.
     @ViewBuilder
     private func cta(_ f: Franchise, part: FranchisePart, episode: Int, behind: Int, committed: Bool) -> some View {
-        let label = HStack(spacing: 8) {
-            if committed {
-                Image(systemName: "checkmark").font(.system(size: 14, weight: .bold))
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-            Text(committed ? "\(Copy.episode(episode)) watched" : Copy.Action.markAsWatched)
-                .contentTransition(.interpolate)
-        }
-        .frame(maxWidth: .infinity)
-        .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: committed)
-
-        if behind > 1 && !committed {
-            Menu {
-                let through = min(episode + 4, part.markTarget(now: now))
-                if through > episode {
-                    Button(Copy.Action.markThrough(through)) { promptBatchMark(f, part: part, through: through) }
-                }
-                Button(Copy.Action.markAll(behind)) { promptBatchMark(f, part: part, through: part.markTarget(now: now)) }
-                Button(Copy.Action.viewEpisodes) { push(.episodes(franchiseId: f.id, mediaId: part.mediaId, focusEpisode: nil)) }
-            } label: {
-                label
-            } primaryAction: {
-                mark(f, part: part)
-            }
-            .buttonStyle(PrimaryButtonStyle2())
-            .accessibilityLabel("Mark \(Copy.episode(episode)) as watched")
-        } else {
-            Button { mark(f, part: part) } label: { label }
-                .buttonStyle(PrimaryButtonStyle2())
-                .allowsHitTesting(!committed)
-                .accessibilityLabel(committed ? "\(Copy.episode(episode)) watched" : "Mark \(Copy.episode(episode)) as watched")
-        }
+        MarkSplitButton(episode: episode,
+                        committed: committed,
+                        behind: behind,
+                        title: f.title,
+                        onMark: { mark(f, part: part) },
+                        onMarkThrough: { promptBatchMark(f, part: part, through: $0) },
+                        onMarkAll: { promptBatchMark(f, part: part, through: part.markTarget(now: now)) })
     }
 
     // MARK: - Mark timeline (board 03)
@@ -973,7 +956,11 @@ struct SeasonEpisodesView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
                             header(f, part: part)
-                            VStack(spacing: 0) {
+                            // LAZY. One Piece Season 1 advertises ~1,140 episodes; eagerly building
+                            // every row (each with a palette task) is a multi-second freeze on the
+                            // push transition and a plausible watchdog termination. `.id("ep-n")`
+                            // and the `proxy.scrollTo` focus jump both still work.
+                            LazyVStack(spacing: 0) {
                                 ForEach(1...max(1, count(part)), id: \.self) { n in
                                     row(f, part: part, n: n, isLast: n == count(part))
                                         .id("ep-\(n)")
@@ -1276,10 +1263,18 @@ struct SeasonSweepHairline: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .onAppear {
-            guard !reduceMotion, SeasonSweepLedger.claim(token) else { return }
+            guard SeasonSweepLedger.claim(token) else { return }
             visible = true
-            withAnimation(ThemeMotion.uiSweep) { progress = 1 } completion: {
-                withAnimation(ThemeMotion.uiGentle.delay(0.4)) { visible = false }
+            // Both curves go through `pick`. The shipped pair were raw `uiSweep` and
+            // `uiGentle.delay(0.4)` behind a `!reduceMotion` early return, which meant Reduce
+            // Motion did not calm the milestone — it deleted it. A milestone is information; the
+            // setting suppresses its THEATRE, not its acknowledgement.
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiSweep, reduceMotion: reduceMotion)) {
+                progress = 1
+            } completion: {
+                withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion).delay(0.4)) {
+                    visible = false
+                }
             }
         }
     }

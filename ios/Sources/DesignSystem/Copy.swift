@@ -10,6 +10,16 @@ import Foundation
 // "Previously." always with its full stop. Notation is "Season 4 · Episode 19" — never E19, Ep 19
 // or S5 E19.
 //
+// The brand is NEVER a clause subject. "Previously couldn’t reach the server" — stripped of the
+// full stop the name requires — reverts to its ordinary meaning and the line parses as the adverb:
+// *previously*, it couldn’t reach the server, i.e. it can now. Nor may a screen substitute its own
+// subject ("Search couldn’t reach the server"), which gave one failure two names one tab apart.
+// A failure states the fact and nothing else: "Couldn’t reach the server".
+//
+// Nor does a state promise a benefit on a different tab. "Add your first show and Today builds
+// itself." ran verbatim on Library AND Schedule, under a title naming neither. Each surface owns
+// its own empty sentence, about itself.
+//
 // Capitalisation rule (resolves the board 09 / board 03 apparent conflict):
 //   • `Episode 19` is capitalised when it is a LABEL or identifier
 //     ("Season 4 · Episode 19", "Episode 19 next", "Episode 19 marked as watched");
@@ -171,6 +181,18 @@ enum Copy {
     enum Toast {
         static func marked(episode n: Int) -> String { "\(Copy.episode(n)) marked as watched" }
         static func batchMarked(_ n: Int) -> String { "\(Copy.episodes(n)) marked as watched" }
+
+        /// The same fact, carrying its SUBJECT. The bare form names neither show nor season, yet
+        /// the identical toast fires from a Schedule row and a Library context menu, where the
+        /// user has just acted on one of several shows and "Episode 2 marked as watched" cannot
+        /// say which. The title is the part allowed to truncate; the fact never is.
+        static func marked(title: String, episode n: Int) -> String {
+            title.isEmpty ? marked(episode: n) : "\(title) \u{b7} \(Copy.episode(n)) watched"
+        }
+
+        static func batchMarked(title: String, _ n: Int) -> String {
+            title.isEmpty ? batchMarked(n) : "\(title) \u{b7} \(Copy.episodes(n)) watched"
+        }
         /// Remove never touches history, and the toast says so in words.
         static let removed = "Removed from Library. Watch history kept."
         static func added(title: String, status: String) -> String { "Added \(title) to \(status)" }
@@ -233,6 +255,9 @@ enum Copy {
     enum Progress {
         static func watchedOf(_ watched: Int, _ total: Int) -> String { "\(watched) of \(total) watched" }
         static func episodeNext(_ n: Int) -> String { "\(Copy.episode(n)) next" }
+        /// The committed state of the mark control. Lives here rather than in a screen's private
+        /// copy enum because `MarkSplitButton` renders it on four surfaces.
+        static func episodeWatched(_ n: Int) -> String { "\(Copy.episode(n)) watched" }
         static func episodeAiring(_ n: Int) -> String { "\(Copy.episode(n)) airing" }
         static func behind(_ n: Int) -> String { "\(Copy.episodes(n)) behind" }
         static func left(_ n: Int) -> String { "\(Copy.episodes(n)) left" }
@@ -479,7 +504,9 @@ extension Copy {
             Accessibility.wordmarkLive(1), Accessibility.wordmarkLive(3),
         ]
         out += statusesInOrder
-        for copy in [EmptyStateCopy.emptyAccount, .noWatching, .offlineCached, .offlineNoData,
+        for copy in [EmptyStateCopy.emptyAccount, .emptyToday, .emptySchedule,
+                     .noWatching, .offlineCached, .offlineNoData,
+                     .searchFailed, .searchLaunchpad, .noSessions,
                      .serverNoCache, .noFilterMatches, .nothingScheduled, .everythingSynced,
                      .calmToday(title: "Frieren", when: "Returns tomorrow"),
                      .caughtUp(title: "Frieren", when: "Returns tomorrow"),
@@ -547,10 +574,27 @@ struct EmptyStateCopy: Equatable, Sendable {
 
     // Board 09's table, verbatim.
 
+    /// LIBRARY's empty account. Every root has its own — see the voice note at the top of this
+    /// file: a state may not promise a benefit on a tab the user is not looking at.
     static let emptyAccount = EmptyStateCopy(
         symbol: "plus",
         title: "Your library is empty",
-        supporting: "Add your first show and Today builds itself.",
+        supporting: "Everything you add shows up here.",
+        primaryLabel: Copy.Action.addAShow)
+
+    /// TODAY's empty account.
+    static let emptyToday = EmptyStateCopy(
+        symbol: "plus",
+        title: "Nothing to watch yet",
+        supporting: "Add a show and this screen fills in with what is next.",
+        primaryLabel: Copy.Action.addAShow)
+
+    /// SCHEDULE's empty account. Distinct from `nothingScheduled`, which is a stocked library with
+    /// no dated episodes in it.
+    static let emptySchedule = EmptyStateCopy(
+        symbol: "plus",
+        title: "Nothing scheduled",
+        supporting: "Add a show and its air dates appear here.",
         primaryLabel: Copy.Action.addAShow)
 
     static let noWatching = EmptyStateCopy(
@@ -572,11 +616,13 @@ struct EmptyStateCopy: Equatable, Sendable {
         symbol: "clock.arrow.circlepath",
         title: "No watch history yet",
         supporting: "Your first watch is recorded when you finish the show. Rewatches appear here as sessions.")
+    /// Search's transport failure. The SAME title as `serverNoCache` on purpose — one failure has
+    /// one name — with a supporting line that names what could not be done.
     static let searchFailed = EmptyStateCopy(
         symbol: "wifi.exclamationmark",
-        title: "Search couldn\u{2019}t reach the server",
-        supporting: "Check your connection and try again.",
-        primaryLabel: "Try again")
+        title: "Couldn\u{2019}t reach the server",
+        supporting: "Your search didn\u{2019}t get through. Check your connection and try again.",
+        primaryLabel: Copy.Action.tryAgain)
     static let offlineNoData = EmptyStateCopy(
         symbol: "wifi.slash",
         title: "Connect to load your library",
@@ -608,8 +654,10 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// (NWPathMonitor), never guessed from the error.
     static let serverNoCache = EmptyStateCopy(
         symbol: "exclamationmark.triangle",
-        title: "Previously couldn\u{2019}t reach the server",
-        supporting: "Your saved library will appear as soon as the connection returns.",
+        title: "Couldn\u{2019}t reach the server",
+        // Not "your saved library will appear": in the no-cache state there IS no saved copy, which
+        // is the whole reason this state exists rather than `offlineCached`.
+        supporting: "The server didn\u{2019}t respond. Try again in a moment.",
         primaryLabel: Copy.Action.tryAgain)
 
     /// Search returned nothing. Carried forward from the v5 state tiles, reworded to the v9 voice.
