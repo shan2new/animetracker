@@ -6,6 +6,7 @@ import SwiftUI
 
 // A diagonal highlight that sweeps across whatever it's masked to. Used for skeletons and to make
 // the "Searching…" label feel active. Confine it with `.shimmering(_:)`.
+@available(*, deprecated, message: "Retired - board 12 refuses shimmer on skeletons by name.")
 struct ShimmerSweep: View {
     @State private var phase: CGFloat = -1
 
@@ -33,6 +34,7 @@ extension View {
     // Overlays a moving highlight masked to the receiver's shape. `active == false` is a no-op so
     // it can be bound directly to a loading flag.
     @ViewBuilder
+    @available(*, deprecated, message: "Retired - board 12 refuses shimmer on skeletons by name.")
     func shimmering(_ active: Bool = true) -> some View {
         if active {
             overlay { ShimmerSweep().mask(self).blendMode(.plusLighter) }
@@ -44,6 +46,7 @@ extension View {
 
 // A thin indeterminate progress bar — an accent segment sweeping left→right over a faint track.
 // Shown whenever a search is in flight, so even re-searches over existing results read as "working".
+@available(*, deprecated, message: "Retired - use QueryProgressBar (1 pt, board 07), not a 2.5-pt accent capsule.")
 struct IndeterminateBar: View {
     @State private var x: CGFloat = -0.4
 
@@ -69,6 +72,7 @@ struct IndeterminateBar: View {
 // A placeholder with the exact footprint of a PosterCard (2:3, same corner radius and hairline),
 // with shimmering title/subtitle bars — the skeleton-screen pattern, so the grid keeps its shape
 // while real results load.
+@available(*, deprecated, message: "Retired - compose SkeletonPoster/SkeletonLine inside SkeletonGate.")
 struct PosterCardSkeleton: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 15, style: .continuous)

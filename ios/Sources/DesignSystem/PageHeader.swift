@@ -1,27 +1,8 @@
 import SwiftUI
 
-// Shared inline page header — the same title + subtitle treatment Today and Schedule draw at the
-// top of their scroll content (native nav bar hidden). Library and Add use this so every tab's
-// header reads identically instead of falling back to iOS's large navigation title.
-struct PageHeader: View {
-    let title: String
-    var subtitle: String? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .scaledFont(27, weight: .semibold)
-                .tracking(-0.8)
-            if let subtitle {
-                Text(subtitle)
-                    .scaledFont(14)
-                    .foregroundStyle(Theme.text52)
-                    .lineSpacing(2)
-                    .padding(.top, 8)
-            }
-        }
-    }
-}
+// The `PageHeader` struct that used to live here had zero call sites and has been deleted; the
+// interaction system draws each screen's header in the screen. `SearchField` stays until the
+// Search surface adopts the native search role.
 
 // In-content search field that matches the design system, replacing the native `.searchable`
 // navigation-bar drawer so the search bar lives under our custom header (like the screenshots)

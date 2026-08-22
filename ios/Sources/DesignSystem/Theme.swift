@@ -1,6 +1,7 @@
 import SwiftUI
 
 // The AniTrack dark palette, ported from the legacy web app's inline styles.
+@available(*, deprecated, message: "Retired by the interaction system - use ThemeColor / ThemeSpace / ThemeRadius / ThemeType. Color(hex:) below survives.")
 enum Theme {
     static let background = Color(hex: 0x0B0B0E)
     static let surface = Color(hex: 0x16161B)
@@ -78,11 +79,15 @@ extension Color {
 // hand-tuning a new curve per call site.
 extension Animation {
     /// State / layout / disclosure changes — the everyday spring.
+    @available(*, deprecated, message: "Retired - use ThemeMotion.uiSnappy.")
     static let uiSnappy = Animation.spring(response: 0.34, dampingFraction: 0.84)
     /// Satisfying toggles & pops (watched checks, catch-up) — a touch of overshoot.
+    @available(*, deprecated, message: "Retired - overshoot is reserved for uiMilestone (series complete only).")
     static let uiBouncy = Animation.spring(response: 0.30, dampingFraction: 0.62)
     /// Content settling into place (grids re-bucketing, larger moves) — calm, well-damped.
+    @available(*, deprecated, message: "Retired - use ThemeMotion.uiSettle.")
     static let uiSmooth = Animation.spring(response: 0.46, dampingFraction: 0.90)
     /// Simple cross-fades (loading → content, appear/disappear).
+    @available(*, deprecated, message: "Retired - use ThemeMotion.uiGentle.")
     static let uiGentle = Animation.easeInOut(duration: 0.22)
 }
