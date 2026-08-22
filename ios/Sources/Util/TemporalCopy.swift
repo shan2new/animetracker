@@ -30,17 +30,26 @@ enum TemporalCopy {
         }
     }
 
-    /// Compact form for narrow captions: "Today 8:30 PM" · "Tomorrow" · "Wed 8:30 PM" · "Aug 28".
+    /// Compact form for narrow captions: "Today" · "Tomorrow" · "Wednesday" · "Aug 28".
+    ///
+    /// **The compact form drops the CLOCK. It never drops the day word or a preposition.**
+    ///
+    /// It used to drop both: one frame of Detail showed "Tomorrow at 8:30 PM" (`airs`) directly
+    /// beside "Wed 6:30 PM" (this), and two rows of Search showed "Fri 9:30 PM" above
+    /// "29 Aug 2:00 PM" — three renderings of "when it airs" in one product, with no rule a reader
+    /// could infer, all so a caption could save six characters. Abbreviating the day to "Wed" is
+    /// what makes the two forms look like different grammars; the clock is the part a 100-pt
+    /// caption genuinely has no room for, and the part the schedule already states elsewhere.
+    ///
+    /// The day ladder is `airs`'s ladder verbatim, so the two can never drift again.
     static func airsCompact(at ts: Int64, now: Int64, source: MediaSource) -> String {
         let anchor = source.timeAnchor
-        let day: String
         switch Formatting.dayDiff(ts: ts, now: now, anchor: anchor) {
-        case 0: day = "Today"
-        case 1: day = "Tomorrow"
-        case 2...6: day = Formatting.fmtDay(ts: ts, now: now, anchor: anchor)
-        default: day = Formatting.fmtMonthDay(ts, anchor: anchor)
+        case 0: return "Today"
+        case 1: return "Tomorrow"
+        case 2...6: return Formatting.fmtDayLong(ts: ts, now: now, anchor: anchor)
+        default: return dateWord(ts, now: now, anchor: anchor)
         }
-        return source == .anilist ? "\(day) \(Formatting.fmtTime(ts, anchor: anchor))" : day
     }
 
     /// "Aired just now" · "Aired 27 min ago" · "Aired 10h ago" · "Aired yesterday" · "Aired Wednesday" ·

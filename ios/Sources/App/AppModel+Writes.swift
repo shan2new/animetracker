@@ -22,6 +22,45 @@ extension AppModel {
                               removed: true, removedFranchise: snapshot, prevStatus: previousStatus))
     }
 
+    // MARK: - Mark through an episode
+
+    /// Move a part's progress to `episode` and present ONE undo that reports the real count and
+    /// restores the exact prior value.
+    ///
+    /// The three halves of this were broken separately and had to be fixed together:
+    ///   • `setProgress` creates no `UndoState` at all, so Today's "Mark through episode N" — a
+    ///     multi-episode write, reached from a menu, with no confirmation — was **unreversible**.
+    ///   • `markCaughtUp` left `UndoState.count` at 1, so a six-episode batch confirmed one.
+    ///   • `UndoState.undoAction`, minted for multi-write undo, had no call site, which is also what
+    ///     blocked a series-level "mark as watched" from ever being offered.
+    ///
+    /// One transaction, one haptic (fired inside `setProgress`), one toast, one restoring action.
+    /// Returns the state it presented so a caller that owns a handoff can defer the toast instead.
+    @discardableResult
+    func markThrough(franchiseId: String, mediaId: Int, episode: Int,
+                     present: Bool = true) -> UndoState? {
+        guard let f = franchise(id: franchiseId),
+              let part = f.parts.first(where: { $0.mediaId == mediaId }) else { return nil }
+        let prev = part.progress
+        let target = min(max(0, episode), part.progressCeiling)
+        guard target != prev else { return nil }
+
+        setProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: target)
+
+        // The restoring action is captured here, from the value read BEFORE the write, so undo
+        // cannot be re-derived (wrongly) from state the write has already changed.
+        let state = UndoState(
+            mediaId: mediaId, franchiseId: franchiseId, prevProgress: prev,
+            title: f.title, episode: target,
+            count: max(1, abs(target - prev)),
+            undoAction: { [weak self] in
+                self?.setProgress(franchiseId: franchiseId, mediaId: mediaId,
+                                  episodes: prev, haptic: false)
+            })
+        if present { presentUndo(state) }
+        return state
+    }
+
     // MARK: - Undo
 
     /// The single entry point for the toast's Undo button. Takes the state BY VALUE so a toast

@@ -47,6 +47,12 @@ enum Copy {
     }
 
     static func episodes(_ n: Int) -> String { plural(n, "episode", "episodes") }
+
+    /// A count of episodes the USER has watched, predicated so it cannot be read as the work's
+    /// length. "Watched once - 95 episodes" (the show) and "2 watch sessions - 50 episodes" (the
+    /// user) sat two taps apart, so within one show the same noun phrase meant 95 and 50.
+    /// Catalogue counts stay bare; progress counts come through here.
+    static func episodesWatched(_ n: Int) -> String { "\(episodes(n)) watched" }
     static func changes(_ n: Int) -> String { plural(n, "change", "changes") }
     static func watchSessions(_ n: Int) -> String { plural(n, "watch session", "watch sessions") }
     static func updates(_ n: Int) -> String { plural(n, "update", "updates") }
@@ -54,8 +60,16 @@ enum Copy {
 
     // MARK: - Status
 
-    /// The five user-facing statuses. Internal `.completed` reads "Finished" and `.planned` reads
-    /// "Planned" — "Completed" and "Plan to watch" never appear.
+    /// The five user-facing statuses — the USER's list state, never the series' production state.
+    /// Internal `.completed` reads "Watched" and `.planned` reads "Planned"; "Completed" and
+    /// "Plan to watch" never appear.
+    ///
+    /// **"Finished" is not in this vocabulary.** It was carrying both meanings at once, which is how
+    /// the app came to file a show as finished on one screen and promise it returns in six weeks on
+    /// the next — and how one state came to be spelled four ways within two taps: "Finished" in the
+    /// detail picker, "FINISHED" on the Profile tile, "COMPLETE" on a card eyebrow and "Watched
+    /// once" in the same card's title. A tracker that cannot name its own states is not trustworthy.
+    /// "Complete" is now reserved for the *series* (`Progress.complete`), "Watched" for the *user*.
     ///
     /// Switched on the raw value rather than the case set so it already covers `paused` and
     /// `dropped`, which the shared `WatchStatus` gains in the shared-model patch.
@@ -65,7 +79,7 @@ enum Copy {
         switch raw {
         case "watching":  return "Watching"
         case "planned":   return "Planned"
-        case "completed": return "Finished"
+        case "completed": return "Watched"
         case "paused":    return "Paused"
         case "dropped":   return "Dropped"
         default:          return raw.prefix(1).uppercased() + raw.dropFirst()
@@ -73,7 +87,46 @@ enum Copy {
     }
 
     /// Display order for a status menu, independent of the enum's case order.
-    static let statusesInOrder = ["Watching", "Planned", "Finished", "Paused", "Dropped"]
+    static let statusesInOrder = ["Watching", "Planned", "Watched", "Paused", "Dropped"]
+
+    // MARK: - Section eyebrows - the "next" vocabulary
+
+    /// Five "next" forms meaning three different things shipped at once: "UP NEXT" (watchable now)
+    /// and "COMING NEXT" (not yet aired) differed by one word in the same token 60 pt apart;
+    /// Detail's card eyebrow said "NEXT UP"; Schedule printed "Next up Sun 23 Aug"; a season row
+    /// printed "Episode 5 next". No rule a reader could infer. The rule, and the only forms:
+    ///
+    ///   `nextUp`     - the specific episode you can watch RIGHT NOW. One per screen, at most.
+    ///   `upcoming`   - episodes that exist but have not aired. Never a second "next" on a screen.
+    ///   `episodeNext(n)` (in `Progress`) - the only POSTFIX form: "Episode 5 next".
+    ///
+    /// Nothing else may be worded with "next".
+    enum Label {
+        static let nextUp = "Next up"
+        static let upcoming = "Upcoming"
+        static let airingSoon = "Airing soon"
+        static let watching = "Watching"
+        /// The SERIES' production state - never the user's list state, which is "Watched".
+        static let complete = "Complete"
+    }
+
+    // MARK: - Headings - case and conjunction, settled once
+
+    /// **Sentence case for every heading and control label in this app.** Title Case is for the
+    /// names of works. "Sort & Filter" and "Seasons & movies" were one screen apart, so the app was
+    /// visibly using two conventions at once and neither carried meaning.
+    ///
+    /// **"&" only between two nouns in a label that must hold one line** ("Sort & filter"); the
+    /// word "and" in any sentence the user reads. `SectionLabel` uppercases at the point of
+    /// rendering, so these are stored in the case they are WRITTEN in, not the case they are drawn
+    /// in - which is what lets one string serve a header and a menu item.
+    enum Heading {
+        static let sortAndFilter = "Sort & filter"
+        static let seasonsAndMovies = "Seasons & movies"
+        static let searchPrompt = "Anime & TV"
+        static let watchHistory = "Watch history"
+        static let allTitles = "All titles"
+    }
 
     // MARK: - Actions
 
@@ -482,7 +535,7 @@ extension Copy {
         out += Confirm.buttons
         out += [
             Toast.marked(episode: 19), Toast.batchMarked(3), Toast.removed,
-            Toast.added(title: "One Piece", status: "Watching"), Toast.movedTo("Finished"),
+            Toast.added(title: "One Piece", status: "Watching"), Toast.movedTo("Watched"),
             Toast.offlinePending, Toast.syncFailed(1),
             Notice.today, Notice.schedule, Notice.library, Notice.detailEpisodes,
             Notice.searchAnime, Notice.searchTV,
@@ -700,4 +753,21 @@ private extension String {
         guard let first else { return self }
         return first.lowercased() + dropFirst()
     }
+}
+
+
+// MARK: - The title, as the app says it
+
+extension Franchise {
+    /// The title wherever identity is being **recognised** - Today, Library, Schedule, Detail.
+    ///
+    /// Source titles arrive wrapped in subtitle punctuation ("Re:ZERO -Starting Life in Another
+    /// World-"), and the app rendered them three ways at once: Today shortened them, Library and
+    /// Schedule printed the raw string, and a shelf caption opened a line on a hyphen. One title,
+    /// three spellings, on three screens the user moves between in two taps.
+    ///
+    /// The raw `title` is kept for exactly two jobs: **Search results**, where the user is matching
+    /// what they typed against a catalogue and every character of the source string is evidence,
+    /// and **accessibility labels**, which always speak the whole title.
+    var displayTitle: String { title.shelfShortened }
 }

@@ -77,6 +77,13 @@ struct EmptyState: View {
     var prominence: Prominence = .major
     var primary: (() -> Void)? = nil
     var secondary: (() -> Void)? = nil
+    /// The ambient identity wash behind the plate. `nil` = automatic: a state that owns the whole
+    /// surface gets one, a state inside a populated screen does not.
+    ///
+    /// First-run Library and first-run Today are the first two frames a reviewer ever sees, and
+    /// they carried none of the app's identity — a grey plate on a black screen. There is no art to
+    /// sample yet, so this is a static `accentSoft` gradient rather than a palette read.
+    var ambient: Bool? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The symbol and its tile answer to Dynamic Type. The shipped card's `.system(size: 22)` was
@@ -86,11 +93,13 @@ struct EmptyState: View {
     init(_ copy: EmptyStateCopy,
          prominence: Prominence = .major,
          primary: (() -> Void)? = nil,
-         secondary: (() -> Void)? = nil) {
+         secondary: (() -> Void)? = nil,
+         ambient: Bool? = nil) {
         self.copy = copy
         self.prominence = prominence
         self.primary = primary
         self.secondary = secondary
+        self.ambient = ambient
         #if DEBUG
         // A state whose copy promises an action, wired to nothing, is the SYS-4 bug returning.
         assert(copy.primaryLabel == nil || primary != nil || secondary != nil,
@@ -99,8 +108,24 @@ struct EmptyState: View {
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
+    /// Whether either button will actually be drawn. An actionless plate is two lines of text, and
+    /// a 236-pt floor under two lines of text is 235 pt of grey (Search's no-results, measured).
+    private var hasAction: Bool {
+        (copy.primaryLabel != nil && primary != nil) || (copy.secondaryLabel != nil && secondary != nil)
+    }
     /// `minHeight`, never `height`: at AX3–AX5 the card has to grow, not overflow.
-    private var minHeight: CGFloat { isAX ? 0 : (prominence == .major ? 236 : 148) }
+    private var minHeight: CGFloat {
+        guard !isAX, hasAction else { return 0 }
+        return prominence == .major ? 236 : 148
+    }
+    private var showsAmbient: Bool { ambient ?? (prominence == .major) }
+    /// One accent object on this card, and it is the BUTTON. An accent glyph in an `accentSoft`
+    /// tile beside an accent capsule is two things claiming to be the point.
+    /// A failure keeps `warning`, because that is the one colour a failure edge is allowed.
+    private var glyphTint: Color {
+        guard let symbol = copy.symbol else { return ThemeColor.textTertiary }
+        return symbol.hasPrefix("exclamationmark") ? ThemeColor.warning : ThemeColor.textTertiary
+    }
     private var pad: CGFloat { prominence == .major ? ThemeSpace.x6 : ThemeSpace.x5 }
     private var radius: CGFloat { prominence == .major ? ThemeRadius.focusCard : ThemeRadius.card }
     private var titleToken: TypeToken { prominence == .major ? ThemeType.showTitleL : ThemeType.showTitleM }
@@ -114,9 +139,9 @@ struct EmptyState: View {
                 if let symbol = copy.symbol {
                     Image(systemName: symbol)
                         .font(.system(size: glyph, weight: .regular))
-                        .foregroundStyle(ThemeColor.accent)
+                        .foregroundStyle(glyphTint)
                         .frame(width: tile, height: tile)
-                        .background(ThemeColor.accentSoft,
+                        .background(ThemeColor.surfaceRaised,
                                     in: RoundedRectangle(cornerRadius: tile / 3.2, style: .continuous))
                         .padding(.bottom, ThemeSpace.x4)
                 }
@@ -143,8 +168,7 @@ struct EmptyState: View {
             // A label without a handler is a dead control, not a disabled one: an empty state
             // that draws `Try again` at 0.38 opacity is worse than an empty state with no button.
             // The button exists only when the caller supplied something for it to do.
-            if (copy.primaryLabel != nil && primary != nil)
-                || (copy.secondaryLabel != nil && secondary != nil) {
+            if hasAction {
                 VStack(spacing: ThemeSpace.x1) {
                     if let label = copy.primaryLabel, let primary {
                         Button(label, action: primary)
@@ -166,8 +190,23 @@ struct EmptyState: View {
         // A plate. "Nothing here" is the quietest thing on any screen; outlining it in grey was
         // the loudest way to draw it.
         .surface(.plate, radius: radius)
+        .background(alignment: .top) { wash }
         // Opacity only: an empty state that scales in reads as a celebration of having nothing.
         .transition(.opacity)
+    }
+
+    /// A static `accentSoft` bloom behind the plate. There is no artwork to sample on a first run —
+    /// that is precisely the state — so the app's own colour stands in for it.
+    @ViewBuilder
+    private var wash: some View {
+        if showsAmbient {
+            RadialGradient(colors: [ThemeColor.accentSoft, .clear],
+                           center: .init(x: 0.5, y: 0.18),
+                           startRadius: 0, endRadius: 340)
+                .padding(-64)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -176,8 +215,13 @@ extension View {
     /// content area, never top-pinned above 950–1100 pt of void (Library) or floated in the upper
     /// third (Search). `contentH` is the scroll view's own height.
     ///
+    /// The default clearance is the tab bar's VISUAL height, not `tabBarClearance`. They are
+    /// different numbers for different jobs: a scroll inset has to clear the ramp as well as the
+    /// bar, and subtracting that inset when *centring* pushed every empty state ~81 pt above true
+    /// optical centre on Today and Schedule. Half of whatever is subtracted is the error.
+    ///
     /// `minHeight`, so AX3–AX5 grows the block instead of overflowing it.
-    func centredState(contentH: CGFloat, clearance: CGFloat = ThemeMetrics.tabBarClearance) -> some View {
+    func centredState(contentH: CGFloat, clearance: CGFloat = ThemeMetrics.tabBarVisualHeight) -> some View {
         frame(maxWidth: .infinity, minHeight: max(0, contentH - clearance), alignment: .center)
     }
 }
