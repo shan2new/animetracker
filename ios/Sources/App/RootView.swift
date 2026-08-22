@@ -102,6 +102,14 @@ struct MainTabView: View {
     @State private var selectedTab: AppTab = .today
     /// One navigation path per tab; Detail and its episode list push onto the active tab's path.
     @State private var paths: [AppTab: NavigationPath] = [:]
+    /// The zoom-transition namespace, published to every card in every tab.
+    ///
+    /// `zoomSource(_:)` had zero call sites and `\.zoomNamespace` was never populated, so the
+    /// modifier was a permanent no-op — while a `zoomID` string was threaded through five view
+    /// signatures, `DetailRoute`, `openDetail`, `openEpisode` and every call site ("focus/…",
+    /// "shelf/…", "all/…") and read by nothing. All six routes into Detail were a plain slide, on
+    /// the single most-executed transition in the product.
+    @Namespace private var zoom
 
     private func path(_ tab: AppTab) -> Binding<NavigationPath> {
         Binding(get: { paths[tab] ?? NavigationPath() }, set: { paths[tab] = $0 })
@@ -122,33 +130,35 @@ struct MainTabView: View {
                         TodayView(onOpenDetail: openDetail,
                                   onSeeAllWatching: { selectedTab = .library },
                                   onAddShow: { selectedTab = .discover })
-                            .detailDestinations(push: { push(.today, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.today, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .today)
                 }
                 Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
                     NavigationStack(path: path(.schedule)) {
                         ScheduleView(onOpenDetail: openEpisode, onAddShow: { selectedTab = .discover })
-                            .detailDestinations(push: { push(.schedule, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.schedule, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .schedule)
                 }
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
                     NavigationStack(path: path(.library)) {
-                        LibraryView(onOpenDetail: openDetail)
-                            .detailDestinations(push: { push(.library, $0) })
+                        LibraryView(onOpenDetail: openDetail,
+                                    onAddShow: { selectedTab = .discover })
+                            .detailDestinations(zoom: zoom, push: { push(.library, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .library)
                 }
                 Tab(value: AppTab.discover, role: .search) {
                     NavigationStack(path: path(.discover)) {
                         DiscoverView(onOpenDetail: openDetail)
-                            .detailDestinations(push: { push(.discover, $0) })
+                            .detailDestinations(zoom: zoom, push: { push(.discover, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .discover)
                 }
             }
-            .sensoryFeedback(.selection, trigger: selectedTab)
+            .environment(\.zoomNamespace, zoom)
+            .onChange(of: selectedTab) { _, _ in FeedbackCoordinator.fire(.selection) }
             .task {
                 // One freshness source for every stale strip and Profile's sync line.
                 SyncCenter.shared.signals = {
@@ -158,9 +168,21 @@ struct MainTabView: View {
             }
 
             // Undo / sync / error toasts float above the tab bar, over whatever is pushed.
+            //
+            // 22 pt is the tab bar's OWN horizontal margin; the shipped 17 disagreed with it by
+            // 5 pt, which is exactly the kind of gap that reads as "assembled" rather than
+            // "designed".
+            //
+            // The BOTTOM inset is measured from the window, not from the bar — this ZStack is
+            // aligned to the window's bottom edge, so a 12-pt pad put the toast at 858–935 against
+            // a tab pill at 873–935: it covered the tab bar outright on Today and Library, and on
+            // Search it covered the field with the user's own query still in it, plus the
+            // tab-return and dismiss controls. `toastClearance` was defined for exactly this and
+            // referenced nowhere. Measured after the fix: the toast lands at 815–856 pt against a
+            // pill whose top edge is 875, on all four tabs.
             ToastHost()
-                .padding(.horizontal, 16)
-                .padding(.bottom, 58)
+                .padding(.horizontal, 22)
+                .padding(.bottom, ThemeMetrics.toastClearance)
         }
     }
 
@@ -183,18 +205,34 @@ struct MainTabView: View {
 
 private extension View {
     /// The two destinations every tab can reach: a franchise, and a season's episode list.
-    func detailDestinations(push: @escaping (FranchiseDetailView.DetailPush) -> Void) -> some View {
+    ///
+    /// Detail arrives by growing out of the poster that was tapped (`.zoom` has been the default
+    /// for media apps since iOS 18) — `route.zoomID` is the id the tapped card registered through
+    /// `zoomSource(_:)`, so the same franchise can be opened from several surfaces at once and each
+    /// one animates from its own artwork.
+    func detailDestinations(zoom: Namespace.ID,
+                            push: @escaping (FranchiseDetailView.DetailPush) -> Void) -> some View {
         self
             .navigationDestination(for: DetailRoute.self) { route in
                 FranchiseDetailView(franchiseId: route.id, focus: route.focus, push: push)
+                    .navigationTransition(.zoom(sourceID: route.zoomID, in: zoom))
+                    .pushedScreenChrome()
             }
             .navigationDestination(for: FranchiseDetailView.DetailPush.self) { p in
-                switch p {
-                case .episodes(let franchiseId, let mediaId, let focusEpisode):
-                    SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, focusEpisode: focusEpisode)
-                case .history(let franchiseId):
-                    WatchHistoryView(franchiseId: franchiseId)
+                Group {
+                    switch p {
+                    case .episodes(let franchiseId, let mediaId, let focusEpisode):
+                        SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, focusEpisode: focusEpisode)
+                    case .history(let franchiseId):
+                        WatchHistoryView(franchiseId: franchiseId)
+                    }
                 }
+                // A pushed screen is still inside the TabView, so the floating pill is still over
+                // it — but `scrollEdgeChrome` was applied on tab ROOTS only, so Detail's season and
+                // episode lists rendered whole rows at full opacity under and beside the bar, with
+                // no `bottomUnderfill` for its glass to refract. The treatment belongs to the
+                // pushed-screen scaffold, here, not to six per-screen opt-ins.
+                .pushedScreenChrome()
             }
     }
 }

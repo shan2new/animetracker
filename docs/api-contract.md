@@ -136,6 +136,26 @@ authenticated user's progress.
 | POST | `/me/opened` | — | `{ prevOpenedAt: Int }` (returns the value *before* this call, then stamps now) |
 | GET | `/me/notifications?limit=50` | — | `{ items: NotificationItem[], unread: Int }` newest-first |
 | POST | `/me/notifications/read` | `{ ids?: [uuid] }` | `{ marked: Int }` — omit `ids` to mark all unread as read |
+| DELETE | `/me` | — (an unknown field is a `400`) | `{ deleted: true }` — see **Account deletion** |
+
+### Account deletion
+
+`DELETE /me` erases the account. It is required by App Store guideline 5.1.1(v) and it is the one
+route in this API that cannot be undone, so its semantics are exact:
+
+- **Erased, not deactivated.** In one transaction: the caller's `notifications`, `subscriptions`
+  and `progress` rows, then the `users` row itself. Every user-owned table is deleted explicitly
+  rather than left to the `ON DELETE CASCADE` each foreign key declares — the cascade is real and
+  `me.account.test.ts` asserts it, but a database restored from a dump, or a table added later
+  without one, must not be able to turn "delete my account" into "orphan my rows".
+- **Scoped to the bearer.** The user id comes from the token; there is no path or body parameter
+  that could name a different account. A body is accepted only if it is empty — an unrecognised
+  field is a `400`, never an ignored one.
+- **Nothing else is touched.** The catalogue (`media`, `franchise`, `announcements`) is shared and
+  survives; only the rows that belong to this user are removed.
+- The client signs out immediately afterwards; the next sign-in with the same Clerk identity
+  creates a brand-new, empty account.
+
 
 ### FranchiseListResponse
 The envelope every franchise-list route returns. `franchises` is the only guaranteed field; the

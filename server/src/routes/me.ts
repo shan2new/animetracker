@@ -11,8 +11,9 @@ import {
   unsubscribe,
 } from '../services/library.js'
 import { db } from '../db/index.js'
-import { users } from '../db/schema.js'
+import { notifications, progress, subscriptions, users } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
+import type { AccountDeletedResponse } from '../types/api.js'
 
 // Board 09's status vocabulary. `subscriptions.status` is a text() column, so the two added
 // values need no migration.
@@ -70,4 +71,44 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     const marked = await markNotificationsRead(req.user!.id, ids)
     return { marked }
   })
+
+  // In-app account deletion — App Store guideline 5.1.1(v). The client confirms; this is the
+  // point of no return, so it must actually erase, not deactivate.
+  //
+  // Every user-owned table is deleted EXPLICITLY rather than left to the `onDelete: 'cascade'`
+  // declared on each foreign key. The cascade is real and is asserted by `me.account.test.ts`,
+  // but a database restored from a dump, or a table added later without one, would turn "delete
+  // my account" into "orphan my rows" — and a deletion route that silently leaves a user's
+  // progress behind is the failure the guideline exists to prevent. The whole erasure runs in one
+  // transaction: a half-deleted account is worse than either outcome.
+  app.delete('/me', async (req, reply) => {
+    // Nothing to read, and validated anyway: an irreversible route rejects a request it does not
+    // fully understand instead of ignoring the part it did not expect. `safeParse` rather than the
+    // `parse` the other routes use, because a thrown ZodError surfaces as a 500 — and "the server
+    // broke" is the wrong answer to "you sent me a field I do not know" on the one route that
+    // cannot be undone.
+    if (!z.object({}).strict().safeParse(req.body ?? {}).success) {
+      return reply.code(400).send({ error: 'unexpected body' })
+    }
+    const userId = req.user!.id
+    await db.transaction(async (tx) => {
+      await tx.delete(notifications).where(eq(notifications.userId, userId))
+      await tx.delete(subscriptions).where(eq(subscriptions.userId, userId))
+      await tx.delete(progress).where(eq(progress.userId, userId))
+      // Last: everything that references it is gone, so this succeeds with or without the cascade.
+      await tx.delete(users).where(eq(users.id, userId))
+    })
+    const body: AccountDeletedResponse = { deleted: true }
+    return reply.code(200).send(body)
+  })
 }
+
+/**
+ * The tables `DELETE /me` erases before the `users` row itself — every table that stores rows
+ * belonging to one user.
+ *
+ * Exported so the test can hold it against the schema: if a future table gains a `userId` column
+ * and is not listed here, `me.account.test.ts` fails rather than the deletion quietly leaving that
+ * table's rows behind.
+ */
+export const accountOwnedTableNames = ['notifications', 'subscriptions', 'progress'] as const

@@ -35,6 +35,12 @@
 	<string>Previously. connects to your self-hosted server running on your local network.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>PrivacyPolicyURL</key>
+	<string>$(PRIVACY_POLICY_URL)</string>
+	<key>SupportEmail</key>
+	<string>$(SUPPORT_EMAIL)</string>
+	<key>TermsURL</key>
+	<string>$(TERMS_URL)</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Outfit-Light.ttf</string>

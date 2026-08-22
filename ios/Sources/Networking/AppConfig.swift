@@ -26,6 +26,44 @@ enum AppConfig {
         return key.hasPrefix("pk_") && !key.contains("REPLACE_ME")
     }
 
+    // MARK: - Legal and support (App Store guideline 5.1.1)
+    //
+    // Read from the build settings, never hard-coded into copy: a placeholder URL baked into a
+    // shipped string is a broken Privacy Policy link, which is itself a rejection. Each accessor
+    // returns `nil` when its build setting is absent or still the placeholder, and the Profile
+    // screen omits the row rather than drawing one that goes nowhere.
+
+    /// Privacy Policy URL (`PrivacyPolicyURL` in Info.plist).
+    static var privacyURL: URL? { configuredURL("PrivacyPolicyURL") }
+
+    /// Terms of Use URL (`TermsURL` in Info.plist).
+    static var termsURL: URL? { configuredURL("TermsURL") }
+
+    /// Support contact address (`SupportEmail` in Info.plist), as a `mailto:` URL.
+    static var supportEmail: String? {
+        guard let raw = configuredString("SupportEmail"), raw.contains("@") else { return nil }
+        return raw
+    }
+
+    static var supportURL: URL? {
+        guard let supportEmail else { return nil }
+        return URL(string: "mailto:\(supportEmail)")
+    }
+
+    private static func configuredString(_ key: String) -> String? {
+        let raw = (Bundle.main.object(forInfoDictionaryKey: key) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty, !raw.contains("REPLACE_ME") else { return nil }
+        return raw
+    }
+
+    private static func configuredURL(_ key: String) -> URL? {
+        guard let raw = configuredString(key), let url = URL(string: raw), url.scheme != nil else {
+            return nil
+        }
+        return url
+    }
+
     /// True when `apiBaseURL` points at a machine on this desk: loopback, a Bonjour `.local`
     /// name, or an RFC-1918 address.
     ///

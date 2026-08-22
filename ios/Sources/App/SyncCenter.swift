@@ -288,6 +288,10 @@ final class SyncCenter {
     /// 6 s, or 10 s while VoiceOver runs — an Undo the user cannot reach in time is not an Undo.
     var toastSeconds: Double { UIAccessibility.isVoiceOverRunning ? 10 : 6 }
 
+    /// The error toast's lifetime, on the same rule. It carries no action, so it is shorter — but
+    /// a VoiceOver user still has to be given time to hear it before it leaves.
+    var errorSeconds: Double { UIAccessibility.isVoiceOverRunning ? 8 : 4 }
+
     // MARK: - Persistence
     //
     // Not board 13's outbox: there is no idempotency key, no sequence and no compensating command

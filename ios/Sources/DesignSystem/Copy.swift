@@ -10,6 +10,16 @@ import Foundation
 // "Previously." always with its full stop. Notation is "Season 4 · Episode 19" — never E19, Ep 19
 // or S5 E19.
 //
+// The brand is NEVER a clause subject. "Previously couldn’t reach the server" — stripped of the
+// full stop the name requires — reverts to its ordinary meaning and the line parses as the adverb:
+// *previously*, it couldn’t reach the server, i.e. it can now. Nor may a screen substitute its own
+// subject ("Search couldn’t reach the server"), which gave one failure two names one tab apart.
+// A failure states the fact and nothing else: "Couldn’t reach the server".
+//
+// Nor does a state promise a benefit on a different tab. "Add your first show and Today builds
+// itself." ran verbatim on Library AND Schedule, under a title naming neither. Each surface owns
+// its own empty sentence, about itself.
+//
 // Capitalisation rule (resolves the board 09 / board 03 apparent conflict):
 //   • `Episode 19` is capitalised when it is a LABEL or identifier
 //     ("Season 4 · Episode 19", "Episode 19 next", "Episode 19 marked as watched");
@@ -37,6 +47,12 @@ enum Copy {
     }
 
     static func episodes(_ n: Int) -> String { plural(n, "episode", "episodes") }
+
+    /// A count of episodes the USER has watched, predicated so it cannot be read as the work's
+    /// length. "Watched once - 95 episodes" (the show) and "2 watch sessions - 50 episodes" (the
+    /// user) sat two taps apart, so within one show the same noun phrase meant 95 and 50.
+    /// Catalogue counts stay bare; progress counts come through here.
+    static func episodesWatched(_ n: Int) -> String { "\(episodes(n)) watched" }
     static func changes(_ n: Int) -> String { plural(n, "change", "changes") }
     static func watchSessions(_ n: Int) -> String { plural(n, "watch session", "watch sessions") }
     static func updates(_ n: Int) -> String { plural(n, "update", "updates") }
@@ -44,8 +60,16 @@ enum Copy {
 
     // MARK: - Status
 
-    /// The five user-facing statuses. Internal `.completed` reads "Finished" and `.planned` reads
-    /// "Planned" — "Completed" and "Plan to watch" never appear.
+    /// The five user-facing statuses — the USER's list state, never the series' production state.
+    /// Internal `.completed` reads "Watched" and `.planned` reads "Planned"; "Completed" and
+    /// "Plan to watch" never appear.
+    ///
+    /// **"Finished" is not in this vocabulary.** It was carrying both meanings at once, which is how
+    /// the app came to file a show as finished on one screen and promise it returns in six weeks on
+    /// the next — and how one state came to be spelled four ways within two taps: "Finished" in the
+    /// detail picker, "FINISHED" on the Profile tile, "COMPLETE" on a card eyebrow and "Watched
+    /// once" in the same card's title. A tracker that cannot name its own states is not trustworthy.
+    /// "Complete" is now reserved for the *series* (`Progress.complete`), "Watched" for the *user*.
     ///
     /// Switched on the raw value rather than the case set so it already covers `paused` and
     /// `dropped`, which the shared `WatchStatus` gains in the shared-model patch.
@@ -55,7 +79,7 @@ enum Copy {
         switch raw {
         case "watching":  return "Watching"
         case "planned":   return "Planned"
-        case "completed": return "Finished"
+        case "completed": return "Watched"
         case "paused":    return "Paused"
         case "dropped":   return "Dropped"
         default:          return raw.prefix(1).uppercased() + raw.dropFirst()
@@ -63,7 +87,46 @@ enum Copy {
     }
 
     /// Display order for a status menu, independent of the enum's case order.
-    static let statusesInOrder = ["Watching", "Planned", "Finished", "Paused", "Dropped"]
+    static let statusesInOrder = ["Watching", "Planned", "Watched", "Paused", "Dropped"]
+
+    // MARK: - Section eyebrows - the "next" vocabulary
+
+    /// Five "next" forms meaning three different things shipped at once: "UP NEXT" (watchable now)
+    /// and "COMING NEXT" (not yet aired) differed by one word in the same token 60 pt apart;
+    /// Detail's card eyebrow said "NEXT UP"; Schedule printed "Next up Sun 23 Aug"; a season row
+    /// printed "Episode 5 next". No rule a reader could infer. The rule, and the only forms:
+    ///
+    ///   `nextUp`     - the specific episode you can watch RIGHT NOW. One per screen, at most.
+    ///   `upcoming`   - episodes that exist but have not aired. Never a second "next" on a screen.
+    ///   `episodeNext(n)` (in `Progress`) - the only POSTFIX form: "Episode 5 next".
+    ///
+    /// Nothing else may be worded with "next".
+    enum Label {
+        static let nextUp = "Next up"
+        static let upcoming = "Upcoming"
+        static let airingSoon = "Airing soon"
+        static let watching = "Watching"
+        /// The SERIES' production state - never the user's list state, which is "Watched".
+        static let complete = "Complete"
+    }
+
+    // MARK: - Headings - case and conjunction, settled once
+
+    /// **Sentence case for every heading and control label in this app.** Title Case is for the
+    /// names of works. "Sort & Filter" and "Seasons & movies" were one screen apart, so the app was
+    /// visibly using two conventions at once and neither carried meaning.
+    ///
+    /// **"&" only between two nouns in a label that must hold one line** ("Sort & filter"); the
+    /// word "and" in any sentence the user reads. `SectionLabel` uppercases at the point of
+    /// rendering, so these are stored in the case they are WRITTEN in, not the case they are drawn
+    /// in - which is what lets one string serve a header and a menu item.
+    enum Heading {
+        static let sortAndFilter = "Sort & filter"
+        static let seasonsAndMovies = "Seasons & movies"
+        static let searchPrompt = "Anime & TV"
+        static let watchHistory = "Watch history"
+        static let allTitles = "All titles"
+    }
 
     // MARK: - Actions
 
@@ -171,6 +234,18 @@ enum Copy {
     enum Toast {
         static func marked(episode n: Int) -> String { "\(Copy.episode(n)) marked as watched" }
         static func batchMarked(_ n: Int) -> String { "\(Copy.episodes(n)) marked as watched" }
+
+        /// The same fact, carrying its SUBJECT. The bare form names neither show nor season, yet
+        /// the identical toast fires from a Schedule row and a Library context menu, where the
+        /// user has just acted on one of several shows and "Episode 2 marked as watched" cannot
+        /// say which. The title is the part allowed to truncate; the fact never is.
+        static func marked(title: String, episode n: Int) -> String {
+            title.isEmpty ? marked(episode: n) : "\(title) \u{b7} \(Copy.episode(n)) watched"
+        }
+
+        static func batchMarked(title: String, _ n: Int) -> String {
+            title.isEmpty ? batchMarked(n) : "\(title) \u{b7} \(Copy.episodes(n)) watched"
+        }
         /// Remove never touches history, and the toast says so in words.
         static let removed = "Removed from Library. Watch history kept."
         static func added(title: String, status: String) -> String { "Added \(title) to \(status)" }
@@ -233,6 +308,9 @@ enum Copy {
     enum Progress {
         static func watchedOf(_ watched: Int, _ total: Int) -> String { "\(watched) of \(total) watched" }
         static func episodeNext(_ n: Int) -> String { "\(Copy.episode(n)) next" }
+        /// The committed state of the mark control. Lives here rather than in a screen's private
+        /// copy enum because `MarkSplitButton` renders it on four surfaces.
+        static func episodeWatched(_ n: Int) -> String { "\(Copy.episode(n)) watched" }
         static func episodeAiring(_ n: Int) -> String { "\(Copy.episode(n)) airing" }
         static func behind(_ n: Int) -> String { "\(Copy.episodes(n)) behind" }
         static func left(_ n: Int) -> String { "\(Copy.episodes(n)) left" }
@@ -457,7 +535,7 @@ extension Copy {
         out += Confirm.buttons
         out += [
             Toast.marked(episode: 19), Toast.batchMarked(3), Toast.removed,
-            Toast.added(title: "One Piece", status: "Watching"), Toast.movedTo("Finished"),
+            Toast.added(title: "One Piece", status: "Watching"), Toast.movedTo("Watched"),
             Toast.offlinePending, Toast.syncFailed(1),
             Notice.today, Notice.schedule, Notice.library, Notice.detailEpisodes,
             Notice.searchAnime, Notice.searchTV,
@@ -479,7 +557,9 @@ extension Copy {
             Accessibility.wordmarkLive(1), Accessibility.wordmarkLive(3),
         ]
         out += statusesInOrder
-        for copy in [EmptyStateCopy.emptyAccount, .noWatching, .offlineCached, .offlineNoData,
+        for copy in [EmptyStateCopy.emptyAccount, .emptyToday, .emptySchedule,
+                     .noWatching, .offlineCached, .offlineNoData,
+                     .searchFailed, .searchLaunchpad, .noSessions,
                      .serverNoCache, .noFilterMatches, .nothingScheduled, .everythingSynced,
                      .calmToday(title: "Frieren", when: "Returns tomorrow"),
                      .caughtUp(title: "Frieren", when: "Returns tomorrow"),
@@ -547,10 +627,27 @@ struct EmptyStateCopy: Equatable, Sendable {
 
     // Board 09's table, verbatim.
 
+    /// LIBRARY's empty account. Every root has its own — see the voice note at the top of this
+    /// file: a state may not promise a benefit on a tab the user is not looking at.
     static let emptyAccount = EmptyStateCopy(
         symbol: "plus",
         title: "Your library is empty",
-        supporting: "Add your first show and Today builds itself.",
+        supporting: "Everything you add shows up here.",
+        primaryLabel: Copy.Action.addAShow)
+
+    /// TODAY's empty account.
+    static let emptyToday = EmptyStateCopy(
+        symbol: "plus",
+        title: "Nothing to watch yet",
+        supporting: "Add a show and this screen fills in with what is next.",
+        primaryLabel: Copy.Action.addAShow)
+
+    /// SCHEDULE's empty account. Distinct from `nothingScheduled`, which is a stocked library with
+    /// no dated episodes in it.
+    static let emptySchedule = EmptyStateCopy(
+        symbol: "plus",
+        title: "Nothing scheduled",
+        supporting: "Add a show and its air dates appear here.",
         primaryLabel: Copy.Action.addAShow)
 
     static let noWatching = EmptyStateCopy(
@@ -572,11 +669,13 @@ struct EmptyStateCopy: Equatable, Sendable {
         symbol: "clock.arrow.circlepath",
         title: "No watch history yet",
         supporting: "Your first watch is recorded when you finish the show. Rewatches appear here as sessions.")
+    /// Search's transport failure. The SAME title as `serverNoCache` on purpose — one failure has
+    /// one name — with a supporting line that names what could not be done.
     static let searchFailed = EmptyStateCopy(
         symbol: "wifi.exclamationmark",
-        title: "Search couldn\u{2019}t reach the server",
-        supporting: "Check your connection and try again.",
-        primaryLabel: "Try again")
+        title: "Couldn\u{2019}t reach the server",
+        supporting: "Your search didn\u{2019}t get through. Check your connection and try again.",
+        primaryLabel: Copy.Action.tryAgain)
     static let offlineNoData = EmptyStateCopy(
         symbol: "wifi.slash",
         title: "Connect to load your library",
@@ -608,8 +707,10 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// (NWPathMonitor), never guessed from the error.
     static let serverNoCache = EmptyStateCopy(
         symbol: "exclamationmark.triangle",
-        title: "Previously couldn\u{2019}t reach the server",
-        supporting: "Your saved library will appear as soon as the connection returns.",
+        title: "Couldn\u{2019}t reach the server",
+        // Not "your saved library will appear": in the no-cache state there IS no saved copy, which
+        // is the whole reason this state exists rather than `offlineCached`.
+        supporting: "The server didn\u{2019}t respond. Try again in a moment.",
         primaryLabel: Copy.Action.tryAgain)
 
     /// Search returned nothing. Carried forward from the v5 state tiles, reworded to the v9 voice.
@@ -652,4 +753,21 @@ private extension String {
         guard let first else { return self }
         return first.lowercased() + dropFirst()
     }
+}
+
+
+// MARK: - The title, as the app says it
+
+extension Franchise {
+    /// The title wherever identity is being **recognised** - Today, Library, Schedule, Detail.
+    ///
+    /// Source titles arrive wrapped in subtitle punctuation ("Re:ZERO -Starting Life in Another
+    /// World-"), and the app rendered them three ways at once: Today shortened them, Library and
+    /// Schedule printed the raw string, and a shelf caption opened a line on a hyphen. One title,
+    /// three spellings, on three screens the user moves between in two taps.
+    ///
+    /// The raw `title` is kept for exactly two jobs: **Search results**, where the user is matching
+    /// what they typed against a catalogue and every character of the source string is evidence,
+    /// and **accessibility labels**, which always speak the whole title.
+    var displayTitle: String { title.shelfShortened }
 }

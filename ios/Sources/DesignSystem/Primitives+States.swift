@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // The shared component inventory for states, milestones and history (spec boards 09, 10, 12).
 //
@@ -17,13 +18,53 @@ extension ThemeMotion {
     static let uiCrossfade = ThemeMotion.uiReduced
 }
 
+// MARK: - Announcements
+
+/// VoiceOver announcements (WCAG 4.1.3, "status messages").
+///
+/// The shipped build had 45 labels, 10 hints, 6 values, 10 added traits and **zero** announcements
+/// and zero custom actions. A VoiceOver user typed a query and results arrived, or didn't, or
+/// failed — and nothing was spoken; marks committed silently; the undo toast appeared and expired
+/// unheard. Every state that SETTLES without the user having navigated to it announces here.
+@MainActor
+enum Announce {
+    /// A state settled where the user is already standing: results arrived, a mark committed, the
+    /// toast appeared. Polite — it waits for VoiceOver to finish whatever it is saying.
+    static func status(_ message: String) {
+        guard UIAccessibility.isVoiceOverRunning, !message.isEmpty else { return }
+        AccessibilityNotification.Announcement(message).post()
+    }
+
+    /// The stage changed under the user without a navigation: the recap card taking Today's hero,
+    /// a whole-surface state replacing content.
+    static func screenChanged(_ message: String? = nil) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        if let message, !message.isEmpty {
+            AccessibilityNotification.ScreenChanged(message).post()
+        } else {
+            AccessibilityNotification.ScreenChanged().post()
+        }
+    }
+}
+
 // MARK: - Empty state
 
-/// The one empty state. Always inside a card, always left-aligned: centring would introduce a
-/// second alignment grammar and the frame would jump when data arrives. The empty state occupies
-/// the rectangle the content will occupy — that *is* structural continuity.
+/// The one empty state.
 ///
-/// `primary` is the last parameter so the common single-action call reads as a trailing closure.
+/// Centred, not left-aligned. The shipped card was a left-aligned marketing plate with the symbol
+/// floating unattached at the top-left (its ink landing 2 pt right of the headline's x), a fixed
+/// `.system(size: 22)` that ignored Dynamic Type entirely, and a full-width accent capsule that
+/// read as a banner CTA. Centred with the symbol in its own tile is the shape every system
+/// `ContentUnavailableView` has, and it is the shape a user recognises as "there is nothing here"
+/// rather than as an advertisement.
+///
+/// **`primary` precedes `secondary`.** It used to be last, so `EmptyState(.serverNoCache) { retry }`
+/// — written at `ScheduleView:474` and `FranchiseDetailView:83` — bound the closure to `secondary`
+/// by Swift's forward-scan rule. `serverNoCache` has no secondary label, so the button was never
+/// drawn and **Schedule's and Detail's whole-screen server errors shipped with no Try again at
+/// all**, while the identical card on Today and Library (which pass `primary:` explicitly) was
+/// recoverable. Ordering makes the trailing-closure form correct by construction; the DEBUG
+/// assertion below catches the rest.
 struct EmptyState: View {
     enum Prominence {
         /// The whole surface has nothing to show.
@@ -34,42 +75,80 @@ struct EmptyState: View {
 
     let copy: EmptyStateCopy
     var prominence: Prominence = .major
-    var secondary: (() -> Void)? = nil
     var primary: (() -> Void)? = nil
+    var secondary: (() -> Void)? = nil
+    /// The ambient identity wash behind the plate. `nil` = automatic: a state that owns the whole
+    /// surface gets one, a state inside a populated screen does not.
+    ///
+    /// First-run Library and first-run Today are the first two frames a reviewer ever sees, and
+    /// they carried none of the app's identity — a grey plate on a black screen. There is no art to
+    /// sample yet, so this is a static `accentSoft` gradient rather than a palette read.
+    var ambient: Bool? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The symbol and its tile answer to Dynamic Type. The shipped card's `.system(size: 22)` was
+    /// the one piece of type on it that did not.
+    @ScaledMetric(relativeTo: .title3) private var glyphUnit: CGFloat = 1
 
     init(_ copy: EmptyStateCopy,
          prominence: Prominence = .major,
+         primary: (() -> Void)? = nil,
          secondary: (() -> Void)? = nil,
-         primary: (() -> Void)? = nil) {
+         ambient: Bool? = nil) {
         self.copy = copy
         self.prominence = prominence
-        self.secondary = secondary
         self.primary = primary
+        self.secondary = secondary
+        self.ambient = ambient
+        #if DEBUG
+        // A state whose copy promises an action, wired to nothing, is the SYS-4 bug returning.
+        assert(copy.primaryLabel == nil || primary != nil || secondary != nil,
+               "EmptyState \u{201C}\(copy.title)\u{201D} declares \u{201C}\(copy.primaryLabel ?? "")\u{201D} but was given no handler")
+        #endif
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
-    private var minHeight: CGFloat { isAX ? 0 : (prominence == .major ? 212 : 132) }
-    private var pad: CGFloat { prominence == .major ? ThemeSpace.x5 : ThemeSpace.x4 }
+    /// Whether either button will actually be drawn. An actionless plate is two lines of text, and
+    /// a 236-pt floor under two lines of text is 235 pt of grey (Search's no-results, measured).
+    private var hasAction: Bool {
+        (copy.primaryLabel != nil && primary != nil) || (copy.secondaryLabel != nil && secondary != nil)
+    }
+    /// `minHeight`, never `height`: at AX3–AX5 the card has to grow, not overflow.
+    private var minHeight: CGFloat {
+        guard !isAX, hasAction else { return 0 }
+        return prominence == .major ? 236 : 148
+    }
+    private var showsAmbient: Bool { ambient ?? (prominence == .major) }
+    /// One accent object on this card, and it is the BUTTON. An accent glyph in an `accentSoft`
+    /// tile beside an accent capsule is two things claiming to be the point.
+    /// A failure keeps `warning`, because that is the one colour a failure edge is allowed.
+    private var glyphTint: Color {
+        guard let symbol = copy.symbol else { return ThemeColor.textTertiary }
+        return symbol.hasPrefix("exclamationmark") ? ThemeColor.warning : ThemeColor.textTertiary
+    }
+    private var pad: CGFloat { prominence == .major ? ThemeSpace.x6 : ThemeSpace.x5 }
     private var radius: CGFloat { prominence == .major ? ThemeRadius.focusCard : ThemeRadius.card }
-    private var titleToken: TypeToken { prominence == .major ? ThemeType.displayL : ThemeType.showTitleM }
+    private var titleToken: TypeToken { prominence == .major ? ThemeType.showTitleL : ThemeType.showTitleM }
     private var supportToken: TypeToken { prominence == .major ? ThemeType.callout : ThemeType.metadata }
-    private var titleGap: CGFloat { prominence == .major ? 6 : 4 }
-    private var actionGap: CGFloat { prominence == .major ? ThemeSpace.x5 : ThemeSpace.x4 }
+    private var tile: CGFloat { (prominence == .major ? 60 : 48) * glyphUnit }
+    private var glyph: CGFloat { (prominence == .major ? 26 : 20) * glyphUnit }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
                 if let symbol = copy.symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: 22, weight: .regular))
-                        .foregroundStyle(ThemeColor.textTertiary)
-                        .padding(.bottom, ThemeSpace.x3)
+                        .font(.system(size: glyph, weight: .regular))
+                        .foregroundStyle(glyphTint)
+                        .frame(width: tile, height: tile)
+                        .background(ThemeColor.surfaceRaised,
+                                    in: RoundedRectangle(cornerRadius: tile / 3.2, style: .continuous))
+                        .padding(.bottom, ThemeSpace.x4)
                 }
                 Text(copy.title)
                     .type(titleToken)
                     .foregroundStyle(ThemeColor.textPrimary)
+                    .multilineTextAlignment(.center)
                     // At accessibility sizes the card grows instead of clipping the title.
                     .lineLimit(isAX ? nil : (prominence == .major ? 3 : 2))
                     .fixedSize(horizontal: false, vertical: true)
@@ -77,39 +156,73 @@ struct EmptyState: View {
                     Text(supporting)
                         .type(supportToken)
                         .foregroundStyle(ThemeColor.textSecondary)
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, titleGap)
+                        .padding(.top, ThemeSpace.x2)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 320)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(copy.spokenLabel)
 
             // A label without a handler is a dead control, not a disabled one: an empty state
             // that draws `Try again` at 0.38 opacity is worse than an empty state with no button.
             // The button exists only when the caller supplied something for it to do.
-            if (copy.primaryLabel != nil && primary != nil)
-                || (copy.secondaryLabel != nil && secondary != nil) {
-                VStack(alignment: .leading, spacing: ThemeSpace.x2) {
+            if hasAction {
+                VStack(spacing: ThemeSpace.x1) {
                     if let label = copy.primaryLabel, let primary {
                         Button(label, action: primary)
                             .buttonStyle(PrimaryButtonStyle2())
+                            // Not full width: a 376-pt amber capsule under a "nothing here"
+                            // sentence is a banner, not a recovery action.
+                            .frame(maxWidth: isAX ? .infinity : 280)
                     }
                     if let label = copy.secondaryLabel, let secondary {
                         Button(label, action: secondary)
                             .buttonStyle(TertiaryButtonStyle2())
                     }
                 }
-                .padding(.top, actionGap)
+                .padding(.top, ThemeSpace.x5)
             }
         }
         .padding(pad)
-        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
-        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .stroke(ThemeColor.separator, lineWidth: 1))
+        .frame(maxWidth: .infinity, minHeight: minHeight)
+        // A plate. "Nothing here" is the quietest thing on any screen; outlining it in grey was
+        // the loudest way to draw it.
+        .surface(.plate, radius: radius)
+        .background(alignment: .top) { wash }
         // Opacity only: an empty state that scales in reads as a celebration of having nothing.
         .transition(.opacity)
+    }
+
+    /// A static `accentSoft` bloom behind the plate. There is no artwork to sample on a first run —
+    /// that is precisely the state — so the app's own colour stands in for it.
+    @ViewBuilder
+    private var wash: some View {
+        if showsAmbient {
+            RadialGradient(colors: [ThemeColor.accentSoft, .clear],
+                           center: .init(x: 0.5, y: 0.18),
+                           startRadius: 0, endRadius: 340)
+                .padding(-64)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+extension View {
+    /// The shared placement for a state that owns its whole surface: vertically centred in the
+    /// content area, never top-pinned above 950–1100 pt of void (Library) or floated in the upper
+    /// third (Search). `contentH` is the scroll view's own height.
+    ///
+    /// The default clearance is the tab bar's VISUAL height, not `tabBarClearance`. They are
+    /// different numbers for different jobs: a scroll inset has to clear the ramp as well as the
+    /// bar, and subtracting that inset when *centring* pushed every empty state ~81 pt above true
+    /// optical centre on Today and Schedule. Half of whatever is subtracted is the error.
+    ///
+    /// `minHeight`, so AX3–AX5 grows the block instead of overflowing it.
+    func centredState(contentH: CGFloat, clearance: CGFloat = ThemeMetrics.tabBarVisualHeight) -> some View {
+        frame(maxWidth: .infinity, minHeight: max(0, contentH - clearance), alignment: .center)
     }
 }
 
@@ -136,9 +249,6 @@ struct InlineNotice: View {
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
-    private var strokeColor: Color {
-        kind == .failure ? ThemeColor.warning.opacity(0.35) : ThemeColor.separator
-    }
 
     var body: some View {
         Group {
@@ -168,9 +278,21 @@ struct InlineNotice: View {
         }
         .padding(.leading, 14)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .background(ThemeColor.surfaceFlat, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous)
-            .stroke(strokeColor, lineWidth: 1))
+        .surface(.plate, radius: ThemeRadius.row)
+        // A 3-pt warning rule down the leading edge instead of a 1-px amber outline round the
+        // whole notice: the colour lands where the eye enters the line, and the notice stops
+        // looking like a disabled button.
+        .overlay(alignment: .leading) {
+            if kind == .failure {
+                UnevenRoundedRectangle(topLeadingRadius: ThemeRadius.row,
+                                       bottomLeadingRadius: ThemeRadius.row,
+                                       bottomTrailingRadius: 0, topTrailingRadius: 0,
+                                       style: .continuous)
+                    .fill(ThemeColor.warning.opacity(0.85))
+                    .frame(width: 3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
         .transition(.opacity)
     }
 
@@ -323,10 +445,7 @@ struct SyncBanner: View {
         .padding(.trailing, isAX ? 14 : 6)
         .padding(.vertical, isAX ? ThemeSpace.x3 : 0)
         .frame(minHeight: 52)
-        .background(ThemeColor.surfaceFloating, in: RoundedRectangle(cornerRadius: ThemeRadius.toast, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.toast, style: .continuous)
-            .stroke(ThemeColor.strokeStrong, lineWidth: 1))
-        .shadow(color: .black.opacity(0.40), radius: 16, y: 12)
+        .surface(.floating, radius: ThemeRadius.toast)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isSummaryElement)
         // Persistent chrome fades; it never springs in.
@@ -343,6 +462,10 @@ struct SyncBanner: View {
 struct EpisodeArtwork: View {
     let url: String?
     var spoilerSafe: Bool = true
+    /// The FRANCHISE's palette colour. A show whose stills are missing still has a colour, and a
+    /// list where two rows carry a photograph and eight carry an identical grey play-glyph reads
+    /// as a broken list. Passing this makes the glyph rows read as *this show, no still yet*.
+    var showTint: Color? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tint: Color?
@@ -367,34 +490,48 @@ struct EpisodeArtwork: View {
                 // to drive, so no `.transition` is claimed for it.
                 .animation(ThemeMotion.pick(ThemeMotion.uiPoster, reduceMotion: reduceMotion),
                            value: tint)
-                .frame(width: 96, height: 54)
+                .frame(width: EpisodeArtwork.slot.width, height: EpisodeArtwork.slot.height)
                 .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
-                    .stroke(ThemeColor.separator, lineWidth: 1))
+                    .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
                 .task(id: url) {
                     tint = await PaletteCache.shared.resolve(url: url, maxPixel: 288)
                 }
             } else {
-                EpisodeGlyphTile()
+                EpisodeGlyphTile(showTint: showTint)
             }
         }
         .accessibilityHidden(true)
     }
+
+    /// One rectangle for every episode row, still or not. The shipped build put a 96×54 photograph
+    /// on rows that had one and a 48×48 square on rows that did not, so a season list changed
+    /// shape halfway down and the row rhythm broke with it.
+    static let slot = CGSize(width: 96, height: 54)
 }
 
-/// The neutral episode tile: 48×48, no image, no number, no blur.
+/// The no-still episode tile: the SAME 96×54 rectangle as a real still, filled with the show's own
+/// palette colour under a very quiet glyph. No image, no number, no blur — and no grey box.
 struct EpisodeGlyphTile: View {
+    var showTint: Color? = nil
+
     var body: some View {
-        RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-            .fill(ThemeColor.surfaceFloating)
-            .frame(width: 48, height: 48)
+        RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
+            .fill(showTint ?? ThemeColor.surfaceRaised)
+            .frame(width: EpisodeArtwork.slot.width, height: EpisodeArtwork.slot.height)
+            .overlay {
+                // Darkened, so the tile never competes with the row beside it that has real art.
+                LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.34)],
+                               startPoint: .top, endPoint: .bottom)
+            }
             .overlay(
                 Image(systemName: "play.rectangle")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(ThemeColor.textTertiary)
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(ThemeColor.textPrimary.opacity(0.34))
             )
-            .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                .stroke(ThemeColor.separator, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
+                .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
             .accessibilityHidden(true)
     }
 }
@@ -407,8 +544,11 @@ struct PassiveTick: View {
     var boxed: Bool = false
 
     var body: some View {
-        Image(systemName: "checkmark.circle.fill")
-            .font(.system(size: 18, weight: .regular))
+        // A bare check, not a filled disc. `checkmark.circle.fill` at tertiary grey renders as a
+        // 18-pt grey blob — read as a disabled control rather than as a settled fact — and a column
+        // of them down a season list is the "grey tick glyphs" complaint exactly.
+        Image(systemName: "checkmark")
+            .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(ThemeColor.textTertiary)
             .frame(width: boxed ? 44 : nil, height: boxed ? 44 : nil)
             .accessibilityElement()
@@ -474,7 +614,18 @@ struct QueryProgressBar: View {
         .frame(height: 1)
         .background(ThemeColor.accent.opacity(active ? 0.14 : 0))
         .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: active)
+        // Hidden as a GRAPHIC, but not silent: a 1-pt bar is meaningless to VoiceOver, while "a
+        // request is running" is exactly what a VoiceOver user needs and had no way to observe.
         .accessibilityHidden(true)
+        .overlay(alignment: .leading) {
+            if active {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityLabel(Copy.Accessibility.loading)
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
+        }
     }
 }
 
@@ -495,7 +646,7 @@ struct SelectionRow: View {
         Button(action: action) {
             HStack(spacing: ThemeSpace.x3) {
                 if let cover {
-                    PosterSlot(url: cover, width: 40, height: 60, radius: ThemeRadius.poster)
+                    PosterSlot(url: cover, .row)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -555,17 +706,24 @@ struct SectionHeaderRow: View {
             if let count {
                 Text("\(count)")
                     .type(ThemeType.sectionLabel)
-                    .foregroundStyle(ThemeColor.textDisabled)
+                    // `textTertiary` (#85817C, 5.14:1), not `textDisabled` (#6C6965, 3.64:1): this
+                    // is the smallest type in the app and it was rendered in the dimmest ink, below
+                    // the 4.5:1 AA floor that applies to text at any size. `textDisabled` is
+                    // reserved for the chevron glyph, where the 3:1 non-text threshold applies.
+                    .foregroundStyle(ThemeColor.textTertiary)
                     .monospacedDigit()
             }
             Spacer(minLength: ThemeSpace.x2)
             if let actionLabel, let action {
                 Button(actionLabel, action: action)
-                    .buttonStyle(TertiaryButtonStyle2())
-                    // The style's 44x44 target is the accessibility frame and must survive, so the
-                    // row is pulled back optically instead of clamped: negative padding shrinks the
-                    // *layout* height to ~20 pt while the hit region stays 44x44. A `.frame(height:)`
-                    // here would both shrink the target and drag the label 12 pt off the baseline.
+                    // `InlineLinkButtonStyle`, not `TertiaryButtonStyle2`: a section header's
+                    // action is a LINK. At 16-pt semibold amber it was optically larger than the
+                    // 11-pt label it belongs to, so on Library and Today "See all" read as the
+                    // loudest thing in the section — louder than the shows.
+                    .buttonStyle(InlineLinkButtonStyle())
+                    // The style's target is held by padding + `contentShape`, so the row is pulled
+                    // back optically instead of clamped: this shrinks the *layout* height to ~20 pt
+                    // while the hit region stays ≥ 44 pt tall.
                     .padding(.vertical, -12)
             }
         }
@@ -592,7 +750,7 @@ struct CompactActionButtonStyle: ButtonStyle {
             .background(configuration.isPressed ? ThemeColor.surfacePressed : ThemeColor.surfaceFloating,
                         in: RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                .stroke(ThemeColor.stroke, lineWidth: 1))
+                .strokeBorder(ThemeColor.stroke, lineWidth: 1))
             // Reduce Motion presses in opacity, never in scale (board 11).
             .opacity(isEnabled ? (reduceMotion && configuration.isPressed ? 0.72 : 1) : 0.38)
             .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1))
@@ -723,8 +881,7 @@ struct HistorySessionRow: View {
         Button(action: action) {
             HStack(spacing: ThemeSpace.x3) {
                 if let poster {
-                    // Slots under 80 pt on the long edge use the 6-pt radius (matches the queue row).
-                    PosterSlot(url: poster, width: 36, height: 54, radius: 6)
+                    PosterSlot(url: poster, .queue)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -744,9 +901,15 @@ struct HistorySessionRow: View {
             .padding(.vertical, ThemeSpace.x3)
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: HistoryRailMetrics.minRowHeight, alignment: .leading)
-            .background(ThemeColor.surfaceRaised, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous)
-                .stroke(active ? ThemeColor.accent.opacity(0.45) : Color.clear, lineWidth: 1))
+            .surface(.raised, radius: ThemeRadius.row)
+            // The active session keeps its accent ring: here the colour IS the state, and the
+            // ring is the only thing separating this card from its identical neighbours.
+            .overlay {
+                if active {
+                    RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous)
+                        .strokeBorder(ThemeColor.accent.opacity(0.45), lineWidth: 1)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(RowPressStyle())
@@ -832,6 +995,17 @@ extension View {
         modifier(SeasonCompleteSweep(token: token, reduceMotion: reduceMotion))
     }
 
+    /// The app's emotional payoff, given the one motion token minted for it.
+    ///
+    /// `ThemeMotion.uiMilestone` — "one restrained overshoot for a meaningful milestone (series
+    /// complete only)" — had **zero call sites**, so finishing a series flipped the status chip
+    /// with an instant text swap. Applied to the chip (or whatever carries the status), keyed on
+    /// the WRITE that completed the last part of the last season and claimed through
+    /// `SeasonSweepLedger`, so it fires exactly once per commit and never replays on a scroll back.
+    func milestone(token: UUID?, reduceMotion: Bool) -> some View {
+        modifier(MilestoneSettle(token: token, reduceMotion: reduceMotion))
+    }
+
     /// `contentTransition(.numericText())` on the four numbers board 12 allows it on: the backlog
     /// count after a mark, the library count, a confirmation summary, and the foreground
     /// countdown. Nowhere else — constant movement turns state into spectacle.
@@ -863,6 +1037,26 @@ extension View {
     func previouslyRefreshable(threshold: CGFloat = 80,
                                _ action: @escaping @Sendable () async -> Void) -> some View {
         modifier(PreviouslyRefreshable(threshold: threshold, action: action))
+    }
+}
+
+/// One restrained overshoot, once per commit. No scrim, no disc, no confetti — the same discipline
+/// `SeasonCompleteSweep` keeps, on the element that carries the new status.
+private struct MilestoneSettle: ViewModifier {
+    let token: UUID?
+    let reduceMotion: Bool
+
+    @State private var scale: CGFloat = 1
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(scale)
+            .onChange(of: token, initial: true) { _, token in
+                guard let token, SeasonSweepLedger.claim(token) else { scale = 1; return }
+                guard !reduceMotion else { scale = 1; return }
+                scale = 0.94
+                withAnimation(ThemeMotion.uiMilestone) { scale = 1 }
+            }
     }
 }
 

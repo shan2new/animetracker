@@ -8,9 +8,14 @@ struct RemoteImageView: View {
     let url: String?
     var contentMode: ContentMode = .fill
     var maxPixel: CGFloat = 700
+    /// Where a `.fill` image anchors inside its frame (`.top` keeps faces in a tall crop).
+    var alignment: Alignment = .center
+    /// Hosts that draw their own ground (palette tint, art backdrop) hide the opaque placeholder.
+    var placeholderHidden: Bool = false
 
     var body: some View {
-        CachedAsyncImage(url: parsedURL, maxPixel: maxPixel, contentMode: contentMode)
+        CachedAsyncImage(url: parsedURL, maxPixel: maxPixel, contentMode: contentMode,
+                         alignment: alignment, placeholderHidden: placeholderHidden)
     }
 
     private var parsedURL: URL? {

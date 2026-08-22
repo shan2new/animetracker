@@ -25,8 +25,10 @@ struct UndoState: Identifiable {
         if let customMessage { return customMessage }
         if removed { return Copy.Toast.removed }
         if added { return Copy.Toast.added(title: title, status: statusLabel ?? "Library") }
-        if count > 1 { return Copy.Toast.batchMarked(count) }
-        return Copy.Toast.marked(episode: episode)
+        // The subject-carrying forms: the same toast fires from Today, a Schedule row and a Library
+        // context menu, and "Episode 2 marked as watched" cannot say which show it means.
+        if count > 1 { return Copy.Toast.batchMarked(title: title, count) }
+        return Copy.Toast.marked(title: title, episode: episode)
     }
 }
 
@@ -41,6 +43,7 @@ extension UndoState: Equatable {
 // transitions actually animate — the animation lives on this container, not the transient child.
 struct ToastHost: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let sync = SyncCenter.shared
@@ -56,9 +59,25 @@ struct ToastHost: View {
                 UndoToast(state: undo) { appModel.undoTapped(undo) }
             }
         }
-        .animation(ThemeMotion.uiSnappy, value: sync.failedChanges.count)
-        .animation(ThemeMotion.uiSnappy, value: appModel.undo?.id)
-        .animation(ThemeMotion.uiSnappy, value: appModel.errorToast)
+        // `pick`, so a toast does not still spring in with a 4-pt rise under Reduce Motion — the
+        // three shipped calls were raw `uiSnappy`. `uiDismiss` was minted at ThemeTokens:376 for
+        // exactly this moment and had zero call sites: a toast that leaves on the same spring it
+        // arrived on reads as a bounce out, not a dismissal.
+        .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
+                   value: sync.failedChanges.count)
+        .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
+                   value: appModel.undo?.id)
+        .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
+                   value: appModel.errorToast)
+        // A VoiceOver user was never told the toast existed, let alone that Undo was available for
+        // the next six (or ten) seconds.
+        .onChange(of: appModel.undo?.id) { _, _ in
+            guard let undo = appModel.undo else { return }
+            Announce.status("\(undo.message). \(Copy.Action.undo) available.")
+        }
+        .onChange(of: appModel.errorToast) { _, message in
+            if let message { Announce.status(message) }
+        }
     }
 }
 
@@ -75,6 +94,7 @@ struct UndoToast: View {
     let state: UndoState
     let onUndo: () -> Void
     var body: some View {
-        ToastView(message: state.message, actionLabel: "Undo", action: onUndo).frame(maxWidth: 420)
+        ToastView(message: state.message, actionLabel: Copy.Action.undo, action: onUndo)
+            .frame(maxWidth: 420)
     }
 }

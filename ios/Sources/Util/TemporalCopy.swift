@@ -30,17 +30,26 @@ enum TemporalCopy {
         }
     }
 
-    /// Compact form for narrow captions: "Today 8:30 PM" · "Tomorrow" · "Wed 8:30 PM" · "Aug 28".
+    /// Compact form for narrow captions: "Today" · "Tomorrow" · "Wednesday" · "Aug 28".
+    ///
+    /// **The compact form drops the CLOCK. It never drops the day word or a preposition.**
+    ///
+    /// It used to drop both: one frame of Detail showed "Tomorrow at 8:30 PM" (`airs`) directly
+    /// beside "Wed 6:30 PM" (this), and two rows of Search showed "Fri 9:30 PM" above
+    /// "29 Aug 2:00 PM" — three renderings of "when it airs" in one product, with no rule a reader
+    /// could infer, all so a caption could save six characters. Abbreviating the day to "Wed" is
+    /// what makes the two forms look like different grammars; the clock is the part a 100-pt
+    /// caption genuinely has no room for, and the part the schedule already states elsewhere.
+    ///
+    /// The day ladder is `airs`'s ladder verbatim, so the two can never drift again.
     static func airsCompact(at ts: Int64, now: Int64, source: MediaSource) -> String {
         let anchor = source.timeAnchor
-        let day: String
         switch Formatting.dayDiff(ts: ts, now: now, anchor: anchor) {
-        case 0: day = "Today"
-        case 1: day = "Tomorrow"
-        case 2...6: day = Formatting.fmtDay(ts: ts, now: now, anchor: anchor)
-        default: day = Formatting.fmtMonthDay(ts, anchor: anchor)
+        case 0: return "Today"
+        case 1: return "Tomorrow"
+        case 2...6: return Formatting.fmtDayLong(ts: ts, now: now, anchor: anchor)
+        default: return dateWord(ts, now: now, anchor: anchor)
         }
-        return source == .anilist ? "\(day) \(Formatting.fmtTime(ts, anchor: anchor))" : day
     }
 
     /// "Aired just now" · "Aired 27 min ago" · "Aired 10h ago" · "Aired yesterday" · "Aired Wednesday" ·
@@ -87,9 +96,33 @@ enum TemporalCopy {
     }
 
     /// "Aug 28" in the current year, "Aug 28, 2027" otherwise.
+    ///
+    /// The year is never string-joined on. `"\(md), \(a.y)"` produced **"31 Mar, 2013"** on a
+    /// day-first device — a comma between a day-first date and its year, which no locale writes
+    /// (en-GB is "31 Mar 2013", en-US "Mar 31, 2013") — and it was on every row of every episode
+    /// list. `fmtFullDate` already carries the "MMMdyyyy" skeleton, which orders and punctuates
+    /// itself per locale; a hand-assembled date cannot.
     static func dateWord(_ ts: Int64, now: Int64, anchor: Formatting.TimeAnchor) -> String {
         let a = Formatting.localParts(ts, anchor: anchor), b = Formatting.localParts(now, anchor: anchor)
-        let md = Formatting.fmtMonthDay(ts, anchor: anchor)
-        return a.y == b.y ? md : "\(md), \(a.y)"
+        return a.y == b.y
+            ? Formatting.fmtMonthDay(ts, anchor: anchor)
+            : Formatting.fmtFullDate(ts, anchor: anchor)
+    }
+
+    /// A date range — "24 May – 29 Jul", "10 Dec 2024 – 3 Feb 2025". One formatter, so the two ends
+    /// agree with each other and with `dateWord`, and the year is never implied away inside a form.
+    ///
+    /// Within two taps the shipped build showed "31 Mar, 2013", "24 May – 29 Jul" (no year at all),
+    /// "10 Dec, 2024" and "24 May 2026" — four formats, two of them in adjacent rows of one list.
+    static func dateRange(_ from: Int64, _ to: Int64, now: Int64,
+                          anchor: Formatting.TimeAnchor = .local) -> String {
+        let a = Formatting.localParts(from, anchor: anchor)
+        let b = Formatting.localParts(to, anchor: anchor)
+        let thisYear = Formatting.localParts(now, anchor: anchor).y
+        // A span that crosses a year, or sits in a year that is not this one, states both years.
+        guard a.y == b.y, a.y == thisYear else {
+            return "\(Formatting.fmtFullDate(from, anchor: anchor)) \u{2013} \(Formatting.fmtFullDate(to, anchor: anchor))"
+        }
+        return "\(Formatting.fmtMonthDay(from, anchor: anchor)) \u{2013} \(Formatting.fmtMonthDay(to, anchor: anchor))"
     }
 }

@@ -15,8 +15,11 @@ final class AppModel {
     // Calendar feed span, in local days either side of today.
     static let scheduleBack = -7
     static let scheduleAhead = 14
-    static let undoSeconds: Double = 6
-    static let errorSeconds: Double = 4
+    // Toast lifetimes live on `SyncCenter` (`toastSeconds` / `errorSeconds`), which is the only
+    // thing that knows whether VoiceOver is running. These two constants were the reason that
+    // knowledge never reached the live timer: `SyncCenter.toastSeconds` was declared, documented
+    // and never called, while the sleep below used a hard-coded 6 — so an Undo a VoiceOver user
+    // could not reach in time was still exactly 6 seconds long.
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
     static let recentsKey = "recentSearches"
     static let maxRecents = 10
@@ -44,10 +47,20 @@ final class AppModel {
     var loadError = false
 
     // Discover/search.
-    var searchQuery = "" { didSet { scheduleSearch() } }
+    var searchQuery = "" { didSet { searchExactOnce = false; scheduleSearch() } }
     var searchResults: [FranchiseSummary] = []
     var searchBusy = false
     var searchError = false
+    /// The server's spell correction for the results currently on screen.
+    ///
+    /// `/search` has always returned `correctedQuery` + `originalQuery`, `FranchiseListResponse`
+    /// has always decoded them, and **no view ever read them**: a search for "one pieceszz" showed
+    /// a flat "No results" while the backend had already worked out what was meant. Search renders
+    /// it as "Showing results for …" with a literal-search escape hatch.
+    var searchCorrection: SearchCorrection?
+    /// Set by `searchLiterally` for exactly one request: the user asked for the words they typed,
+    /// so that request opts out of the server's correction (`exact=1`). Any keystroke clears it.
+    private var searchExactOnce = false
     // Persisted recent search terms, most-recent first — the search surface's empty state.
     var recentSearches: [String] = []
     // Trending franchises for the search zero-state shelf. Fetched once per session, lazily on
@@ -205,6 +218,7 @@ final class AppModel {
         searchResults = []
         searchBusy = false
         searchError = false
+        searchCorrection = nil
         trending = []
         libQuery = ""
         mediaFilter = .all
@@ -254,7 +268,7 @@ final class AppModel {
         errorToast = message
         errorTask?.cancel()
         errorTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(AppModel.errorSeconds))
+            try? await Task.sleep(for: .seconds(SyncCenter.shared.errorSeconds))
             if Task.isCancelled { return }
             await MainActor.run { self?.errorToast = nil }
         }
@@ -300,6 +314,7 @@ final class AppModel {
             searchBusy = false
             searchError = false
             searchResults = []
+            searchCorrection = nil
             searchTask = nil
             return
         }
@@ -315,18 +330,30 @@ final class AppModel {
 
     private func runSearch(query: String) async {
         let seq = nextSeq()
+        let exact = searchExactOnce
         do {
-            let results = try await api.search(query: query)
+            let response: SearchResponse = try await api.search(query: query, exact: exact)
             guard seq == searchSeq else { return }   // a newer keystroke superseded this request
-            searchResults = results
+            searchResults = response.franchises
+            searchCorrection = SearchCorrection(response)
+            searchExactOnce = false
             searchError = false
             searchBusy = false
         } catch {
             guard !isCancellation(error) else { return }  // cancelled by a newer keystroke — not a failure
             guard seq == searchSeq else { return }
+            searchCorrection = nil
             searchError = true
             searchBusy = false
         }
+    }
+
+    /// "Search instead for …": re-run the words the user actually typed, with the server's
+    /// spell correction turned off for that one request.
+    func searchLiterally(_ term: String) {
+        if searchQuery != term { searchQuery = term }   // didSet clears the flag and re-schedules
+        searchExactOnce = true                          // set AFTER, so the request below reads it
+        retrySearch()
     }
 
     /// Re-run the current query immediately (no debounce) — the Retry affordance on a failed search.
@@ -660,7 +687,10 @@ final class AppModel {
             case .watching: return "Watching"
             case .comingBack: return "Coming back"
             case .planned: return "Planned"
-            case .finished: return "Finished"
+            // "Watched", the same word `LibrarySection.finished` renders and the same word
+            // `Copy.statusLabel` now returns for `.completed`. "Finished" is out of the vocabulary
+            // (SYS-4): it was naming the user's list state and the series' production state at once.
+            case .finished: return "Watched"
             }
         }
     }
@@ -745,12 +775,20 @@ final class AppModel {
         applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: aired)
 
         // Preserve the original prev if an undo for this franchise is already pending.
+        //
+        // `count` is the number of episodes this transaction actually recorded, and it must be the
+        // real one: it was left at its default of 1, so catching up six episodes confirmed "Episode
+        // 12 marked as watched" — the app under-reporting its own write by five, on the one control
+        // whose whole purpose is a batch. It is derived from the SAME prev the undo restores, so
+        // the sentence and the rollback can never disagree.
         if let cur = undo, !cur.added, cur.franchiseId == franchiseId {
             undo = UndoState(mediaId: part.mediaId, franchiseId: franchiseId,
-                             prevProgress: cur.prevProgress, title: f.title, episode: aired)
+                             prevProgress: cur.prevProgress, title: f.title, episode: aired,
+                             count: max(1, aired - cur.prevProgress))
         } else {
             undo = UndoState(mediaId: part.mediaId, franchiseId: franchiseId,
-                             prevProgress: prev, title: f.title, episode: aired)
+                             prevProgress: prev, title: f.title, episode: aired,
+                             count: max(1, aired - prev))
         }
 
         celebrate(franchiseId)
@@ -848,12 +886,18 @@ final class AppModel {
         undo = UndoState(mediaId: nil, franchiseId: franchiseId, prevProgress: 0,
                          title: title, episode: 0, added: true, statusLabel: label)
         scheduleUndoDismissal()
-        // First airing ANIME added: the moment notifications become valuable, so ask now. Both
-        // ambient layers are AniList-only (TMDB air times are synthesized, so an alert would fire
-        // at a fictitious instant) — asking a TV-only user for permission buys them nothing.
-        if isReleasing, source(of: franchiseId) == .anilist {
-            Task { _ = await EpisodeNotifications.shared.requestPermissionIfNeeded() }
-        }
+        // **An add never raises the system permission alert.**
+        //
+        // It used to: this line set the undo state and the next one asked iOS for notification
+        // permission, so a modal system alert appeared over the results with "Added … — Undo"
+        // counting down underneath it. The undo was unreachable for its whole six-second window,
+        // VoiceOver focus was stolen, and the app's first-ever permission ask arrived unprimed in
+        // the middle of an unrelated action — where the reflex answer is Don't Allow, after which
+        // iOS never asks again and episode alerts are dead for that account permanently.
+        //
+        // The ask now belongs to an explicit in-app affordance (`DiscoverView.notificationPrimer`,
+        // armed by an add that STUCK, raised only after the undo window has closed) and to
+        // Profile → Notifications. The system prompt only ever follows the user asking for it.
         Task {
             do {
                 _ = try await api.subscribe(franchiseId: franchiseId, status: nil)
@@ -1012,10 +1056,25 @@ final class AppModel {
     private func scheduleUndoDismissal() {
         undoTask?.cancel()
         undoTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(AppModel.undoSeconds))
+            try? await Task.sleep(for: .seconds(SyncCenter.shared.toastSeconds))
             if Task.isCancelled { return }
             await MainActor.run { self?.undo = nil }
         }
+    }
+}
+
+/// A zero-result query the server was able to repair, and the words the user actually typed.
+/// Present only when the two differ — "showing results for X" that echoes X back is noise.
+struct SearchCorrection: Equatable, Sendable {
+    let original: String
+    let corrected: String
+
+    init?(_ response: SearchResponse) {
+        guard let corrected = response.correctedQuery,
+              let original = response.originalQuery,
+              corrected.caseInsensitiveCompare(original) != .orderedSame else { return nil }
+        self.original = original
+        self.corrected = corrected
     }
 }
 

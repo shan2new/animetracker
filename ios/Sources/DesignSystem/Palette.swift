@@ -71,11 +71,27 @@ final class PaletteCache {
         }
         guard let best = buckets.values.max(by: { $0.n < $1.n }), best.n > 0 else { return fallback }
         var l = best.l / Double(best.n), a = best.a / Double(best.n), bb = best.b / Double(best.n)
-        // Clamp lightness and chroma.
-        l = min(max(l, 0.24), 0.38)
+        // Clamp lightness and chroma, and lean the hue toward the brand's warmth so the app's
+        // atmosphere never swings olive or steel from tab to tab.
+        // The clamps the ambient wash regressed on. Measured against the baseline at (1200,300):
+        // Library new rgb(36,30,27) vs original rgb(45,32,22) — 20 % dimmer with R−B falling 23→9;
+        // Schedule new rgb(32,32,29) vs original rgb(71,64,59) — less than half the luminance,
+        // R−B 12→3. Chroma clamped to 0.035–0.075 and then blended 35 % toward brand amber makes
+        // "art-derived colour" arithmetically present and perceptually absent: neutral charcoal
+        // where the baseline had warm ember. The chroma ceiling doubles, the lightness floor rises,
+        // and the brand blend drops to a breath (0.15) that stops the app swinging olive or steel
+        // from tab to tab without erasing the show's own hue.
+        l = min(max(l, 0.30), 0.44)
         let c = (a * a + bb * bb).squareRoot()
-        let cc = min(max(c, 0.04), 0.12)
-        if c > 0 { a *= cc / c; bb *= cc / c }
+        let cc = min(max(c, 0.075), 0.145)
+        if c > 0 {
+            var ua = a / c, ub = bb / c
+            let (_, wa, wb) = oklab(r: 0xF0 / 255.0, g: 0xA2 / 255.0, b: 0x4E / 255.0)
+            let wn = (wa * wa + wb * wb).squareRoot()
+            ua = 0.85 * ua + 0.15 * (wa / wn); ub = 0.85 * ub + 0.15 * (wb / wn)
+            let un = (ua * ua + ub * ub).squareRoot()
+            a = ua / un * cc; bb = ub / un * cc
+        }
         let (r, g, b2) = srgb(l: l, a: a, b: bb)
         return Color(.sRGB, red: r, green: g, blue: b2, opacity: 1)
     }
@@ -106,20 +122,92 @@ final class PaletteCache {
     }
 }
 
-/// The art-adaptive card ground: derived colour at 52 % → 18 % over the flat surface, then a
-/// 44 % black overlay. A stable result for any poster; text contrast is verified by the gate.
+/// The art-adaptive card ground: derived colour at 52 % → 18 % over the flat surface, under a
+/// black veil. A stable result for any poster; text contrast is verified by the gate.
+///
+/// **The veil is 30 %, not 44 %.** The spec's 44 % is a FLOOR to be raised until primary text
+/// clears 4.5:1 — but the derived colour is already clamped to OKLab L ≤ 0.38, so the composite
+/// landed at rgb(22,18,18) against a rgb(9,9,11) canvas: a 4 % luminance step, which is why the
+/// shipped Focus card read as a hole with an outline round it rather than as a lit object. At 30 %
+/// the same card composites near rgb(34,28,25) — still a deep, cinema-dark ground, `textPrimary`
+/// (#F4F1EC) still clears 12:1 on it, and the card finally has a body.
 struct ArtAdaptiveGround: View {
     let tint: Color?
+    /// 1 is the card ground. Drop it for a large hero where the colour would otherwise dominate.
+    var intensity: Double = 1
+
+    private var base: Color { tint ?? PaletteCache.fallback }
 
     var body: some View {
         ZStack {
             ThemeColor.surfaceFlat
             LinearGradient(
-                colors: [(tint ?? PaletteCache.fallback).opacity(0.52), (tint ?? PaletteCache.fallback).opacity(0.18)],
+                colors: [base.opacity(0.52 * intensity), base.opacity(0.18 * intensity)],
                 startPoint: .topLeading, endPoint: .bottomTrailing
             )
-            Color.black.opacity(0.44)
+            // A light source, not a flat wash: without it a large ground is one dead rectangle of
+            // colour, which is what a gradient-filled div looks like.
+            RadialGradient(colors: [base.opacity(0.30 * intensity), .clear],
+                           center: .init(x: 0.16, y: 0.02), startRadius: 0, endRadius: 320)
+            Color.black.opacity(0.30)
         }
         .animation(ThemeMotion.uiPoster, value: tint == nil)
+    }
+}
+
+/// The ambient identity wash behind the top of a screen: the artwork itself, blurred past
+/// recognition, bleeding under the status bar and dissolving into the canvas.
+///
+/// This is the single biggest thing the shipped build dropped. The original Detail, Library,
+/// Schedule and Search screens all opened on a warm, art-derived atmosphere; the rebuilt ones open
+/// on #09090B. Nothing else recovers that much perceived quality for as little structure — and it
+/// costs one static, already-cached image, drawn once, never animated, never touched on scroll.
+///
+/// Composed as: art → tint bloom → vertical fade to canvas. Everything below `height` is canvas.
+struct ArtBackdrop: View {
+    var url: String? = nil
+    var tint: Color? = nil
+    var height: CGFloat = 380
+    /// 1 for a Detail hero. Lower it on a list screen, where the wash is atmosphere, not identity.
+    var intensity: Double = 1
+
+    private var base: Color { tint ?? PaletteCache.fallback }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            if let url, !url.isEmpty {
+                // Centre-cropped BEFORE the blur. Blurring a view whose art has not been made to
+                // fill its frame samples whatever corner the image happened to land in — which is
+                // why Profile drew no image at all — and it is why the wash lost its warmth even
+                // where an image was present.
+                RemoteImageView(url: url, contentMode: .fill, maxPixel: 320)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height)
+                    .clipped()
+                    .blur(radius: 56, opaque: true)
+                    // No `.saturation(0.85)`: the tint clamp already holds chroma in a narrow band,
+                    // so desaturating on top of it is subtracting the one thing the wash is for.
+                    .opacity(0.70 * intensity)
+            }
+            LinearGradient(colors: [base.opacity(0.60 * intensity), base.opacity(0.10 * intensity), .clear],
+                           startPoint: .top, endPoint: .bottom)
+            // A constant breath of the brand's warmth under every wash, so Schedule, Search and
+            // Profile share one atmosphere instead of borrowing a different hue from whichever
+            // poster happens to lead.
+            LinearGradient(colors: [ThemeColor.accent.opacity(0.07 * intensity), .clear],
+                           startPoint: .top, endPoint: .bottom)
+            // The handover to the canvas. It must reach FULL canvas well before the content that
+            // sits over it, or the first section looks like it is floating on a stain.
+            LinearGradient(stops: [
+                .init(color: .clear, location: 0.0),
+                .init(color: ThemeColor.canvas.opacity(0.55), location: 0.55),
+                .init(color: ThemeColor.canvas, location: 1.0),
+            ], startPoint: .top, endPoint: .bottom)
+        }
+        .frame(height: height)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
