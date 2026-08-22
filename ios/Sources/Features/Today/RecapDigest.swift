@@ -3,10 +3,16 @@ import Foundation
 // Previously Recap — the arrival (spec board 01). Deterministic, built from the library and the
 // last acknowledged visit; acknowledged only when the handoff completes or the user acts.
 struct RecapBeat: Identifiable, Equatable {
+    /// Only genuine CHANGES inside the window belong on the recap. `nextUp` — "where you stopped"
+    /// — was a standing state that had not happened since anything, printed directly above the
+    /// hero that says the same thing: the recap's job is what you missed, the hero's is what to do
+    /// about it.
     enum Kind: Equatable {
-        case episodesAired(count: Int)
+        /// `latest` is the highest episode number that aired in the window, so a single new
+        /// episode can be named instead of counted — the one card whose purpose is telling you
+        /// what you missed should say WHICH episode.
+        case episodesAired(count: Int, latest: Int?)
         case returning(at: Int64?)
-        case nextUp(episode: Int, season: String)
         case returnDateAnnounced(at: Int64?)
     }
     let franchiseId: String
@@ -20,9 +26,10 @@ struct RecapBeat: Identifiable, Equatable {
     /// The beat's one line of supporting copy.
     func label(now: Int64) -> String {
         switch kind {
-        case .episodesAired(let n): return n == 1 ? "1 episode aired" : "\(n) episodes aired"
+        case .episodesAired(let n, let latest):
+            if n == 1, let latest { return "\(Copy.episode(latest)) aired" }
+            return "\(Copy.episodes(n)) aired"
         case .returning(let at): return TemporalCopy.returns(at: at, now: now, source: source)
-        case .nextUp(let ep, let season): return season.isEmpty ? "Episode \(ep) next" : "\(season) · Episode \(ep) next"
         case .returnDateAnnounced(let at): return TemporalCopy.returns(at: at, now: now, source: source)
         }
     }
@@ -46,7 +53,7 @@ struct RecapDigest: Equatable {
     static let announcedWindow: Int64 = 30 * Formatting.D
 
     /// Builds the digest for everything that changed since `since`. Nil when nothing did.
-    static func build(library: [Franchise], since: Int64, now: Int64, keepWatching: [Franchise]) -> RecapDigest? {
+    static func build(library: [Franchise], since: Int64, now: Int64) -> RecapDigest? {
         guard since > 0, since < now else { return nil }
         var beats: [RecapBeat] = []
         var newEpisodeTitles = 0
@@ -57,7 +64,8 @@ struct RecapDigest: Equatable {
                 let count = min(part.episodesBehind, max(1, part.airedEpisodes - (part.progress)))
                 newEpisodeTitles += 1
                 beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.cover, source: f.source,
-                                       kind: .episodesAired(count: count), score: count == 1 ? 5 : 3))
+                                       kind: .episodesAired(count: count, latest: part.airedEpisodes),
+                                       score: count == 1 ? 5 : 3))
                 continue
             }
             // A title returning after a long gap, within 48 hours.
@@ -74,12 +82,10 @@ struct RecapDigest: Equatable {
                                        kind: .returnDateAnnounced(at: premiere), score: 3))
             }
         }
-        // Where you stopped — informational, fills the third slot.
-        if let resume = keepWatching.first, let part = resume.resumePart, !beats.contains(where: { $0.franchiseId == resume.id }) {
-            let season = part.kind == .season ? part.label : ""
-            beats.append(RecapBeat(franchiseId: resume.id, title: resume.title, cover: resume.cover, source: resume.source,
-                                   kind: .nextUp(episode: part.progress + 1, season: season), score: 0))
-        }
+        // "Where you stopped" used to be appended here to fill the third slot. It is not a change
+        // in the window — it is a standing state, and the Focus hero directly below the card
+        // prints it verbatim. A recap that pads itself with something that did not happen is not
+        // a recap.
         guard !beats.isEmpty else { return nil }
         let ordered = beats.sorted { $0.score > $1.score }
         var score = ordered.reduce(0) { $0 + $1.score }
