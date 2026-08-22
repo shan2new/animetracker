@@ -1,23 +1,34 @@
 import SwiftUI
 
 // Schedule (spec board 04). One chronological feed hung on a timeline rail: an ambient art wash
-// under a glass header, a week strip, day headers with their episode count, ~100-pt event rows on
-// a 22-pt rail gutter, and a NOW marker that crosses today and moves once a minute.
+// under the navigation bar and a pinned week strip, day headers that stick while their rows scroll
+// under them, ~100-pt event rows on a 22-pt rail gutter, and a NOW marker that crosses today.
 //
-// What this pass fixed (the shipped build read as a settings table):
-//   · content scrolled through the status bar — the bar is a real safe-area inset that owns the
-//     top edge, art wash and all, and the bottom gets `scrollEdgeChrome`. As a *pinned header* it
-//     also meant the app opened with today hidden behind it; an inset lands today where the user
-//     is looking;
-//   · the rail, the NOW marker and the ambient wash were gone — all three are back, and the rail
-//     now carries meaning: filled = it happened, hollow = it has not, one amber node for NOW;
-//   · "TIMED" was printed above every row: a day section supplies the item's context, so it is
-//     printed only when a day genuinely carries both kinds;
-//   · 36×54 art at 68 pt with a hairline under every row → 56×84 art at `rowMedia`, no hairlines,
-//     the rail carries the rhythm instead;
-//   · watched rows recede as a group (one opacity) instead of a grey disc in the control column,
-//     and the trailing column keeps one grammar throughout: a state over a time;
-//   · amber is spent on TODAY, NOW and the one mark control — not on a date you scrolled past.
+// What this pass fixed (panel round 1, items SC-1 … SC-28):
+//   · the screen hid the navigation bar and hand-rolled a header whose ground ended in a hard
+//     horizontal seam across the full width. It now owns a real navigation bar with a large title
+//     and a real toolbar (which is also what finally lets the filter menu anchor beside its
+//     trigger instead of over it), and ONE continuous glass runs from the status bar down through
+//     the week strip and ramps out — no seam anywhere;
+//   · day headers were not pinned, so one scroll stranded a row with no date above it. They are
+//     `Section` headers now, pinned, and they pick up the strip's glass exactly while they stick;
+//   · landing on today was `asyncAfter(0.05) { proxy.scrollTo }` — an unanimated teleport on a
+//     guessed timer that silently no-opped if the lazy stack had not materialised the anchor. The
+//     first rendered frame is now already at today (`ScrollPosition`), with a *guarded* backstop
+//     that keeps correcting until the anchor genuinely exists;
+//   · the month label sat beside a count scoped to the week ("AUGUST 2026 · 3 EPISODES"). The
+//     label names the week it counts now, and the strip pages week by week — the screen had no way
+//     to see next week at all;
+//   · the episode number printed a season only for TMDB rows, so Slime read "Episode 20" here and
+//     "Season 4 · Episode 19" on its own detail screen. One `Copy.watchContext` for both sources;
+//   · the strip encoded one fact two contradictory ways (weight said past/future, a 4-pt colour-only
+//     dot said something else). Past dims as a group; the dot carries only "has episodes", at 6 pt,
+//     distinguished by shape rather than hue;
+//   · the selected date was the brightest, most saturated object on a screen about shows;
+//   · the rail cut at both ends and every future node was the app's dimmest neutral — a column of
+//     disabled-looking rings down a list of things that have not happened yet;
+//   · at accessibility sizes the air time detached from its row and the week count silently
+//     vanished. The time leads the row at AX and the count reflows under the label.
 //
 // The only write here is "Mark as watched" on a row that has aired.
 struct ScheduleView: View {
@@ -31,12 +42,38 @@ struct ScheduleView: View {
     @State private var selectedDay = 0
     /// The day whose header is at the top of the feed; the strip follows it while scrolling.
     @State private var visibleDay = 0
-    /// The feed has landed on today; only then does scroll tracking drive the strip.
+    /// The day header currently stuck to the top of the content area, so only that one takes the
+    /// chrome ground. Every header carrying glass at rest would be six glass bands down one screen.
+    @State private var pinnedDay: Int?
+    /// Day id → its header's y in the feed's coordinate space. Drives the pin, the strip and the
+    /// distance-aware scroll (a spring must not drive an arbitrary-distance lazy scroll).
+    ///
+    /// A REFERENCE box, not `@State`: a scroll emits a preference change per frame, and writing
+    /// that into `@State` re-evaluated the body — which recomputes the feed and re-emits the
+    /// preference — every frame. The view live-locked and the scroll view stopped scrolling at all.
+    /// Only the two derived facts that change rarely (`pinnedDay`, `visibleDay`) are state.
+    @State private var offsets = DayOffsetBox()
+    /// The feed is under the USER's control: they have dragged it, tapped a date or tapped Today.
+    /// Until then the screen owns its own position and keeps today at the top; only afterwards does
+    /// scroll tracking drive the strip.
     @State private var didLand = false
+    /// Bounded, so a today that physically cannot reach the top (nothing below it to scroll into)
+    /// stops asking rather than fighting the scroll view every frame.
+    @State private var landAttempts = 0
+    @State private var landGaveUp = false
+    /// The week the strip is showing, in whole weeks from the week containing today.
+    @State private var weekPage: Int? = 0
     @State private var typeFilter: MediaFilter = .all
     @State private var unwatchedOnly = false
     @State private var committed: Set<String> = []
     @State private var prompt: FranchiseDetailView.WritePrompt?
+    /// The landing position, set BEFORE the first layout so the opening frame is already on today
+    /// rather than rendering from the top of the week and jumping afterwards.
+    @State private var position = ScrollPosition(id: 0, anchor: .top)
+    @State private var viewportH: CGFloat = 720
+    /// The strip's own height. A horizontal `ScrollView` inside a `safeAreaInset` is greedy on its
+    /// cross axis and will happily eat the whole screen, so the strip states what it needs.
+    @ScaledMetric(relativeTo: .subheadline) private var stripHeight: CGFloat = 74
 
     private var now: Int64 { appModel.now }
     private var nowMinute: Int64 { (now / Formatting.minuteMs) * Formatting.minuteMs }
@@ -51,10 +88,18 @@ struct ScheduleView: View {
     private enum Rail {
         static let x = HistoryRailMetrics.railX          // 4 pt from the day block's leading edge
         static let gutter = HistoryRailMetrics.cardX     // 22 pt: where row content starts
-        static let node = HistoryRailMetrics.node        // 8 pt
         static let posterW: CGFloat = 56
         static let posterH: CGFloat = 84
+        /// The poster grows at accessibility sizes so it stays the row's anchor instead of a
+        /// stranded thumbnail at the top-left of a 230-pt row.
+        static let posterAXW: CGFloat = 72
+        static let posterAXH: CGFloat = 108
     }
+
+    /// Node geometry answers to Dynamic Type — a 4-pt mark does not read as a ring at AX5 any more
+    /// than it does at default size.
+    @ScaledMetric(relativeTo: .footnote) private var node: CGFloat = 8
+    private var nodeStroke: CGFloat { max(1.5, node * 0.1875) }
 
     // MARK: - Feed
 
@@ -118,6 +163,18 @@ struct ScheduleView: View {
 
     private var filterActive: Bool { typeFilter != .all || unwatchedOnly }
 
+    /// The days actually drawn, in order. Today is always drawn even when it is empty — it is this
+    /// screen's anchor.
+    private var visibleDays: [Day] { days.filter { !$0.isEmpty || $0.isToday } }
+
+    /// The identity of the whole feed, so a filter change animates as one structural change rather
+    /// than being scoped to a value it has nothing to do with.
+    private var feedKey: [Int] { visibleDays.map { $0.id * 1000 + $0.count } }
+
+    /// The next day at or after today that carries something. Names the strip's one filled dot and
+    /// the "next up" line when today is empty.
+    private var nextEventDay: Day? { days.first { $0.id >= 0 && !$0.isEmpty } }
+
     /// The artwork the ambient wash is derived from: the next thing to air, else the most recent
     /// thing that did. One already-cached image, drawn once, never animated.
     private var ambientCover: String? {
@@ -128,72 +185,110 @@ struct ScheduleView: View {
         return all.last(where: { !$0.isEmpty }).flatMap { ($0.timed.last ?? $0.dateOnly.last)?.franchise.cover }
     }
 
+    /// A live calendar must not assert a selected date over a surface that says there is nothing.
+    private var surfaceEmpty: Bool { appModel.libraryEmpty }
+
     // MARK: - Body
 
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .top) {
-                // The atmosphere the original had and the rebuild dropped. It sits behind the
-                // header too, so the glass bar picks up its warmth instead of being a black slab.
-                ArtBackdrop(url: ambientCover, height: 620, intensity: 0.78)
-                    .ignoresSafeArea(edges: .top)
-
-                // The bar is a real safe-area inset, not a pinned section header. As a pinned header
-                // it lived INSIDE the scroll content, so `scrollTo("day-0", anchor: .top)` aligned
-                // today with the top of the viewport — which is *behind* the bar. The app opened
-                // with its own anchor day, its NOW marker and half a row hidden under the week
-                // strip. An inset makes the content area start below the bar, so landing on today
-                // puts today at the top of the content, where the user is looking.
+                // No ambient wash here. Schedule was never in the direction's ambient list, and the
+                // colour this screen derives — three covers averaged into a desaturated olive-brown
+                // — reads as a dirty screen on a true-black OLED ground rather than as atmosphere.
+                // It can come back the moment the palette refuses low-saturation 60–110° hues (see
+                // the shared-file request); until then a clean canvas under full-colour posters is
+                // the better frame.
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        content(proxy)
+                    // Pinned section headers: the screen's premise is that a date section supplies
+                    // each row's context, and that premise broke the moment the user scrolled.
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        content()
                     }
+                    .scrollTargetLayout()
+                    // A user-requested layout change (a filter) is what `uiSnappy` is for, and it
+                    // belongs on the thing that re-lays out. It used to sit on the whole ScrollView
+                    // keyed on `selectedDay != 0`, so choosing "Anime" was an instant cut while any
+                    // unrelated identity change animated.
+                    .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion), value: feedKey)
                 }
                 .coordinateSpace(name: "schedule.feed")
+                .scrollPosition($position, anchor: .top)
                 .safeAreaInset(edge: .top, spacing: 0) { stickyBar(proxy) }
-                .onPreferenceChange(DayHeaderKey.self) { offsets in
-                    guard didLand else { return }
-                    // The current day is the last header at or above the line where a freshly
-                    // scrolled-to header comes to rest. Now that the bar is a safe-area inset the
-                    // feed's coordinate space starts at the content top, so that line is just the
-                    // header's own section gap — no bar geometry involved, and no off-by-one-day.
-                    let line = ThemeMetrics.sectionGap + 6
-                    let passed = offsets.filter { $0.value < line }
-                    let current = passed.max(by: { $0.value < $1.value })?.key ?? offsets.min(by: { $0.value < $1.value })?.key ?? 0
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { viewportH = $0 })
+                // The moment a finger touches the feed it belongs to the user, and the landing
+                // stops correcting. This is what replaces the old 250-ms `didLand` timer.
+                .onScrollPhaseChange { _, phase in
+                    if phase == .interacting { didLand = true }
+                }
+                .onPreferenceChange(DayHeaderKey.self) { values in
+                    offsets.values = values
+                    if !didLand, let y = values[0] { offsets.topLine = y }
+                    // The current day is the last header at or above the line a pinned header comes
+                    // to rest on.
+                    let line = offsets.topLine + 0.5
+                    let stuck = values.filter { $0.value <= line }.max(by: { $0.value < $1.value })?.key
+                    if stuck != pinnedDay { pinnedDay = stuck }
+                    guard didLand else { land(proxy); return }
+                    let current = stuck ?? values.min(by: { $0.value < $1.value })?.key ?? 0
                     if current != visibleDay {
                         visibleDay = current
                         selectedDay = current
+                        // The strip is the screen's orientation device; it may not keep pointing at
+                        // a week the reader has left.
+                        let page = weekIndex(of: current)
+                        if page != weekPage {
+                            withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) {
+                                weekPage = page
+                            }
+                        }
                     }
                 }
                 .scrollIndicators(.hidden)
             }
             .background(ThemeColor.canvas.ignoresSafeArea())
-            // The bottom fade comes from the shared chrome. The TOP band is drawn here with the
-            // pinned bar's own recipe rather than `scrollEdgeChrome(top:)`: this screen's chrome is
-            // glass over the art wash, and an opaque-canvas veil above it would put a hard tonal
-            // seam straight across the screen at the safe-area line. Same recipe, no seam, and the
-            // rule it exists to enforce — nothing ever reaches the clock — is met either way.
-            .scrollEdgeChrome(top: false)
-            .overlay(alignment: .top) {
-                barGround
-                    .frame(height: ThemeMetrics.topSafeInset)
-                    .frame(maxWidth: .infinity)
-                    .ignoresSafeArea(edges: .top)
-            }
+            // The bottom edge is ours; the TOP edge belongs to the navigation bar. `scrollEdgeChrome`
+            // hides the system scroll-edge effect `for: .all`, and that is what stopped the bar from
+            // painting at all — rows and day headers scrolled straight through the clock and the
+            // Dynamic Island with a real bar installed, because nothing was left to own the edge.
+            // So: our ramp at the bottom, the system's at the top, one hidden effect each.
+            .scrollEdgeChromeBody(top: false)
+            .scrollEdgeEffectHidden(true, for: .bottom)
+            // `.hard`, not the default soft blur: this screen's top edge has posters and 17-pt
+            // titles passing under it, and a soft edge leaves them legible on the clock.
+            .scrollEdgeEffectStyle(.hard, for: .top)
             .previouslyRefreshable { await appModel.reload() }
             .task { await ScheduleReminders.shared.refresh() }
-            .onChange(of: appModel.loading, initial: true) { _, loading in
-                guard !loading, !didLand, !appModel.library.isEmpty else { return }
-                // Two frames so the lazy feed has laid out today's header before we jump to it.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    proxy.scrollTo("day-0", anchor: .top)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { didLand = true }
+            // The landing is a state, not a timer. `position` is already `day-0` before the first
+            // layout; everything below only *corrects* it, and it keeps the right to correct until
+            // today's header actually measures at the top — the old `asyncAfter(0.05)` silently
+            // no-opped on a cold launch and then declared itself landed 250 ms later.
+            .onChange(of: feedKey, initial: true) { _, _ in land(proxy) }
+            .navigationTitle("Schedule")
+            // Inline rather than large: a large title collapses on the first scroll, which changes
+            // the top safe area by ~50 pt mid-flight — under a pinned week strip that reflow landed
+            // the feed a row past today every time. It is still a real navigation bar with a real
+            // title and real toolbar items, which is what "the screen has nothing to own the edge"
+            // was asking for.
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Scoped to the one control that appears and disappears. This animation used to
+                    // sit on the whole ScrollView, so any structural identity change that happened
+                    // to coincide with it animated too.
+                    Group {
+                        if selectedDay != 0 {
+                            Button("Today") { goToToday(proxy) }
+                                .accessibilityHint("Scrolls to today")
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: selectedDay != 0)
                 }
+                ToolbarItem(placement: .topBarTrailing) { filterMenu }
             }
-            .toolbar(.hidden, for: .navigationBar)
             .onChange(of: typeFilter) { _, _ in FeedbackCoordinator.fire(.selection) }
             .onChange(of: unwatchedOnly) { _, _ in FeedbackCoordinator.fire(.selection) }
-            .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: selectedDay != 0)
             .confirmationDialog(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
                                 titleVisibility: .visible, presenting: prompt) { p in
                 Button(p.confirm) { p.perform() }
@@ -211,11 +306,60 @@ struct ScheduleView: View {
         return bits.isEmpty ? "Off" : bits.joined(separator: ", ")
     }
 
+    // MARK: - Scrolling
+
+    /// Put today at the top of the content and HOLD it there until the user takes the wheel.
+    ///
+    /// The shipped build did this with `asyncAfter(0.05) { proxy.scrollTo }`: if the lazy stack had
+    /// not materialised the anchor within 50 ms — cold launch, large library, slow device — the
+    /// scroll silently no-opped, `didLand` went true 250 ms later and nothing ever corrected it.
+    /// That is the failure that produced "it opens on the wrong week".
+    ///
+    /// Re-issuing the same scroll is idempotent (it moves nothing once today is already at the
+    /// top), and `onPreferenceChange` only fires when a header actually moves — so this quiesces by
+    /// itself the moment the layout settles, and wakes up again if a poster decoding above today
+    /// pushes it down. The cap only bounds a today that physically cannot reach the top.
+    private func land(_ proxy: ScrollViewProxy) {
+        guard !didLand, !landGaveUp, !appModel.library.isEmpty else { return }
+        guard visibleDays.contains(where: { $0.id == 0 }) else { return }
+        landAttempts += 1
+        guard landAttempts <= 60 else { landGaveUp = true; return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { proxy.scrollTo(0, anchor: .top) }
+    }
+
+    /// Distance-aware, and never a spring. `uiSnappy` is defined for "fast LOCAL layout changes";
+    /// pointing a 0.34 s spring at a lazy scroll view an arbitrary distance away either lands with
+    /// a tail or fights rows materialising mid-flight. So: measure the journey from the header
+    /// offsets already collected, and animate only when the animation can describe it.
+    private func scroll(to dayId: Int, proxy: ScrollViewProxy) {
+        let delta = offsets.values[dayId].map { $0 - offsets.topLine }
+        if let delta, abs(delta) <= viewportH {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.28)) {
+                proxy.scrollTo(dayId, anchor: .top)
+            }
+        } else {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo(dayId, anchor: .top) }
+        }
+    }
+
+    private func goToToday(_ proxy: ScrollViewProxy) {
+        FeedbackCoordinator.fire(.selection)
+        didLand = true
+        selectedDay = 0
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) { weekPage = 0 }
+        scroll(to: 0, proxy: proxy)
+    }
+
     // MARK: - Sticky bar
 
     /// The bar is CHROME, so it is glass over the art wash rather than an opaque black plate with a
-    /// rule under it. The same recipe paints the status-bar band above it (see `body`), which is
-    /// what stops a poster from ever reaching the clock — the defect no other polish survives.
+    /// rule under it — and it runs UP through the navigation bar and the status bar as one surface.
+    /// Terminating it at the safe-area line is what drew a hard horizontal seam across the full
+    /// width of the screen, which is exactly what a hand-rolled scroll edge looks like.
     @ViewBuilder
     private var barGround: some View {
         ZStack {
@@ -230,6 +374,8 @@ struct ScheduleView: View {
         .accessibilityHidden(true)
     }
 
+    /// The bar's own hand-off to the content: the same material, ramped out over 22 pt, so a day
+    /// header dissolves into the chrome instead of being guillotined by it.
     @ViewBuilder
     private var barFade: some View {
         let ramp = LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
@@ -243,94 +389,148 @@ struct ScheduleView: View {
     }
 
     private func stickyBar(_ proxy: ScrollViewProxy) -> some View {
-        let week = weekCells()
+        let page = weekPage ?? 0
+        let week = weekCells(page: page)
         return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: ThemeSpace.x2) {
-                Text("Schedule").type(ThemeType.displayL).foregroundStyle(ThemeColor.textPrimary)
-                Spacer(minLength: ThemeSpace.x2)
-                if selectedDay != 0 {
-                    Button("Today") {
-                        FeedbackCoordinator.fire(.selection)
-                        selectedDay = 0
-                        withAnimation(reduceMotion ? nil : ThemeMotion.uiSnappy) { proxy.scrollTo("day-0", anchor: .top) }
-                    }
-                    .buttonStyle(InlineLinkButtonStyle())
-                    .accessibilityHint("Scrolls to today")
-                    .transition(.opacity)
-                }
-                filterMenu
-            }
-            .padding(.leading, ThemeMetrics.gutter)
-            .padding(.trailing, 10)
-            .padding(.top, ThemeSpace.x1)
-
-            HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-                SectionLabel(text: monthLabel(week))
-                    .accessibilityLabel(weekSummary(week).map { "\(monthLabel(week)), \($0) this week" } ?? monthLabel(week))
-                Spacer(minLength: ThemeSpace.x2)
-                // Dropped rather than truncated at accessibility sizes: "3 EPISODES THIS WE…" is
-                // exactly the orphaned-metadata defect this pass exists to remove.
-                if !isAX, let summary = weekSummary(week) {
-                    Text(summary).type(ThemeType.sectionLabel).textCase(.uppercase)
-                        .foregroundStyle(ThemeColor.textDisabled)
-                        .lineLimit(1)
-                        .accessibilityHidden(true)
-                }
-            }
-            .padding(.horizontal, ThemeMetrics.gutter)
-            .padding(.top, ThemeSpace.x1)
-
-            if isAX {
-                ScrollView(.horizontal) {
-                    HStack(spacing: ThemeSpace.x1) { ForEach(week) { cell in weekCell(cell, proxy: proxy).frame(minWidth: 44) } }
-                        .padding(.horizontal, ThemeMetrics.gutter)
-                }
-                .scrollIndicators(.hidden)
-                .padding(.top, ThemeSpace.x1)
-            } else {
-                HStack(spacing: 0) {
-                    ForEach(week) { cell in weekCell(cell, proxy: proxy).frame(maxWidth: .infinity) }
-                }
-                .padding(.horizontal, ThemeSpace.x2)
-                .padding(.top, ThemeSpace.x0_5)
-            }
+            weekLabelRow(week)
+            weekStrip(proxy)
         }
         .padding(.bottom, ThemeSpace.x2)
-        .background(barGround)
-        // Content dissolves into the bar instead of being guillotined by it: a hard edge across a
-        // day header cuts its letters in half, which is exactly what a hand-rolled sticky bar
-        // looks like. 14 pt of the same material, ramped out.
-        .overlay(alignment: .bottom) { barFade.frame(height: 14).offset(y: 14) }
+        // The strip continues the navigation bar's surface — same material, butted against it —
+        // and its only edge is the bottom one, which RAMPS. The shipped build terminated its ground
+        // in a hard horizontal seam straight across the full width at the safe-area line, which is
+        // exactly what a hand-rolled scroll edge looks like.
+        .background { barGround }
+        // The hand-off ramp exists so scrolling CONTENT dissolves into the bar. A pinned day header
+        // is chrome and brings its own ground, so veiling it with a third material only greyed the
+        // one line the screen most wants legible — TODAY and its NOW time.
+        .overlay(alignment: .bottom) {
+            if pinnedDay == nil { barFade.frame(height: 22).offset(y: 22) }
+        }
+    }
+
+    /// "‹ 17 AUG – 23 AUG ›  ————  3 EPISODES". The label names the week the count counts: it used
+    /// to read "AUGUST 2026 · 3 EPISODES", so the number appeared to describe the month while it
+    /// actually described the seven days below it.
+    @ViewBuilder
+    private func weekLabelRow(_ week: [WeekCell]) -> some View {
+        let summary = weekSummary(week)
+        let range = weekRangeLabel(week)
+        let stepper = HStack(spacing: ThemeSpace.x1) {
+            weekStep(-1)
+            SectionLabel(text: range)
+                .accessibilityAddTraits(.isHeader)
+                .contentTransition(.opacity)
+            weekStep(1)
+        }
+        Group {
+            if isAX {
+                // Never dropped, always reflowed: "3 EPISODES" used to vanish outright at
+                // accessibility sizes, and a fact that can vanish was not needed at default size.
+                VStack(alignment: .leading, spacing: ThemeSpace.x1) {
+                    stepper
+                    if let summary {
+                        Text(summary).type(ThemeType.sectionLabel).textCase(.uppercase)
+                            .foregroundStyle(ThemeColor.textTertiary)
+                            .accessibilityHidden(true)
+                    }
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+                    stepper
+                    Spacer(minLength: ThemeSpace.x2)
+                    if let summary {
+                        Text(summary).type(ThemeType.sectionLabel).textCase(.uppercase)
+                            .foregroundStyle(ThemeColor.textTertiary)
+                            .lineLimit(1)
+                            .contentTransition(.opacity)
+                            .accessibilityHidden(true)
+                    }
+                }
+            }
+        }
+        // One text edge with everything the bar introduces: day headers, rows and the rail's
+        // content column all start at gutter + 22.
+        .padding(.leading, ThemeMetrics.gutter + Rail.gutter)
+        .padding(.trailing, ThemeMetrics.gutter)
+        .padding(.top, ThemeSpace.x1)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(summary.map { "\(range), \($0)" } ?? range)
+    }
+
+    private func weekStep(_ delta: Int) -> some View {
+        Button {
+            FeedbackCoordinator.fire(.selection)
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) {
+                weekPage = (weekPage ?? 0) + delta
+            }
+        } label: {
+            Image(systemName: delta < 0 ? "chevron.compact.left" : "chevron.compact.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(ThemeColor.textTertiary)
+                .frame(width: 28, height: 30)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(WeekCellPressStyle())
+        .accessibilityLabel(delta < 0 ? "Previous week" : "Next week")
+    }
+
+    /// The strip pages week by week. The shipped build drew one week with a static month label and
+    /// no forward/back anything — with the only two events four and six days out, the user could
+    /// not see next week at all.
+    private func weekStrip(_ proxy: ScrollViewProxy) -> some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(WeekPage.range, id: \.self) { p in
+                    HStack(spacing: 0) {
+                        ForEach(weekCells(page: p)) { cell in
+                            weekCell(cell, proxy: proxy).frame(maxWidth: .infinity)
+                        }
+                    }
+                    .padding(.horizontal, ThemeSpace.x2)
+                    .containerRelativeFrame(.horizontal)
+                    .id(p)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $weekPage)
+        .scrollIndicators(.hidden)
+        .frame(height: stripHeight)
+        .padding(.top, ThemeSpace.x0_5)
+        .accessibilityLabel("Week")
     }
 
     private var filterMenu: some View {
         Menu {
             // No symbols on the choices. A UIKit menu tints content with the app accent, so three
             // amber glyphs appeared down the left of a three-item list — decoration the checkmark
-            // already covers, in the one colour this screen spends carefully. Both groups now
-            // carry a header, so the menu reads as two decisions rather than a list and a stray.
-            Section("Type") {
-                Picker("Type", selection: $typeFilter) {
+            // already covers, in the one colour this screen spends carefully.
+            Section("Source") {
+                Picker("Source", selection: $typeFilter) {
                     Text("All").tag(MediaFilter.all)
                     Text("Anime").tag(MediaFilter.anime)
                     Text("TV").tag(MediaFilter.tv)
                 }
                 .pickerStyle(.inline)
             }
-            Section("Watched state") {
-                Toggle("Unwatched only", isOn: $unwatchedOnly)
-            }
+            // No header on the second group: a 17-pt grey `Text` above a single toggle rendered as
+            // a disabled menu item. The divider already separates the two decisions.
+            Toggle("Unwatched only", isOn: $unwatchedOnly)
         } label: {
             Image(systemName: filterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(filterActive ? ThemeColor.accent : ThemeColor.textPrimary)
-                .frame(width: 34, height: 34)
-                .chromeGlass(in: Circle(), interactive: true)
-                .frame(width: 44, height: 44)
-                .contentShape(Circle())
         }
+        .tint(filterActive ? ThemeColor.accent : ThemeColor.textPrimary)
         .accessibilityLabel("Filter")
         .accessibilityValue(filterValue)
+    }
+
+    // MARK: - Week strip
+
+    enum WeekPage {
+        /// Half a year either way — more than the horizon the API ever loads, and lazy.
+        static let range = Array(-26...26)
     }
 
     struct WeekCell: Identifiable {
@@ -338,143 +538,169 @@ struct ScheduleView: View {
         let weekday: String
         let number: String
         let date: Date
-        let hasContent: Bool
+        let count: Int
         let isToday: Bool
+        let isNext: Bool
+        var hasContent: Bool { count > 0 }
         var id: Int { offset }
     }
 
-    /// The week (Mon–Sun) containing the selected day.
-    private func weekCells() -> [WeekCell] {
+    /// Noon on today, so day arithmetic never lands on a DST seam.
+    private var todayNoon: Int64 {
         let p = Formatting.localParts(now)
-        let noon = now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
-        let selectedDate = noon + Int64(selectedDay) * Formatting.D
-        let col = Formatting.localMondayCol(selectedDate)   // 0 = Monday
-        let monday = selectedDay - col
-        let present = Set(unfilteredDays.filter { !$0.isEmpty }.map(\.id))
+        return now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
+    }
+
+    private var mondayOfToday: Int { -Formatting.localMondayCol(now) }
+
+    private func weekIndex(of day: Int) -> Int {
+        Int((Double(day - mondayOfToday) / 7).rounded(.down))
+    }
+
+    /// The Mon–Sun week `page` weeks from the week containing today.
+    private func weekCells(page: Int) -> [WeekCell] {
+        let monday = mondayOfToday + page * 7
+        let counts = Dictionary(days.map { ($0.id, $0.count) }, uniquingKeysWith: { a, _ in a })
+        let next = nextEventDay?.id
         return (0..<7).map { i in
             let offset = monday + i
-            let ts = noon + Int64(offset) * Formatting.D
+            let ts = todayNoon + Int64(offset) * Formatting.D
             let parts = Formatting.localParts(ts)
-            return WeekCell(offset: offset, weekday: String(Formatting.weekdayNameMonFirst(i).prefix(1)),
-                            number: String(parts.d), date: Date(timeIntervalSince1970: Double(ts) / 1000),
-                            hasContent: present.contains(offset), isToday: offset == 0)
+            return WeekCell(offset: offset,
+                            weekday: String(Formatting.weekdayNameMonFirst(i).prefix(1)),
+                            number: String(parts.d),
+                            date: Date(timeIntervalSince1970: Double(ts) / 1000),
+                            count: counts[offset] ?? 0,
+                            isToday: offset == 0,
+                            isNext: offset == next)
         }
     }
 
-    private func monthLabel(_ week: [WeekCell]) -> String {
-        guard let first = week.first?.date, let last = week.last?.date else { return "" }
-        let cal = Calendar.current
-        let fm = cal.component(.month, from: first), lm = cal.component(.month, from: last)
-        let fy = cal.component(.year, from: first), ly = cal.component(.year, from: last)
-        if fm == lm { return first.formatted(.dateTime.month(.wide).year()) }
-        if fy == ly { return "\(first.formatted(.dateTime.month(.abbreviated)))–\(last.formatted(.dateTime.month(.abbreviated))) \(fy)" }
-        return "\(first.formatted(.dateTime.month(.abbreviated).year())) – \(last.formatted(.dateTime.month(.abbreviated).year()))"
+    private func weekRangeLabel(_ week: [WeekCell]) -> String {
+        guard let lo = week.first, let hi = week.last else { return "" }
+        return TemporalCopy.dateRange(Int64(lo.date.timeIntervalSince1970 * 1000),
+                                      Int64(hi.date.timeIntervalSince1970 * 1000), now: now)
     }
 
-    /// The week's episode count on the month row's trailing edge, in the same label/count grammar
-    /// the day headers use ("AUGUST 2026 ——— 4 EPISODES"). It was "4 EPISODES THIS WEEK", which at
-    /// the same size and case as the month read as a second heading arguing with the first.
+    /// The count of the week the label names — nothing when the week is empty, because "0 EPISODES"
+    /// beside a date range is a fact nobody asked for.
     private func weekSummary(_ week: [WeekCell]) -> String? {
-        guard let lo = week.first?.offset, let hi = week.last?.offset else { return nil }
-        let total = days.filter { $0.id >= lo && $0.id <= hi }.reduce(0) { $0 + $1.count }
+        let total = week.reduce(0) { $0 + $1.count }
         guard total > 0 else { return nil }
         return Copy.episodes(total)
     }
 
     private func weekCell(_ cell: WeekCell, proxy: ScrollViewProxy) -> some View {
-        let selected = cell.offset == selectedDay
+        let selected = cell.offset == selectedDay && !surfaceEmpty
         let enabled = cell.hasContent || cell.isToday
-        // iOS Calendar's grammar, and the fix for "a date is the brightest object on a screen of
-        // shows": amber means TODAY, never merely "the cell you scrolled to". Selecting another day
-        // fills the cell with tone instead — it is still unmistakably the selection, and the one
-        // amber date on the strip keeps meaning the one thing amber means everywhere else.
-        let amberFill = selected && cell.isToday
-        let toneFill = selected && !cell.isToday
-        let numberColor: Color = amberFill ? ThemeColor.onAccent
-            : (cell.isToday ? ThemeColor.accent : (enabled ? ThemeColor.textPrimary : ThemeColor.textDisabled))
+        // ONE encoding of past-vs-future: the whole cell recedes as a group. The shipped build said
+        // "past" with dot colour and "has content" with numeral weight, so 17/18 (past, empty) and
+        // 20 (future, empty) looked identical and a 4-pt hue difference carried the screen's
+        // primary scanning job.
+        let past = cell.offset < 0
+        // Amber is the loudest thing in the app; a date is not allowed to be it. The selection is a
+        // tinted ground with an accent edge, and solid accent is reserved for the NOW node.
+        let numberColor: Color = selected ? ThemeColor.accent
+            : (cell.isToday ? ThemeColor.accent : ThemeColor.textPrimary)
         return Button {
             FeedbackCoordinator.fire(.selection)
+            didLand = true
             selectedDay = cell.offset
-            withAnimation(reduceMotion ? nil : ThemeMotion.uiSnappy) { proxy.scrollTo("day-\(cell.offset)", anchor: .top) }
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) {
+                weekPage = weekIndex(of: cell.offset)
+            }
+            scroll(to: cell.offset, proxy: proxy)
         } label: {
             VStack(spacing: 4) {
                 Text(cell.weekday).type(ThemeType.caption)
                     .foregroundStyle(cell.isToday ? ThemeColor.accent : ThemeColor.textTertiary)
-                // The selection is a 34-pt cell around the NUMBER only. The shipped build filled
-                // the whole 50-pt column — weekday letter, number and dot — so the brightest
-                // object on a screen of shows was a date.
                 Text(cell.number).type(ThemeType.time)
                     .foregroundStyle(numberColor)
-                    // Padding first, then the 34-pt minimum. A fixed 34-pt box alone clipped the
-                    // fill hard against the digits once Dynamic Type grew them — the selected day
-                    // read as a numeral wedged into a swatch.
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                    // Padding first, then the 34-pt minimum: a fixed box alone clipped the fill
+                    // hard against the digits once Dynamic Type grew them.
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
                     .frame(minWidth: 34, minHeight: 34)
                     .background {
-                        if amberFill {
+                        if selected {
                             RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                                .fill(ThemeColor.accent)
+                                .fill(ThemeColor.accent.opacity(0.18))
                                 .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                                    .strokeBorder(LinearGradient(colors: [ThemeColor.controlSheen, .clear],
-                                                                startPoint: .top, endPoint: .center), lineWidth: 1))
-                        } else if toneFill {
-                            // Tone alone could not carry it: a +6 % fill floating on a glass bar
-                            // read as a smudge under the date, not as a selection. A control is one
-                            // of the three things allowed a full-perimeter stroke, and a defined
-                            // edge is what makes this one legible without spending amber on it.
-                            RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                                .fill(ThemeColor.surfacePressed)
-                                .overlay(RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
-                                    .strokeBorder(ThemeColor.strokeStrong, lineWidth: 1))
+                                    .strokeBorder(ThemeColor.accent, lineWidth: 1.5))
                         }
                     }
-                // Amber on a dot is a forward-looking fact — something is coming. A day that has
-                // already aired gets the neutral ramp, so the strip reads past→future at a glance
-                // instead of printing the same alarm colour across the whole week.
-                Circle().fill(cell.offset < 0 ? ThemeColor.textDisabled : ThemeColor.accent)
-                    .frame(width: 3, height: 3)
-                    .opacity(cell.hasContent ? 1 : 0)
-                    .frame(height: 3)
+                // The dot now carries ONE fact — "something airs here" — at a size a low-vision
+                // user can resolve, and it distinguishes the next airing day by SHAPE, not hue.
+                dayDot(cell)
             }
             .frame(minWidth: 44, minHeight: 44)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity)
+            // Past recedes as a group — but never the SELECTED cell: dimming the one cell the user
+            // just chose turned its accent edge into a brown smudge.
+            .opacity(past && !selected ? 0.55 : 1)
             .contentShape(Rectangle())
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: selected)
         }
         .buttonStyle(WeekCellPressStyle())
         .disabled(!enabled)
         .accessibilityLabel(cell.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-        .accessibilityValue(selected ? "Selected" : (cell.isToday ? "Today" : (cell.hasContent ? "" : "No episodes")))
+        // Built as a list, not a nested ternary: a day that HAD episodes used to get an empty value
+        // and go silent, while an empty day announced itself — the strip's entire purpose inverted.
+        .accessibilityValue([selected ? "Selected" : nil,
+                             cell.isToday ? "Today" : nil,
+                             cell.hasContent ? Copy.episodes(cell.count) : "No episodes"]
+            .compactMap { $0 }.joined(separator: ", "))
+    }
+
+    @ViewBuilder
+    private func dayDot(_ cell: WeekCell) -> some View {
+        let dotColor = surfaceEmpty ? ThemeColor.textTertiary : ThemeColor.accent
+        Group {
+            if cell.isNext {
+                Circle().fill(dotColor)
+            } else if cell.hasContent {
+                Circle().strokeBorder(ThemeColor.textSecondary, lineWidth: 1.5)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 6, height: 6)
+        .accessibilityHidden(true)
     }
 
     // MARK: - Content (state matrix)
 
     /// A whole-screen state sits in the MIDDLE of the content area, not pinned under the week strip
-    /// with 1 100 pt of canvas beneath it. `containerRelativeFrame` measures the scroll container,
-    /// which — the bar being a safe-area inset — is exactly the area the user can see.
+    /// with 1 100 pt of canvas beneath it.
     @ViewBuilder
     private func centred<V: View>(@ViewBuilder _ state: () -> V) -> some View {
         state()
             .padding(.horizontal, ThemeMetrics.gutter)
             .frame(maxWidth: .infinity)
-            // Inside the container frame, so the centring is measured against the area the tab bar
-            // does not cover — an optically centred card, not a mathematically centred one.
             .padding(.bottom, ThemeMetrics.tabBarClearance)
             .containerRelativeFrame(.vertical, alignment: .center)
     }
 
     @ViewBuilder
-    private func content(_ proxy: ScrollViewProxy) -> some View {
+    private func content() -> some View {
         if appModel.loading && appModel.library.isEmpty {
             feedSkeleton
         } else if appModel.loadError && appModel.libraryEmpty {
             centred {
-                EmptyState(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData, prominence: .major) { Task { await appModel.reload() } }
+                // `primary:` explicitly. Written as a trailing closure this bound to `secondary` —
+                // `serverNoCache` has no secondary label, so Schedule's whole-screen server error
+                // shipped with no Try again at all and the only recovery was to change tabs.
+                EmptyState(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData,
+                           prominence: .major,
+                           primary: { Task { await appModel.reload() } })
             }
         } else if appModel.libraryEmpty {
-            centred { EmptyState(.emptyAccount, prominence: .major, primary: onAddShow) }
+            // Schedule's own empty sentence — the shipped card said "Your library is empty / Add
+            // your first show and Today builds itself" on a screen that is neither.
+            centred { EmptyState(.emptySchedule, prominence: .major, primary: onAddShow) }
         } else {
             if appModel.sectionFailed {
                 InlineNotice(Copy.Notice.schedule) { Task { await appModel.reload() } }
@@ -494,7 +720,7 @@ struct ScheduleView: View {
                     })
                 }
             } else {
-                let visible = shown.filter { !$0.isEmpty || $0.isToday }
+                let visible = visibleDays
                 ForEach(Array(visible.enumerated()), id: \.element.id) { i, day in
                     dayView(day, isFirst: i == 0)
                 }
@@ -503,16 +729,11 @@ struct ScheduleView: View {
         }
     }
 
-    /// The feed's loading state, composed from the shared skeleton atoms at THIS screen's geometry.
-    ///
-    /// `Skeleton.schedule` draws a placeholder week strip, which — now that the bar is a real
-    /// safe-area inset that renders the live strip whether or not data has arrived — appeared
-    /// directly beneath it: two week strips, one of them fake. It also previews 36×54 posters
-    /// against this screen's 56×84 rows, so the swap to content changed the row height under the
-    /// user. Same parts, right proportions, and the rail is already there when the data lands.
+    /// The feed's loading state, composed from the shared skeleton atoms at THIS screen's geometry
+    /// — same parts, right proportions, and the rail is already there when the data lands.
     private var feedSkeleton: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(0..<3, id: \.self) { i in
+            ForEach(0..<3, id: \.self) { _ in
                 SkeletonLine(width: 116, height: 11)
                     .padding(.leading, Rail.gutter)
                     .padding(.top, ThemeMetrics.sectionGap)
@@ -532,57 +753,71 @@ struct ScheduleView: View {
 
     // MARK: - Day
 
-    /// One day block. The rail is drawn as this block's background so consecutive days chain into
-    /// one continuous line without any cross-row geometry being measured — the same trick the
-    /// History timeline uses.
+    /// One day block: a pinned header and its rows. The rail is drawn as the background of BOTH so
+    /// the line stays continuous while the header sticks — the header carries its own 1-pt segment
+    /// with it, over the same glass the week strip uses.
+    @ViewBuilder
     private func dayView(_ day: Day, isFirst: Bool) -> some View {
         let showKindLabel = !day.dateOnly.isEmpty && !day.timed.isEmpty
         // A past day whose every episode is watched is DONE, so its label recedes with its rows.
-        // The original's past section read as handled at a glance because the whole group went
-        // quiet together, not because five separate greys were picked for five elements.
         let settled = day.id < 0 && !day.isEmpty
             && day.dateOnly.allSatisfy { $0.watched || committed.contains($0.id) }
             && day.timed.allSatisfy { $0.watched || committed.contains($0.id) }
-        return VStack(alignment: .leading, spacing: 0) {
-            dayHeader(day).opacity(settled ? 0.62 : 1)
-
-            if !day.dateOnly.isEmpty {
-                if showKindLabel { kindLabel("Date only") }
-                ForEach(day.dateOnly) { e in row(e) }
-            }
-            if !day.timed.isEmpty {
-                if showKindLabel { kindLabel("Timed") }
-                let nowIndex = day.isToday ? (day.timed.firstIndex { $0.at > nowMinute } ?? day.timed.count) : -1
-                ForEach(Array(day.timed.enumerated()), id: \.element.id) { i, e in
-                    if i == nowIndex { nowMarker }
-                    row(e)
+        Section {
+            VStack(alignment: .leading, spacing: 0) {
+                if day.isToday && day.isEmpty {
+                    // Today, empty: ONE line under one band. The shipped build stacked a day
+                    // header, a full-width accent NOW rule and a grey sentence — the loudest
+                    // horizontal element on the screen marking nothing, three deep, on the screen
+                    // a user opens daily.
+                    Text(nothingTodayLine)
+                        .type(ThemeType.rowMeta).foregroundStyle(ThemeColor.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, Rail.gutter)
+                        .padding(.top, ThemeSpace.x1)
+                        .padding(.bottom, ThemeSpace.x3)
+                } else {
+                    if !day.dateOnly.isEmpty {
+                        if showKindLabel { kindLabel("Date only") }
+                        ForEach(day.dateOnly) { e in row(e) }
+                    }
+                    if !day.timed.isEmpty {
+                        if showKindLabel { kindLabel("Timed") }
+                        let nowIndex = day.isToday ? (day.timed.firstIndex { $0.at > nowMinute } ?? day.timed.count) : -1
+                        ForEach(Array(day.timed.enumerated()), id: \.element.id) { i, e in
+                            if i == nowIndex { nowMarker }
+                            row(e)
+                        }
+                        if day.isToday && nowIndex == day.timed.count { nowMarker }
+                    }
+                    if day.isToday && day.timed.isEmpty && !day.dateOnly.isEmpty { nowMarker }
                 }
-                if day.isToday && nowIndex == day.timed.count { nowMarker }
             }
-            // Today is the anchor of this screen: NOW renders even when nothing airs, which is
-            // exactly the state the shipped capture was in when the marker went missing entirely.
-            if day.isToday && day.timed.isEmpty {
-                nowMarker
-            }
-            if day.isEmpty {
-                Text(hasAiredEarlierToday(day) ? "Nothing else airs today" : "Nothing airs today")
-                    .type(ThemeType.rowMeta).foregroundStyle(ThemeColor.textTertiary)
-                    .padding(.leading, Rail.gutter)
-                    .padding(.top, ThemeSpace.x3)
-                    .padding(.bottom, ThemeSpace.x1)
-            }
+            .padding(.horizontal, ThemeMetrics.gutter)
+            .background(alignment: .topLeading) { railLine(head: false) }
+        } header: {
+            dayHeader(day)
+                .opacity(settled ? 0.62 : 1)
+                .padding(.horizontal, ThemeMetrics.gutter)
+                .background(alignment: .topLeading) { railLine(head: isFirst) }
+                // Chrome only while it IS chrome. A header that always carried glass would be six
+                // glass bands down one screen; a pinned header with no ground lets rows read
+                // through it.
+                .background {
+                    if pinnedDay == day.id {
+                        barGround
+                            .overlay(alignment: .bottom) { barFade.frame(height: 12).offset(y: 12) }
+                    }
+                }
         }
-        .padding(.horizontal, ThemeMetrics.gutter)
-        .background(alignment: .topLeading) { railLine(head: isFirst) }
     }
 
-    /// The 1-pt timeline. On the FIRST day it fades up out of the header band — a hard 1-pt start
-    /// under a glass bar is the tell of a hand-rolled rail. The other end is finished by `feedTail`.
+    /// The 1-pt timeline. On the FIRST day it fades up out of the header band over 24 pt — a hard
+    /// 1-pt start under a glass bar is the tell of a hand-rolled rail.
     private func railLine(head: Bool) -> some View {
         GeometryReader { geo in
             let h = geo.size.height
-            // The fade runs from the block's top edge to just past the day header's baseline.
-            let fade = head ? min(0.5, (ThemeMetrics.sectionGap + ThemeSpace.x3) / max(h, 1)) : 0
+            let fade = head ? min(0.6, 24 / max(h, 1)) : 0
             Rectangle()
                 .fill(ThemeColor.separator)
                 .frame(width: 1, height: h)
@@ -595,15 +830,21 @@ struct ScheduleView: View {
         .accessibilityHidden(true)
     }
 
-    /// The end of the horizon. The feed used to stop at its last poster and leave ~300 pt of bare
-    /// canvas above the tab bar — the screen ended and nothing acknowledged it. The rail now runs
-    /// on past the last event and terminates in a cap, the way a measuring rule ends, with the one
-    /// fact the user actually wants there: past this point nothing is scheduled.
+    /// The end of the horizon, and it NAMES the horizon. "Nothing scheduled" alone read as a second
+    /// failure two screens below the first one, and it had no scope: nothing scheduled *when*?
+    private var horizonLine: String {
+        guard let last = appModel.scheduleDays.last else { return Copy.Empty.nothingScheduled.title }
+        let ts = todayNoon + Int64(last.id) * Formatting.D
+        return "No further episodes through \(Formatting.fmtMonthDay(ts))"
+    }
+
+    /// The rail runs on past the last event and *fades* into the closing sentence, terminating in a
+    /// node rather than the stray horizontal tick that read as a drawing bug.
     private var feedTail: some View {
         let run = ThemeMetrics.sectionGap
-        return Text(Copy.Empty.nothingScheduled.title)
+        return Text(horizonLine)
             .type(ThemeType.rowMeta)
-            .foregroundStyle(ThemeColor.textDisabled)
+            .foregroundStyle(ThemeColor.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
             .padding(.leading, Rail.gutter)
@@ -611,12 +852,17 @@ struct ScheduleView: View {
             .padding(.horizontal, ThemeMetrics.gutter)
             .overlay(alignment: .topLeading) {
                 GeometryReader { geo in
-                    // The cap sits on the caption's own centre line, whatever the type size does.
                     let capY = run + (geo.size.height - run) / 2
                     ZStack(alignment: .topLeading) {
-                        Rectangle().fill(ThemeColor.separator).frame(width: 1, height: capY)
-                        Rectangle().fill(ThemeColor.separator).frame(width: 11, height: 1)
-                            .offset(x: -5, y: capY)
+                        Rectangle().fill(ThemeColor.separator)
+                            .frame(width: 1, height: capY)
+                            .mask(LinearGradient(stops: [.init(color: .black, location: 0),
+                                                         .init(color: .black, location: max(0, 1 - 10 / max(capY, 1))),
+                                                         .init(color: .clear, location: 1)],
+                                                 startPoint: .top, endPoint: .bottom))
+                        Circle().strokeBorder(ThemeColor.separatorQuiet, lineWidth: 1.5)
+                            .frame(width: node, height: node)
+                            .offset(x: -node / 2 + 0.5, y: capY - node / 2)
                     }
                     .offset(x: ThemeMetrics.gutter + Rail.x - 0.5)
                 }
@@ -626,25 +872,49 @@ struct ScheduleView: View {
             .accessibilityElement(children: .combine)
     }
 
+    /// "Nothing scheduled · Next up Sun 23 Aug" — the header supplies "today", so the sentence does
+    /// not repeat it, and it names the next date rather than leaving the day a dead end.
+    private var nothingTodayLine: String {
+        let base = hasAiredEarlierToday() ? "Nothing else scheduled" : "Nothing scheduled"
+        guard let next = appModel.scheduleDays.first(where: { $0.id > 0 && !day(from: $0).isEmpty }) else {
+            return base
+        }
+        return "\(base) · Next up \(String(next.label.prefix(3))) \(next.dateLabel)"
+    }
+
     private func dayHeader(_ day: Day) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: ThemeMetrics.labelGap) {
+        let todayEmpty = day.isToday && day.isEmpty
+        return HStack(alignment: .firstTextBaseline, spacing: ThemeMetrics.labelGap) {
             Text(day.header).type(ThemeType.dayLabel).textCase(.uppercase)
                 .foregroundStyle(day.isToday ? ThemeColor.accent : ThemeColor.textTertiary)
                 .lineLimit(isAX ? 2 : 1)
                 .fixedSize(horizontal: false, vertical: true)
             if !isAX {
-                // Neutral even on Today: the label already carries the amber, and a second amber
-                // rule 40 pt above the NOW line's amber rule was two of the same gesture in one
-                // glance. It also fades out to the right rather than ruling edge to edge — six
-                // full-width hairlines down one screen is what makes a feed read as a table.
+                // Neutral even on Today, and it fades out to the right rather than ruling edge to
+                // edge — six full-width hairlines down one screen is what makes a feed read as a
+                // table. It always connects two objects now: the trailing slot is never empty.
                 Rectangle().fill(LinearGradient(colors: [ThemeColor.separatorQuiet, ThemeColor.separatorQuiet.opacity(0)],
                                                 startPoint: .leading, endPoint: .trailing))
                     .frame(height: 1)
             } else {
                 Spacer(minLength: ThemeSpace.x2)
             }
-            if day.count > 0 {
+            if todayEmpty {
+                // The NOW marker, folded INTO the header rather than given a rule and a row of its
+                // own above an empty day.
+                HStack(spacing: 5) {
+                    Text("Now").type(ThemeType.dayLabel).textCase(.uppercase)
+                    Text(Formatting.fmtTime(nowMinute)).type(ThemeType.time)
+                }
+                .foregroundStyle(ThemeColor.accent)
+                .lineLimit(1)
+                .animation(reduceMotion ? nil : ThemeMotion.uiGentle, value: nowMinute)
+            } else if day.count > 0 {
                 Text(Copy.episodes(day.count)).type(ThemeType.sectionLabel).textCase(.uppercase)
+                    .foregroundStyle(ThemeColor.textTertiary)
+                    .lineLimit(1)
+            } else {
+                Text("No episodes").type(ThemeType.sectionLabel).textCase(.uppercase)
                     .foregroundStyle(ThemeColor.textDisabled)
                     .lineLimit(1)
             }
@@ -652,18 +922,27 @@ struct ScheduleView: View {
         .padding(.leading, Rail.gutter)
         .padding(.top, ThemeMetrics.sectionGap)
         .padding(.bottom, ThemeSpace.x1)
+        .overlay(alignment: .leading) {
+            if todayEmpty {
+                nowNode.offset(x: Rail.x - node / 2, y: headerNodeDrop)
+            }
+        }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(day.count > 0 ? "\(day.header), \(Copy.episodes(day.count))" : day.header)
+        .accessibilityLabel(todayEmpty
+                            ? "\(day.header), no episodes, now \(Formatting.fmtTime(nowMinute))"
+                            : (day.count > 0 ? "\(day.header), \(Copy.episodes(day.count))" : "\(day.header), no episodes"))
         .accessibilityAddTraits(.isHeader)
-        .id("day-\(day.id)")
+        .id(day.id)
         .background(GeometryReader { geo in
             Color.clear.preference(key: DayHeaderKey.self, value: [day.id: geo.frame(in: .named("schedule.feed")).minY])
         })
     }
 
-    /// "Date only" / "Timed" — printed ONLY when a day genuinely carries both kinds. A day section
-    /// already supplies the item's context; repeating it above every row is five identical eyebrows
-    /// carrying no information.
+    /// The overlay is centred on the header's whole box, which includes a 30-pt lead-in; the node
+    /// has to come back down onto the label's own line.
+    private var headerNodeDrop: CGFloat { (ThemeMetrics.sectionGap - ThemeSpace.x1) / 2 }
+
+    /// "Date only" / "Timed" — printed ONLY when a day genuinely carries both kinds.
     private func kindLabel(_ text: String) -> some View {
         SectionLabel(text: text)
             .padding(.leading, Rail.gutter)
@@ -672,12 +951,19 @@ struct ScheduleView: View {
             .accessibilityAddTraits(.isHeader)
     }
 
-    private func hasAiredEarlierToday(_ day: Day) -> Bool {
-        guard day.isToday, let raw = appModel.scheduleDays.first(where: \.isToday) else { return false }
+    private func hasAiredEarlierToday() -> Bool {
+        guard let raw = appModel.scheduleDays.first(where: \.isToday) else { return false }
         return !raw.airedToday.isEmpty
     }
 
     // MARK: - NOW
+
+    private var nowNode: some View {
+        Circle().fill(ThemeColor.accent)
+            .frame(width: node, height: node)
+            .background { Circle().fill(ThemeColor.accentSoft).frame(width: node + 10, height: node + 10) }
+            .accessibilityHidden(true)
+    }
 
     /// `NOW ————————— 5:54 AM`, on the rail, in the one place amber is unambiguously right.
     /// It is the only thing on this screen that moves on its own, once a minute.
@@ -685,8 +971,6 @@ struct ScheduleView: View {
         HStack(spacing: ThemeMetrics.labelGap) {
             Text("Now").type(ThemeType.dayLabel).textCase(.uppercase).foregroundStyle(ThemeColor.accent)
             if !isAX {
-                // It has to LAND on the time, not evaporate two thirds of the way there, or the
-                // clock at the end reads as an unrelated number floating in the gutter.
                 Rectangle().fill(LinearGradient(colors: [ThemeColor.accent.opacity(0.60), ThemeColor.accent.opacity(0.28)],
                                                 startPoint: .leading, endPoint: .trailing))
                     .frame(height: 1)
@@ -697,13 +981,7 @@ struct ScheduleView: View {
         }
         .padding(.leading, Rail.gutter)
         .padding(.vertical, ThemeMetrics.labelGap)
-        .overlay(alignment: .leading) {
-            Circle().fill(ThemeColor.accent)
-                .frame(width: Rail.node, height: Rail.node)
-                .background { Circle().fill(ThemeColor.accentSoft).frame(width: Rail.node + 10, height: Rail.node + 10) }
-                .offset(x: Rail.x - Rail.node / 2)
-                .accessibilityHidden(true)
-        }
+        .overlay(alignment: .leading) { nowNode.offset(x: Rail.x - node / 2) }
         .animation(reduceMotion ? nil : ThemeMotion.uiGentle, value: nowMinute)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Now, \(Formatting.fmtTime(nowMinute))")
@@ -715,25 +993,32 @@ struct ScheduleView: View {
         let f = e.franchise
         let isCommitted = committed.contains(e.id)
         let watched = e.watched || isCommitted
-        let showsAction = e.aired && !watched && appModel.isInLibrary(f.id)
+        // The control stays put through the commit so the check can DRAW in place; only a row that
+        // was already watched when the screen loaded starts as a passive tick.
+        let showsAction = e.aired && !e.watched && appModel.isInLibrary(f.id)
         let batch = e.aired && e.episode > e.part.progress + 1
         let time = e.dateOnly ? nil : Formatting.fmtTime(e.at, anchor: f.timeAnchor)
-        // The trailing column has ONE grammar for every row: a state word over the time. Future
-        // reads AIRS / 8:30 PM; a watched row reads ✓ / 7:30 PM. Only an actionable row replaces
-        // the pair with the mark control, because a row gets one primary action and no company.
-        // (Previously a watched row hid its time in the meta line and put a bare 14-pt grey check
-        // 350 pt away from the text it belonged to — a tick alone in an empty gutter.)
-        let meta = metaLine(e, inlineTime: showsAction ? time : nil)
-        let spokenTime = showsAction ? "" : (time.map { ", \($0)" } ?? "")
+        // At accessibility sizes the air time LEADS the row — the schedule's organising fact — so
+        // it never detaches into a stray third line 90 pt under the episode number.
+        let leadTime = isAX ? time : nil
+        let meta = metaLine(e, inlineTime: (showsAction && !isAX) ? time : nil)
+        let spokenTime = time.map { ", \($0)" } ?? ""
         let hasReminder = !e.aired && ScheduleReminders.shared.has(mediaId: e.part.mediaId, episode: e.episode)
+        let posterW = isAX ? Rail.posterAXW : Rail.posterW
+        let posterH = isAX ? Rail.posterAXH : Rail.posterH
         let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x3))
                           : AnyLayout(HStackLayout(alignment: .center, spacing: ThemeSpace.x3))
         return layout {
             Button { onOpenDetail(f.id, "sched/\(f.id)", EpisodeFocus(mediaId: e.part.mediaId, episode: e.episode)) } label: {
-                HStack(spacing: ThemeMetrics.artGap) {
-                    PosterSlot(url: f.cover, width: Rail.posterW, height: Rail.posterH,
+                // `.center`, always: at AX the poster used to strand at the top-left of a 230-pt row
+                // with empty canvas beside and beneath it, and stopped being the row's anchor.
+                HStack(alignment: .center, spacing: ThemeMetrics.artGap) {
+                    PosterSlot(url: f.cover, width: posterW, height: posterH,
                                radius: ThemeRadius.poster, shadow: ShadowToken.none)
                     VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
+                        if let leadTime {
+                            Text(leadTime).type(ThemeType.time).foregroundStyle(ThemeColor.accent)
+                        }
                         Text(f.title).type(ThemeType.rowTitle).foregroundStyle(ThemeColor.textPrimary)
                             .lineLimit(isAX ? nil : 2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -747,19 +1032,13 @@ struct ScheduleView: View {
             }
             .buttonStyle(RowPressStyle(radius: ThemeRadius.poster))
             .accessibilityElement(children: .ignore)
-            // `meta` already carries the time when the trailing column is the mark control; every
-            // other row keeps its time in that column, so VoiceOver picks it up from here instead.
-            // `meta` already carries the time when the trailing column is the mark control; every
-            // other row keeps its time in that column, so VoiceOver picks it up from here instead.
             .accessibilityLabel("\(f.title), \(meta)\(spokenTime)\(hasReminder ? ", reminder set" : "")")
             .accessibilityValue(watched ? Copy.Accessibility.complete : "")
             .accessibilityHint("Opens the show")
 
-            // At accessibility sizes the row stacks, and the control lines up with the TEXT column
-            // rather than with the poster — otherwise a lone check floats under the artwork with
-            // nothing to belong to.
-            trailing(e, showsAction: showsAction, watched: watched, batch: batch, time: time, hasReminder: hasReminder)
-                .padding(.leading, isAX ? Rail.posterW + ThemeMetrics.artGap : 0)
+            trailing(e, showsAction: showsAction, marked: isCommitted, watched: watched,
+                     batch: batch, time: isAX ? nil : time, hasReminder: hasReminder)
+                .padding(.leading, isAX ? posterW + ThemeMetrics.artGap : 0)
                 .frame(maxWidth: isAX ? .infinity : nil, alignment: .leading)
         }
         .padding(.leading, Rail.gutter)
@@ -769,31 +1048,30 @@ struct ScheduleView: View {
         // A handled row recedes as ONE opacity: element-by-element greys break the artwork's
         // colour relationship and read as five disabled controls rather than one settled row.
         .opacity(watched ? 0.48 : 1)
-        .overlay(alignment: .leading) { node(watched: watched, aired: e.aired) }
+        .overlay(alignment: .leading) { railNode(watched: watched, aired: e.aired) }
         .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: isCommitted)
     }
 
     @ViewBuilder
-    private func trailing(_ e: Event, showsAction: Bool, watched: Bool, batch: Bool,
+    private func trailing(_ e: Event, showsAction: Bool, marked: Bool, watched: Bool, batch: Bool,
                           time: String?, hasReminder: Bool) -> some View {
+        // Reduce Motion branched at BOTH sites: shortening the duration does not stop a 0.6 → 1
+        // scale from playing, and Today's identical control is branched correctly.
+        let markTransition: AnyTransition = reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.6))
         if showsAction {
-            Button { mark(e, batch: batch) } label: {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ThemeColor.accent)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(ThemeColor.accentSoft))
-                    .overlay(Circle().strokeBorder(ThemeColor.accent.opacity(0.55), lineWidth: 1.5))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
+            // The shared mark control, so the same gesture has the same shape on Schedule, the
+            // episode list and Detail — and the check DRAWS on commit here too.
+            MarkRing(marked: marked,
+                     label: batch ? "Mark \(Copy.episodes(e.episode - e.part.progress)) of \(e.franchise.title) as watched"
+                                  : "Mark \(Copy.episode(e.episode)) of \(e.franchise.title) as watched",
+                     markedLabel: Copy.Progress.episodeWatched(e.episode)) {
+                guard !marked else { return }
+                mark(e, batch: batch)
             }
-            .buttonStyle(MarkPressStyle())
-            .accessibilityLabel(batch ? "Mark \(Copy.episodes(e.episode - e.part.progress)) of \(e.franchise.title) as watched"
-                                      : "Mark \(Copy.episode(e.episode)) of \(e.franchise.title) as watched")
-            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            .transition(markTransition)
         } else if e.aired {
             // Settled: the same two-line column the upcoming rows use, with the tick standing where
-            // AIRS stands. The row is already dimmed as a group, so this needs no colour of its own.
+            // the time's state word stands. The row is already dimmed as a group.
             VStack(alignment: isAX ? .leading : .trailing, spacing: 1) {
                 if watched { PassiveTick() }
                 if let time {
@@ -802,7 +1080,7 @@ struct ScheduleView: View {
             }
             .frame(minWidth: 44, alignment: isAX ? .leading : .trailing)
             .accessibilityHidden(true)
-            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            .transition(markTransition)
         } else if let time {
             VStack(alignment: isAX ? .leading : .trailing, spacing: 1) {
                 if hasReminder {
@@ -821,39 +1099,46 @@ struct ScheduleView: View {
         }
     }
 
-    /// The rail node, and it carries meaning rather than decoration: **filled = it happened,
-    /// hollow = it has not yet**. So the eye can read past→future down the gutter without reading a
-    /// word. Amber belongs to NOW alone here — the row's own control is already the amber thing
-    /// when a row is actionable, and two ambers for one action is one too many.
-    private func node(watched: Bool, aired: Bool) -> some View {
+    /// The rail node, and it carries meaning rather than decoration. Three states, all legible at
+    /// 8 pt with a 1.5-pt stroke that tracks Dynamic Type:
+    ///   · **accent ring** — it has not happened yet. The shipped build gave every future episode a
+    ///     hollow `textDisabled` ring, so a column of disabled-looking marks ran down a list of
+    ///     things to look forward to;
+    ///   · **`textSecondary` ring** — it aired and is waiting for you;
+    ///   · **filled `textDisabled` + a knocked-out check** — done.
+    /// Solid accent belongs to NOW alone.
+    private func railNode(watched: Bool, aired: Bool) -> some View {
         Group {
             if watched {
-                // Done. Smaller and quieter than a live one; the row above it is dimmed as a group.
-                Circle().fill(ThemeColor.textDisabled)
-                    .frame(width: Rail.node - 2, height: Rail.node - 2)
+                ZStack {
+                    Circle().fill(ThemeColor.textDisabled)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: node * 0.62, weight: .black))
+                        .foregroundStyle(ThemeColor.canvas)
+                }
             } else if aired {
-                Circle().fill(ThemeColor.textSecondary)
+                Circle().strokeBorder(ThemeColor.textSecondary, lineWidth: nodeStroke)
             } else {
-                Circle().fill(ThemeColor.canvas)
-                    .overlay(Circle().strokeBorder(ThemeColor.textDisabled, lineWidth: 1.5))
+                Circle().strokeBorder(ThemeColor.accent, lineWidth: nodeStroke)
             }
         }
-        .frame(width: Rail.node, height: Rail.node)
-        .offset(x: Rail.x - Rail.node / 2)
+        .frame(width: node, height: node)
+        .offset(x: Rail.x - node / 2)
         .accessibilityHidden(true)
     }
 
+    /// One meta line for both sources. It used to branch on `source == .tmdb`, so a multi-season
+    /// anime printed a bare "Episode 20" here while its own detail screen said "Season 4 · Episode
+    /// 19" — and an episode number alone is meaningless exactly when a show has seasons.
+    /// `canonicalLabel` is empty for a single-part title and `watchContext` degrades to
+    /// "Episode 9", so nothing regresses for shows that have only one part.
     private func metaLine(_ e: Event, inlineTime: String?) -> String {
+        let label = e.part.canonicalLabel
         var s: String
-        if e.franchise.source == .tmdb {
-            let season = e.part.canonicalLabel
-            if !e.aired && e.part.nextAiringCount > 1 {
-                s = season.isEmpty ? Copy.episodes(e.part.nextAiringCount) : "\(season) · \(Copy.episodes(e.part.nextAiringCount))"
-            } else {
-                s = season.isEmpty ? Copy.episode(e.episode) : "\(season) · \(Copy.episode(e.episode))"
-            }
+        if !e.aired && e.part.nextAiringCount > 1 {
+            s = label.isEmpty ? Copy.episodes(e.part.nextAiringCount) : "\(label) · \(Copy.episodes(e.part.nextAiringCount))"
         } else {
-            s = Copy.episode(e.episode)
+            s = Copy.watchContext(part: label, episode: e.episode)
         }
         if let inlineTime { s += " · \(inlineTime)" }
         return s
@@ -880,9 +1165,9 @@ struct ScheduleView: View {
         commit(e) { appModel.presentUndo(undo) }
     }
 
-    /// The button is replaced in place by the tick and the row settles into its dimmed state; the
-    /// row never moves (a calendar keeps its history) unless "Unwatched only" is on, in which case
-    /// it leaves after a 650 ms hold.
+    /// The control fills and the check draws in place; the row settles into its dimmed state and
+    /// never moves (a calendar keeps its history) unless "Unwatched only" is on, in which case it
+    /// leaves after a 650 ms hold.
     private func commit(_ e: Event, then present: @escaping () -> Void) {
         _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
             committed.insert(e.id)
@@ -902,17 +1187,30 @@ struct ScheduleView: View {
 }
 
 /// The week strip's press feedback. `RowPressStyle` paints a 16-pt rounded wash across the whole
-/// 44-pt column; a date cell wants nothing but its own compression.
+/// 44-pt column; a date cell wants nothing but its own compression — and the app's compression
+/// floor is 0.985, not the 6 % this style used to take out of a 44-pt date.
 private struct WeekCellPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.94 : 1))
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .animation(ThemeMotion.pick(ThemeMotion.uiPress, reduceMotion: reduceMotion),
                        value: configuration.isPressed)
     }
+}
+
+/// See the note on `offsets`: deliberately a reference type, so a scroll can record where every day
+/// header is without invalidating the view sixty times a second.
+@MainActor private final class DayOffsetBox {
+    var values: [Int: CGFloat] = [:]
+    /// The scroll view's own offset, so a target can be expressed as "where it is now, plus the
+    /// error the day header reports" — arithmetic a pinned section header cannot confuse.
+    /// Where a day header sits when it is at the top of the content. Calibrated from today's own
+    /// header while the screen still owns the scroll, so nothing here has to assume which frame a
+    /// named coordinate space is measured against.
+    var topLine: CGFloat = 0
 }
 
 private struct DayHeaderKey: PreferenceKey {
