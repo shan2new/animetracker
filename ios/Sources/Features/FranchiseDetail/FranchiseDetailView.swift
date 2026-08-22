@@ -6,18 +6,18 @@ import SwiftUI
 // Every write has Undo or a confirmation that states its exact blast radius.
 struct FranchiseDetailView: View {
     @Environment(AppModel.self) private var appModel
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     let franchiseId: String
     var focus: EpisodeFocus? = nil
+    /// Pushes onto the owning tab's navigation path (Detail is a push, never a sheet).
+    var push: (DetailPush) -> Void = { _ in }
 
     @State private var fetched: Franchise?
     @State private var loading = true
     @State private var loadError = false
     @State private var synopsisExpanded = false
     @State private var revealed: Set<Int> = []          // episode numbers whose title the user revealed
-    @State private var path: [DetailPush] = []
     @State private var tint: Color?
 
     // Mark timeline (identical to Today)
@@ -29,41 +29,43 @@ struct FranchiseDetailView: View {
     private var now: Int64 { appModel.now }
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
-    enum DetailPush: Hashable { case episodes(mediaId: Int) }
+    enum DetailPush: Hashable { case episodes(franchiseId: String, mediaId: Int, focusEpisode: Int?) }
 
     // MARK: - Body
 
     var body: some View {
-        NavigationStack(path: $path) {
-            ZStack {
-                ThemeColor.canvas.ignoresSafeArea()
-                SkeletonGate(isLoading: franchise == nil && loading && !loadError) {
-                    Skeleton.detail
-                } content: {
-                    if let f = franchise {
-                        screen(f)
-                    } else if loadError {
-                        EmptyState(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData, prominence: .major) {
-                            Task { await load() }
-                        }
-                        .padding(ThemeSpace.x4)
+        ZStack {
+            ThemeColor.canvas.ignoresSafeArea()
+            SkeletonGate(isLoading: franchise == nil && loading && !loadError) {
+                Skeleton.detail
+            } content: {
+                if let f = franchise {
+                    screen(f)
+                } else if loadError {
+                    EmptyState(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData, prominence: .major) {
+                        Task { await load() }
+                    }
+                    .padding(ThemeSpace.x4)
+                }
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if let f = franchise {
+                    if inLibrary {
+                        statusMenu(f)
+                        overflowMenu(f)
+                    } else {
+                        addButton(f)
                     }
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: DetailPush.self) { push in
-                switch push {
-                case .episodes(let mediaId):
-                    SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, fetched: fetched,
-                                       focusEpisode: focus?.mediaId == mediaId ? focus?.episode : nil)
-                }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            ToastHost().padding(.horizontal, ThemeSpace.x4).padding(.bottom, ThemeSpace.x6)
         }
         .task { await load() }
-        .onAppear { if let focus, path.isEmpty { path = [.episodes(mediaId: focus.mediaId)] } }
+        .onAppear { if let focus { push(.episodes(franchiseId: franchiseId, mediaId: focus.mediaId, focusEpisode: focus.episode)) } }
         .confirmationDialog(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
                             titleVisibility: .visible, presenting: prompt) { p in
             Button(p.confirm, role: p.destructive ? .destructive : nil) { p.perform() }
@@ -146,7 +148,6 @@ struct FranchiseDetailView: View {
                         .frame(height: 96)
                 }
             VStack(alignment: .leading, spacing: ThemeSpace.x4) {
-                topBar(f)
                 let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x3))
                                   : AnyLayout(HStackLayout(alignment: .bottom, spacing: ThemeSpace.x4))
                 layout {
@@ -170,7 +171,7 @@ struct FranchiseDetailView: View {
                 .padding(.horizontal, ThemeSpace.x4)
                 .padding(.bottom, ThemeSpace.x2)
             }
-            .padding(.top, 28)
+            .padding(.top, 108)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
@@ -189,33 +190,22 @@ struct FranchiseDetailView: View {
         return (Array(genres) + [studio].compactMap { $0 }).joined(separator: " · ")
     }
 
-    private func topBar(_ f: Franchise) -> some View {
-        HStack(spacing: ThemeSpace.x2) {
-            GlassCircleButton(systemName: "chevron.down", size: 34, iconSize: 15,
-                              foreground: ThemeColor.textPrimary, accessibilityLabel: "Close") { dismiss() }
-            Spacer()
-            if inLibrary {
-                statusMenu(f)
-                overflowMenu(f)
-            } else {
-                Button {
-                    appModel.addToLibrary(franchiseId: f.id, title: f.title, isReleasing: f.isReleasing)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus").font(.system(size: 12, weight: .bold))
-                        Text(Copy.Action.add).type(ThemeType.button)
-                    }
-                    .foregroundStyle(ThemeColor.onAccent)
-                    .padding(.horizontal, 14)
-                    .frame(height: 34)
-                    .background(ThemeColor.accent, in: Capsule())
-                    .frame(minHeight: 44)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Add \(f.title) to Library")
+    private func addButton(_ f: Franchise) -> some View {
+        Button {
+            appModel.addToLibrary(franchiseId: f.id, title: f.title, isReleasing: f.isReleasing)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 12, weight: .bold))
+                Text(Copy.Action.add).type(ThemeType.button)
             }
+            .foregroundStyle(ThemeColor.onAccent)
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(ThemeColor.accent, in: Capsule())
+            .frame(minHeight: 44)
         }
-        .padding(.horizontal, ThemeSpace.x4)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(f.title) to Library")
     }
 
     private func statusMenu(_ f: Franchise) -> some View {
@@ -252,7 +242,7 @@ struct FranchiseDetailView: View {
                 if part.progress > 0 {
                     Button(Copy.Action.markAllUnwatched(part.progress)) { promptResetSeason(f, part: part) }
                 }
-                Button(Copy.Action.viewEpisodes) { path.append(.episodes(mediaId: part.mediaId)) }
+                Button(Copy.Action.viewEpisodes) { push(.episodes(franchiseId: f.id, mediaId: part.mediaId, focusEpisode: nil)) }
             }
             Divider()
             RemoveFromLibraryButton(franchise: f, appModel: appModel)
@@ -413,7 +403,7 @@ struct FranchiseDetailView: View {
                     Button(Copy.Action.markThrough(through)) { promptBatchMark(f, part: part, through: through) }
                 }
                 Button(Copy.Action.markAll(behind)) { promptBatchMark(f, part: part, through: part.markTarget(now: now)) }
-                Button(Copy.Action.viewEpisodes) { path.append(.episodes(mediaId: part.mediaId)) }
+                Button(Copy.Action.viewEpisodes) { push(.episodes(franchiseId: f.id, mediaId: part.mediaId, focusEpisode: nil)) }
             } label: {
                 label
             } primaryAction: {
@@ -528,7 +518,7 @@ struct FranchiseDetailView: View {
     private func partRow(_ f: Franchise, part: FranchisePart, isLast: Bool) -> some View {
         let episodic = part.kind == .season || part.totalEpisodes > 1
         return Button {
-            if episodic { path.append(.episodes(mediaId: part.mediaId)) }
+            if episodic { push(.episodes(franchiseId: f.id, mediaId: part.mediaId, focusEpisode: nil)) }
             else if inLibrary { toggleUnit(f, part: part) }
         } label: {
             HStack(spacing: ThemeSpace.x3) {
@@ -597,9 +587,9 @@ struct SeasonEpisodesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let franchiseId: String
     let mediaId: Int
-    let fetched: Franchise?
     var focusEpisode: Int? = nil
 
+    @State private var fetched: Franchise?
     @State private var revealed: Set<Int> = []
     @State private var prompt: FranchiseDetailView.WritePrompt?
 
@@ -650,6 +640,7 @@ struct SeasonEpisodesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .task { if fetched == nil { fetched = try? await appModel.api.franchise(id: franchiseId) } }
         .confirmationDialog(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
                             titleVisibility: .visible, presenting: prompt) { p in
             Button(p.confirm, role: p.destructive ? .destructive : nil) { p.perform() }
