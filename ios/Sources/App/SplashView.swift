@@ -14,7 +14,8 @@ struct SplashView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onFinished: () -> Void
 
-    @State private var start = Date()
+    /// Set on appear so a slow cold launch does not consume the timeline before the first frame.
+    @State private var start: Date? = nil
 
     // The timeline (real seconds). IGNITE is when the sweep's leading edge crosses the dot
     // (inOutCubic over the sweep window hits dotX ≈ 0.557 at ~52% → ≈0.92s) — every climax
@@ -39,17 +40,18 @@ struct SplashView: View {
     var body: some View {
         GeometryReader { geo in
             TimelineView(.animation) { context in
-                let tm = reduceMotion ? 1.4 : context.date.timeIntervalSince(start)
+                let tm = reduceMotion ? 1.4 : (start.map { context.date.timeIntervalSince($0) } ?? 0)
                 stage(size: geo.size, tm: tm)
             }
         }
         .ignoresSafeArea()
+        .onAppear { if start == nil { start = Date() } }
         .task {
             if !reduceMotion {
                 // One soft tap exactly as the dot ignites — the signature beat, felt as
                 // well as seen.
                 try? await Task.sleep(for: .seconds(Self.ignite))
-                Haptics.impact(.soft)
+                FeedbackCoordinator.fire(.selection)
             }
             try? await Task.sleep(for: .seconds(reduceMotion ? 1.2 : Self.handoff - Self.ignite))
             onFinished()
@@ -121,7 +123,7 @@ struct SplashView: View {
             // camera is diving into, so the app emerges out of the ignition's glow.
             Circle()
                 .fill(RadialGradient(colors: [Color(hex: 0xF6BD7D).opacity(0.55),
-                                              Theme.accent.opacity(0.18),
+                                              ThemeColor.accent.opacity(0.18),
                                               .clear],
                                      center: .center, startRadius: 0, endRadius: comp * 0.75))
                 .frame(width: comp * 1.5, height: comp * 1.5)
@@ -195,7 +197,7 @@ struct SplashView: View {
             // The dot's glow — blooms hard as the traveling light lands, settles, breathes.
             Circle()
                 .fill(RadialGradient(colors: [Color(hex: 0xF6BD7D).opacity(0.85),
-                                              Theme.accent.opacity(0.2),
+                                              ThemeColor.accent.opacity(0.2),
                                               .clear],
                                      center: .center, startRadius: 0, endRadius: comp * 0.11))
                 .frame(width: comp * 0.22, height: comp * 0.22)
@@ -239,11 +241,8 @@ struct SplashView: View {
     private func wordmark(size: CGSize, w: Double) -> some View {
         let fs = size.width * (118.0 / 1080.0)
         return (
-            Text("Previously")
+            Text("Previously\(Text(".").foregroundStyle(LinearGradient(colors: [ThemeColor.accent, Self.accentDeep], startPoint: .topLeading, endPoint: .bottomTrailing)))")
                 .foregroundStyle(Self.ink)
-            + Text(".")
-                .foregroundStyle(LinearGradient(colors: [Theme.accent, Self.accentDeep],
-                                                startPoint: .topLeading, endPoint: .bottomTrailing))
         )
         .font(AppFont.font(size: fs, weight: .bold))
         // Tracking-in: letters start airy and settle tight as the unit punches in.
@@ -264,7 +263,7 @@ struct SplashView: View {
         return Text("ON EVERYTHING YOU WATCH")
             .font(.system(size: fs, weight: .medium, design: .monospaced))
             .kerning(fs * 0.34)
-            .foregroundStyle(Theme.accent)
+            .foregroundStyle(ThemeColor.accent)
             .frame(maxWidth: .infinity)
             .position(x: size.width / 2 + fs * 0.17, y: size.height * Self.taglineTop + fs / 2)
             .offset(y: (1 - tg) * 7)

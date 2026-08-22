@@ -13,17 +13,17 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            AppBackground()
+            ThemeColor.canvas.ignoresSafeArea()
             // The app settles in from a hair small as the splash leaves — the exit reads as
             // moving THROUGH the splash into the app, not a fade between two stills.
             Group {
                 if auth.isSignedIn {
                     MainTabView()
                         .task(id: auth.isSignedIn) { appModel.start() }
-                        .transition(.opacity.animation(.uiGentle))
+                        .transition(.opacity.animation(ThemeMotion.uiGentle))
                 } else {
                     SignInView()
-                        .transition(.opacity.animation(.uiGentle))
+                        .transition(.opacity.animation(ThemeMotion.uiGentle))
                 }
             }
             // Emerges from inside the ident's light: a hair small and slightly defocused,
@@ -36,7 +36,7 @@ struct RootView: View {
                 // The splash animates its own zoom-through exit (the camera push in
                 // SplashView's timeline), so the container just crossfades over it — the
                 // app emerges from inside the icon as it scales past the viewer.
-                SplashView { withAnimation(.uiSmooth) { splashDone = true } }
+                SplashView { withAnimation(ThemeMotion.uiSettle) { splashDone = true }; appModel.surfaceReady = true }
                     .zIndex(10)
                     .transition(.opacity)
             }
@@ -100,74 +100,101 @@ enum AppTab: Int, CaseIterable, Hashable {
 struct MainTabView: View {
     @Environment(AppModel.self) private var appModel
     @State private var selectedTab: AppTab = .today
+    /// One navigation path per tab; Detail and its episode list push onto the active tab's path.
+    @State private var paths: [AppTab: NavigationPath] = [:]
 
-    @State private var detail: DetailRoute?
+    private func path(_ tab: AppTab) -> Binding<NavigationPath> {
+        Binding(get: { paths[tab] ?? NavigationPath() }, set: { paths[tab] = $0 })
+    }
+
+    /// Re-selecting the active tab pops it to its root (system behaviour, made explicit).
+    private var selection: Binding<AppTab> {
+        Binding(get: { selectedTab }, set: { tab in
+            if tab == selectedTab { paths[tab] = NavigationPath() } else { selectedTab = tab }
+        })
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            TabView(selection: $selectedTab) {
+            TabView(selection: selection) {
                 Tab(AppTab.today.titleKey, image: AppTab.today.icon, value: AppTab.today) {
-                    NavigationStack {
+                    NavigationStack(path: path(.today)) {
                         TodayView(onOpenDetail: openDetail,
-                                  onSeeAllWatching: { selectedTab = .library })
+                                  onSeeAllWatching: { selectedTab = .library },
+                                  onAddShow: { selectedTab = .discover })
+                            .detailDestinations(push: { push(.today, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .today)
                 }
                 Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
-                    // Schedule rows deep-link to a specific season + episode inside the detail.
-                    NavigationStack { ScheduleView(onOpenDetail: openEpisode) }
-                        .pageInTransition(isActive: selectedTab == .schedule)
+                    NavigationStack(path: path(.schedule)) {
+                        ScheduleView(onOpenDetail: openEpisode, onAddShow: { selectedTab = .discover })
+                            .detailDestinations(push: { push(.schedule, $0) })
+                    }
+                    .pageInTransition(isActive: selectedTab == .schedule)
                 }
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
-                    NavigationStack { LibraryView(onOpenDetail: openDetail) }
-                        .pageInTransition(isActive: selectedTab == .library)
+                    NavigationStack(path: path(.library)) {
+                        LibraryView(onOpenDetail: openDetail)
+                            .detailDestinations(push: { push(.library, $0) })
+                    }
+                    .pageInTransition(isActive: selectedTab == .library)
                 }
-                // NOTE: no `.searchable` here on purpose. The system search island's morph
-                // (tab bar → field + keyboard) dropped frames no matter how it was configured,
-                // and its chrome didn't match the app. DiscoverView owns its own header +
-                // SearchField in the exact Library grammar instead; `role: .search` keeps the
-                // separated magnifier button in the tab bar.
                 Tab(value: AppTab.discover, role: .search) {
-                    NavigationStack { DiscoverView(onOpenDetail: openDetail) }
-                        .pageInTransition(isActive: selectedTab == .discover)
+                    NavigationStack(path: path(.discover)) {
+                        DiscoverView(onOpenDetail: openDetail)
+                            .detailDestinations(push: { push(.discover, $0) })
+                    }
+                    .pageInTransition(isActive: selectedTab == .discover)
                 }
             }
             .sensoryFeedback(.selection, trigger: selectedTab)
+            .task {
+                // One freshness source for every stale strip and Profile's sync line.
+                SyncCenter.shared.signals = {
+                    .init(lastLoadedAt: appModel.lastLoadedAt, loading: appModel.loading)
+                }
+                SyncCenter.shared.startMonitoring()
+            }
 
-            // Undo/error toasts float above the tab bar. (The detail sheet mounts its own
-            // ToastHost — a sheet presents above this whole ZStack.)
+            // Undo / sync / error toasts float above the tab bar, over whatever is pushed.
             ToastHost()
                 .padding(.horizontal, 16)
-                .padding(.bottom, 96)
-        }
-        // Detail rises as a bottom-up drawer — a large sheet with a grabber and swipe-to-dismiss.
-        // A soft impact fires on open (see openDetail) and on close (onDismiss — covers swipe-down,
-        // the back button, and tap-away alike) for a premium, symmetric confirmation.
-        .sheet(item: $detail, onDismiss: { Haptics.impact(.soft) }) { route in
-            FranchiseDetailView(franchiseId: route.id, focus: route.focus)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
+                .padding(.bottom, 58)
         }
     }
 
+    private func push(_ tab: AppTab, _ value: any Hashable) {
+        var p = paths[tab] ?? NavigationPath()
+        p.append(value)
+        paths[tab] = p
+    }
+
+    /// Navigation is silent (board 11): no haptic on open.
     private func openDetail(_ id: String, zoomID: String) {
-        // Premium, subtle taptic as the drawer starts its rise. (`zoomID` is retained on the route
-        // for cards' matched-source ids but no longer drives a zoom transition.)
-        Haptics.impact(.soft)
-        detail = DetailRoute(id: id, zoomID: zoomID)
+        push(selectedTab, DetailRoute(id: id, zoomID: zoomID))
     }
 
-    /// Schedule variant: same drawer, but lands on a specific season + episode.
+    /// Schedule variant: lands on a specific season + episode.
     private func openEpisode(_ id: String, zoomID: String, focus: EpisodeFocus?) {
-        Haptics.impact(.soft)
-        detail = DetailRoute(id: id, zoomID: zoomID, focus: focus)
+        push(selectedTab, DetailRoute(id: id, zoomID: zoomID, focus: focus))
     }
 }
 
-// Identifiable wrapper so a franchise id can drive `.sheet(item:)`. `zoomID` is the tapped
-// card's matched-transition-source id — the same franchise can have sources in several tabs.
-private struct DetailRoute: Identifiable {
-    let id: String
-    let zoomID: String
-    var focus: EpisodeFocus? = nil
+private extension View {
+    /// The two destinations every tab can reach: a franchise, and a season's episode list.
+    func detailDestinations(push: @escaping (FranchiseDetailView.DetailPush) -> Void) -> some View {
+        self
+            .navigationDestination(for: DetailRoute.self) { route in
+                FranchiseDetailView(franchiseId: route.id, focus: route.focus, push: push)
+            }
+            .navigationDestination(for: FranchiseDetailView.DetailPush.self) { p in
+                switch p {
+                case .episodes(let franchiseId, let mediaId, let focusEpisode):
+                    SeasonEpisodesView(franchiseId: franchiseId, mediaId: mediaId, focusEpisode: focusEpisode)
+                case .history(let franchiseId):
+                    WatchHistoryView(franchiseId: franchiseId)
+                }
+            }
+    }
 }

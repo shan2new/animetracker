@@ -42,7 +42,7 @@ struct GlassCircleButton: View {
     var size: CGFloat = 40
     var iconSize: CGFloat = 18
     var tint: Color? = nil
-    var foreground: Color = Theme.textPrimary
+    var foreground: Color = ThemeColor.textPrimary
     /// What VoiceOver announces. An SF Symbol on its own reads as nothing, so every call site
     /// should pass the ACTION ("Close", "Add to library", "Mark caught up"). Left nil it falls
     /// back to a readable form of the symbol name — a safety net, not a substitute.
@@ -92,11 +92,7 @@ extension View {
     // Prominent (tinted accent) glass button used for primary CTAs in the functional layer.
     @ViewBuilder
     func buttonStyleProminentGlass() -> some View {
-        if #available(iOS 26.0, *) {
-            self.buttonStyle(.glassProminent).tint(Theme.accent)
-        } else {
-            self.buttonStyle(PrimaryButtonStyle())
-        }
+        self.buttonStyle(PrimaryButtonStyle2())
     }
 }
 

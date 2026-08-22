@@ -95,11 +95,24 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `releaseSortKey`, `isFutureInstallment`, sort keys like `nextAiringSortKey`/`lastAiredSortKey`)
   from the raw API status/release fields. Keep this logic in the model layer, not the views, and
   reuse the existing sort-key accessors instead of re-inlining `?? .max` / `?? 0` sentinels.
-- Shared design system lives in `Sources/DesignSystem/` — reuse it: `Theme` (colors/metrics),
-  `scaledFont` (Dynamic Type; don't add `.font(.system(size:))`), `Thumb`/`RemoteImageView` for
-  cover art (pass a `maxPixel` sized to the display, not the 700px grid default), `CardModel` for
-  derived card state. `ImageLoader`/`CachedAsyncImage` is the single image pipeline.
+- Shared design system lives in `Sources/DesignSystem/` — reuse it, never re-invent:
+  `ThemeTokens.swift` (`ThemeColor` / `ThemeSpace` / `ThemeRadius` / `ThemeType` + `.type(_:)` /
+  `ThemeMotion` + `pick(_:reduceMotion:)` / `FeedbackCoordinator` — **every haptic goes through it,
+  at most one per transaction**), `Copy.swift` (the only place a user-facing string lives — statuses,
+  "Episode N" never "E19", confirmations, toasts), `Primitives.swift` + `Primitives+States.swift`
+  (`PosterSlot`, button styles, `GroupedList`/`GroupedRow`, `EmptyState`, `InlineNotice`,
+  `StaleStrip`, `SyncBanner`, skeletons behind `SkeletonGate`), `Palette.swift` (art-adaptive
+  ground), `Util/TemporalCopy.swift` (one temporal expression per item; TMDB date-only never shows
+  a clock). No literal colours/sizes in screens. `Thumb`/`RemoteImageView` for cover art (pass a
+  `maxPixel` sized to the display); `ImageLoader`/`CachedAsyncImage` is the single image pipeline.
+- **Write rules** (`AppModel`, `AppModel+Writes.swift`): a progress mark never rolls back — a failure
+  goes to `SyncCenter.record` and the SyncBanner; membership/status writes roll back. Remove is
+  immediate with Undo (`removeWithUndo`), batch marks and season resets confirm with the exact
+  count; single marks present their Undo toast when the card's handoff settles (`presentUndo`).
+- Navigation: Detail is a push on the active tab's `NavigationPath` (`DetailRoute`, `RootView`);
+  re-selecting the active tab pops to root. Watch sessions live in `RewatchStore` (device-local JSON).
 - `API_BASE_URL` is a build setting in `project.yml` → `Info.plist` → `AppConfig.apiBaseURL`.
+- Debug-only launch arg `-recapDemo 1` forces the full Previously Recap on Today (captures/reviews).
 
 ## Don't commit
 

@@ -179,7 +179,7 @@ struct CachedAsyncImage: View {
         didFail = false
         do {
             let loaded = try await ImageLoader.shared.image(for: url, maxPixel: maxPixel)
-            withAnimation(.uiGentle) { image = loaded }
+            withAnimation(ThemeMotion.uiGentle) { image = loaded }
             loadedURL = url
         } catch {
             if !Task.isCancelled { didFail = true }

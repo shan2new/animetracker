@@ -135,7 +135,8 @@ export const subscriptions = pgTable(
     franchiseId: uuid('franchise_id')
       .notNull()
       .references(() => franchise.id, { onDelete: 'cascade' }),
-    status: text('status').notNull().default('planned'), // watching | completed | planned
+    // text(), not a pg enum — the status vocabulary can grow without a migration.
+    status: text('status').notNull().default('planned'), // watching | completed | planned | paused | dropped
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.franchiseId] })],

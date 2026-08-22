@@ -15,7 +15,7 @@ final class AppModel {
     // Calendar feed span, in local days either side of today.
     static let scheduleBack = -7
     static let scheduleAhead = 14
-    static let undoSeconds: Double = 5
+    static let undoSeconds: Double = 6
     static let errorSeconds: Double = 4
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
     static let recentsKey = "recentSearches"
@@ -37,6 +37,10 @@ final class AppModel {
     private(set) var pendingAdds: Set<String> = []
     var prevOpenedAt: Int64 = 0
     var loading = true
+    /// Epoch-ms of the last library payload that actually arrived (freshness source for SyncCenter).
+    var lastLoadedAt: Int64 = 0
+    /// True once the cold-launch splash has left and Today is actually visible — the recap waits for it.
+    var surfaceReady = false
     var loadError = false
 
     // Discover/search.
@@ -149,6 +153,7 @@ final class AppModel {
             if res.prevOpenedAt > 0 { prevOpenedAt = max(prevOpenedAt, res.prevOpenedAt) }
             loadError = false
             loading = false
+            lastLoadedAt = .nowMs
             await syncAmbient()
         } catch APIError.unauthorized {
             guard seq == reloadSeq else { return }
@@ -175,6 +180,8 @@ final class AppModel {
     /// would otherwise keep serving the previous account. Leaves the model in its launch state so
     /// the next sign-in opens on a loader, never on someone else's shows.
     func teardown() {
+        RewatchStore.shared.reset()
+        SeasonSweepLedger.reset()
         clockTask?.cancel(); clockTask = nil
         searchTask?.cancel(); searchTask = nil
         trendingTask?.cancel(); trendingTask = nil
@@ -243,7 +250,7 @@ final class AppModel {
     /// Surface a write failure. Every optimistic mutation calls this after rolling itself back,
     /// so the UI never silently disagrees with the server.
     func showError(_ message: String) {
-        Haptics.error()
+        FeedbackCoordinator.fire(.directError)
         errorToast = message
         errorTask?.cancel()
         errorTask = Task { [weak self] in
@@ -412,7 +419,7 @@ final class AppModel {
                 guard let part = $0.releasingPart else { return false }
                 // A just-caught-up row has to survive its celebration: `episodesBehind` drops to 0
                 // the instant progress is written, which would otherwise yank the row (and the
-                // frame CaughtUpOverlay renders on) before the overlay is ever seen.
+                // frame its result state renders on) before it is ever seen.
                 guard part.episodesBehind > 0 || justCaught.contains($0.id) else { return false }
                 return now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow
             }
@@ -729,7 +736,8 @@ final class AppModel {
     /// Mark the releasing part of a franchise caught up (PUT /me/progress {mediaId, airedEpisodes}).
     func markCaughtUp(_ franchiseId: String) {
         guard let f = franchise(id: franchiseId), let part = f.releasingPart else { return }
-        Haptics.success()
+        let milestone = !part.isReleasing && part.totalEpisodes > 0 && part.airedEpisodes >= part.totalEpisodes
+        FeedbackCoordinator.fire(milestone ? .success : .commitMedium)
         let prev = part.progress
         // Through the same ceiling `setProgress` uses: asserting a number the server would clamp
         // shows "caught up" against a server that disagrees, and the next launch silently reverts.
@@ -763,16 +771,53 @@ final class AppModel {
         }
     }
 
+    /// Mark the next episode of the releasing (or resume) part as watched — the Focus card's primary
+    /// action. Local commit first, one `.commitLight`, no toast here: the card shows the result and the
+    /// view presents the Undo toast when its handoff settles (spec: mark timeline).
+    @discardableResult
+    func markNext(franchiseId: String, mediaId: Int? = nil, haptic: FeedbackToken = .commitLight) -> UndoState? {
+        guard let f = franchise(id: franchiseId) else { return nil }
+        let chosen = mediaId.flatMap { id in f.parts.first { $0.mediaId == id } }
+        guard let part = chosen ?? f.currentPart ?? f.releasingPart ?? f.resumePart else { return nil }
+        let target = min(part.progress + 1, part.progressCeiling)
+        guard target > part.progress else { return nil }
+        FeedbackCoordinator.fire(haptic)
+        let prev = part.progress
+        applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: target)
+        Task {
+            do {
+                _ = try await api.setProgress(mediaId: part.mediaId, episodes: target)
+                settleLocalProgress(mediaId: part.mediaId, episodes: target)
+            } catch {
+                // A mark is a fact about the user: it stays. The failure goes to the SyncBanner
+                // with a Retry that re-issues exactly this write.
+                SyncCenter.shared.record(command: Copy.Action.markAsWatched, title: f.title,
+                                         reason: Copy.Notice.reason(error)) {
+                    if let _ = try? await self.api.setProgress(mediaId: part.mediaId, episodes: target) {
+                        self.settleLocalProgress(mediaId: part.mediaId, episodes: target)
+                    }
+                }
+            }
+        }
+        return UndoState(mediaId: part.mediaId, franchiseId: franchiseId, prevProgress: prev, title: f.title, episode: target)
+    }
+
+    /// Present an Undo toast for a write that already happened (called when the card handoff settles).
+    func presentUndo(_ state: UndoState) {
+        undo = state
+        scheduleUndoDismissal()
+    }
+
     /// Set explicit progress for a part (detail pips / movie toggle / Library's log-next ring).
     /// The single choke point where every write is bounded to the part's episode count — an
     /// unbounded "+1" control otherwise walks progress off the end of a season (see
     /// `FranchisePart.progressCeiling`).
-    func setProgress(franchiseId: String, mediaId: Int, episodes: Int) {
+    func setProgress(franchiseId: String, mediaId: Int, episodes: Int, haptic: Bool = true) {
         let part = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }
         let clamped = min(max(0, episodes), part?.progressCeiling ?? .max)
-        // Soft, refined tick for per-episode / movie watched toggles (distinct from catch-up's success).
-        Haptics.impact(.soft)
         let prev = part?.progress
+        // One watch fact → commitLight; a contiguous range → commitMedium (spec: haptic vocabulary).
+        if haptic { FeedbackCoordinator.fire(abs(clamped - (prev ?? clamped)) > 1 ? .commitMedium : .commitLight) }
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
         Task {
             do {
@@ -796,7 +841,7 @@ final class AppModel {
     /// optimistic via `pendingAdds` so the card flips to "In library" instantly.
     func addToLibrary(franchiseId: String, title: String, isReleasing: Bool) {
         guard !isInLibrary(franchiseId) else { return }
-        Haptics.success()
+        FeedbackCoordinator.fire(.success)
         pendingAdds.insert(franchiseId)
         let status: WatchStatus = isReleasing ? .watching : .planned
         let label = status == .watching ? "Watching" : "Plan to watch"
@@ -821,8 +866,8 @@ final class AppModel {
         }
     }
 
-    func setStatus(franchiseId: String, status: WatchStatus) {
-        Haptics.selection()
+    func setStatus(franchiseId: String, status: WatchStatus, haptic: Bool = true) {
+        if haptic { FeedbackCoordinator.fire(.selection) }
         guard let idx = library.firstIndex(where: { $0.id == franchiseId }) else {
             // Not in the loaded library (e.g. a pending add) — fire and hope; reload reconciles.
             Task { _ = try? await api.setStatus(franchiseId: franchiseId, status: status) }
@@ -839,14 +884,17 @@ final class AppModel {
                 if let i = library.firstIndex(where: { $0.id == franchiseId }) {
                     library[i] = library[i].withStatus(prevStatus)
                 }
-                showError("Couldn't update status — check your connection.")
+                SyncCenter.shared.record(command: Copy.Toast.movedTo(status.displayName), title: self.franchise(id: franchiseId)?.title ?? "",
+                                         reason: Copy.Notice.reason(error)) {
+                    self.setStatus(franchiseId: franchiseId, status: status)
+                }
             }
         }
     }
 
     /// `haptic: false` for the undo path — performUndo already fired its own impact.
     func removeFromLibrary(franchiseId: String, haptic: Bool = true) {
-        if haptic { Haptics.impact(.rigid) }
+        if haptic { FeedbackCoordinator.fire(.commitLight) }
         pendingAdds.remove(franchiseId)
         let idx = library.firstIndex(where: { $0.id == franchiseId })
         let removed = idx.map { library[$0] }
@@ -862,14 +910,17 @@ final class AppModel {
                 if let removed, !library.contains(where: { $0.id == franchiseId }) {
                     library.insert(removed, at: min(idx ?? library.count, library.count))
                 }
-                showError("Couldn't remove \(removed?.title ?? "show") — check your connection.")
+                SyncCenter.shared.record(command: Copy.Action.removeFromLibrary, title: removed?.title ?? "",
+                                         reason: Copy.Notice.reason(error)) {
+                    self.removeFromLibrary(franchiseId: franchiseId, haptic: false)
+                }
             }
         }
     }
 
     func performUndo() {
         guard let u = undo else { return }
-        Haptics.impact(.medium)
+        FeedbackCoordinator.fire(.selection)
         if u.added, let fid = u.franchiseId {
             removeFromLibrary(franchiseId: fid, haptic: false)
         } else if let fid = u.franchiseId, let mediaId = u.mediaId, isInLibrary(fid) {
@@ -998,7 +1049,7 @@ extension Franchise {
                 nextAiringAt: p.nextAiringAt, lastAiredAt: p.lastAiredAt, synopsis: p.synopsis,
                 genres: p.genres, progress: max(0, episodes),
                 year: p.year, studios: p.studios, nextAiringCount: p.nextAiringCount,
-                episodes: p.episodes
+                episodes: p.episodes, release: p.release
             )
         }
         return Franchise(copying: self, parts: newParts)
@@ -1009,7 +1060,10 @@ extension Franchise {
     func withStatus(_ newStatus: WatchStatus) -> Franchise {
         Franchise(id: id, source: source, title: title, cover: cover, banner: banner, synopsis: synopsis,
                   genres: genres, isReleasing: isReleasing, partCounts: partCounts, parts: parts,
-                  subscription: Subscription(status: newStatus), upcoming: upcoming,
+                  // `addedAt` is a fact about the account, not about the status: an optimistic
+                  // status flip must not erase when the user added the show.
+                  subscription: Subscription(status: newStatus, addedAt: subscription?.addedAt),
+                  upcoming: upcoming,
                   year: year, studios: studios,
                   status: newStatus, behind: behind, newParts: newParts)
     }

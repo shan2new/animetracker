@@ -14,7 +14,9 @@ import { db } from '../db/index.js'
 import { users } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
 
-const statusEnum = z.enum(['watching', 'completed', 'planned'])
+// Board 09's status vocabulary. `subscriptions.status` is a text() column, so the two added
+// values need no migration.
+const statusEnum = z.enum(['watching', 'completed', 'planned', 'paused', 'dropped'])
 
 export const meRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.authenticate)

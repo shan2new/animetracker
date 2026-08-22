@@ -1,772 +1,527 @@
 import SwiftUI
 
-// "Schedule" tab — the time-rail design (schedule-v5): a Monday-first week strip up top, then one
-// continuous chronological rail. A 2pt spine runs down a fixed-width left gutter and every row is
-// [gutter | content], so day-rule ticks, episode nodes and the NOW marker share one exact vertical
-// axis (the gutter centre) by construction — no per-node offsets to drift. Node grammar: ✓ = aired,
-// ring = scheduled, glowing accent dot = the next episode today (whose row is the banner hero).
-// Source rules unchanged: anime shows real clock times/countdowns; TV never shows a time.
+// Schedule (spec board 04). One chronological feed: day headers → "Date only" / "Timed" groups →
+// 68-pt event rows. The NOW line crosses only timed rows and moves once a minute. A date-only
+// (TMDB) row never shows a clock. The only write here is "Mark as watched" on a past row.
 struct ScheduleView: View {
     @Environment(AppModel.self) private var appModel
-    /// Opens the detail drawer deep-linked to the row's season + episode (focus nil = plain open).
-    let onOpenDetail: (_ franchiseId: String, _ zoomID: String, _ focus: EpisodeFocus?) -> Void
-
-    // Guards the scroll-to-now so it fires once per local DAY, not once per view lifetime. Tabs
-    // stay mounted for as long as the app lives; a Monday anchor left Tuesday's visit parked on
-    // stale history with NOW below the fold, and the "opens centred on now" promise silently
-    // decayed the longer the app survived.
-    @State private var anchoredDayKey: Int64?
-    // Large title scrolled away → compact blurred bar (same grammar as Library/Search).
-    @State private var scrolled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let onOpenDetail: (_ franchiseId: String, _ zoomID: String, _ focus: EpisodeFocus?) -> Void
+    var onAddShow: () -> Void = {}
 
-    // Scroll-synced week-strip highlight. Day-rule positions are recorded in CONTENT coordinates,
-    // which don't change while scrolling — geometry callbacks fire only on layout, and the single
-    // scroll handler below does a plain dictionary scan (no model access) per frame. The box is a
-    // reference type (mutating it doesn't re-render); only the derived `focusDay` is @State, and
-    // it only changes when the viewport actually crosses into another day.
-    private final class RuleTracker { var ys: [Int: CGFloat] = [:] }
-    @State private var ruleTracker = RuleTracker()
-    @State private var focusDay = 0
-    // Drives the live node's glow breath (GPU-composited scale/opacity, not a per-frame redraw).
-    @State private var livePulse = false
+    @State private var selectedDay = 0
+    /// The day whose header is at the top of the feed; the strip follows it while scrolling.
+    @State private var visibleDay = 0
+    @State private var barBottom: CGFloat = 160
+    /// The feed has landed on today; only then does scroll tracking drive the strip.
+    @State private var didLand = false
+    @State private var typeFilter: MediaFilter = .all
+    @State private var unwatchedOnly = false
+    @State private var committed: Set<String> = []
+    @State private var prompt: FranchiseDetailView.WritePrompt?
 
     private var now: Int64 { appModel.now }
+    private var nowMinute: Int64 { (now / Formatting.minuteMs) * Formatting.minuteMs }
+    private var isAX: Bool { typeSize.isAccessibilitySize }
 
-    // Rail geometry. The spine and every node centre on gutterW/2; the trailing column is a fixed
-    // width so times/labels right-align down the whole feed.
-    private let gutterW: CGFloat = 30
-    private let trailW: CGFloat = 76
-    private let spineColor = Color.white.opacity(0.11)
+    // MARK: - Feed
+
+    struct Event: Identifiable {
+        let franchise: Franchise
+        let part: FranchisePart
+        let episode: Int
+        let at: Int64
+        let aired: Bool
+        let dateOnly: Bool
+        var id: String { "\(franchise.id)/\(episode)/\(aired ? "a" : "n")" }
+        var watched: Bool { aired && part.progress >= episode }
+    }
+
+    struct Day: Identifiable {
+        let id: Int
+        let isToday: Bool
+        let header: String
+        let dateOnly: [Event]
+        let timed: [Event]
+        var isEmpty: Bool { dateOnly.isEmpty && timed.isEmpty }
+    }
+
+    private var unfilteredDays: [Day] { appModel.scheduleDays.map(day(from:)) }
+
+    private var days: [Day] {
+        unfilteredDays.map { d in
+            Day(id: d.id, isToday: d.isToday, header: d.header,
+                dateOnly: d.dateOnly.filter(passes), timed: d.timed.filter(passes))
+        }
+    }
+
+    private func passes(_ e: Event) -> Bool {
+        switch typeFilter {
+        case .all: break
+        case .anime: if e.franchise.source != .anilist { return false }
+        case .tv: if e.franchise.source != .tmdb { return false }
+        }
+        if unwatchedOnly && e.watched { return false }
+        return true
+    }
+
+    private func day(from d: AppModel.ScheduleDay) -> Day {
+        var events: [Event] = []
+        for f in d.airedToday {
+            guard let part = f.releasingPart, let at = part.lastAiredAt else { continue }
+            events.append(Event(franchise: f, part: part, episode: part.airedEpisodes, at: at, aired: true, dateOnly: f.timeAnchor.isDateOnly))
+        }
+        for f in d.franchises {
+            guard let part = f.releasingPart, let at = part.nextAiringAt else { continue }
+            let ep = part.nextEpisodeNumber ?? part.airedEpisodes + 1
+            events.append(Event(franchise: f, part: part, episode: ep, at: at, aired: false, dateOnly: f.timeAnchor.isDateOnly))
+        }
+        let short = String(d.label.prefix(3))
+        let header = d.isToday ? "Today · \(short) \(d.dateLabel)" : "\(short) · \(d.dateLabel)"
+        return Day(id: d.id, isToday: d.isToday, header: header,
+                   dateOnly: events.filter(\.dateOnly).sorted { $0.at < $1.at },
+                   timed: events.filter { !$0.dateOnly }.sorted { $0.at < $1.at })
+    }
+
+    private var filterActive: Bool { typeFilter != .all || unwatchedOnly }
+
+    // MARK: - Body
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    header
-
-                    if appModel.loadError && !appModel.libraryEmpty {
-                        RetryBanner { Task { await appModel.reload() } }
-                    }
-
-                    if appModel.loading && appModel.library.isEmpty {
-                        Loader()
-                    } else if appModel.loadError && appModel.libraryEmpty {
-                        EmptyStateView(
-                            title: "Couldn't load your shows",
-                            message: "The server couldn't be reached. Check your connection and try again.",
-                            ctaLabel: "Retry",
-                            onCta: { Task { await appModel.reload() } }
-                        )
-                    } else if appModel.airingFranchises.isEmpty {
-                        EmptyStateView(
-                            title: "No airing shows yet",
-                            message: appModel.libraryEmpty
-                                ? "Add currently-airing shows and your weekly schedule fills in here."
-                                : "None of your shows are currently airing. Add airing anime or TV to see them here."
-                        )
-                    } else {
-                        weekStrip(proxy).padding(.top, 14)
-                        rail
-                            .onAppear { anchorToNow(proxy) }
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        content(proxy)
+                    } header: {
+                        stickyBar(proxy)
                     }
                 }
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.top, 18)
                 .padding(.bottom, 120)
-                .animation(.uiGentle, value: appModel.loading)
-                .animation(.uiGentle, value: appModel.loadError)
-                .coordinateSpace(name: "railContent")
             }
-            .scrollContentBackground(.hidden)
+            .coordinateSpace(name: "schedule.feed")
+            .onPreferenceChange(BarBottomKey.self) { barBottom = $0 }
+            .onPreferenceChange(DayHeaderKey.self) { offsets in
+                guard didLand else { return }
+                // The last header that has scrolled under the sticky bar is the current day; a
+                // header resting just below the bar has not passed it.
+                let passed = offsets.filter { $0.value < barBottom - 8 }
+                let current = passed.max(by: { $0.value < $1.value })?.key ?? offsets.min(by: { $0.value < $1.value })?.key ?? 0
+                if current != visibleDay {
+                    visibleDay = current
+                    selectedDay = current
+                }
+            }
             .scrollIndicators(.hidden)
-            // One handler per scroll frame: compact-bar threshold + week-strip focus, both derived
-            // from the offset alone. State only mutates on a crossing, so scrolling doesn't
-            // re-evaluate the body per frame.
-            .onScrollGeometryChange(for: CGFloat.self,
-                                    of: { $0.contentOffset.y + $0.contentInsets.top }) { _, y in
-                let isPast = y > 64
-                if isPast != scrolled { withAnimation(.uiGentle) { scrolled = isPast } }
-                let f = focusedDay(atScrollOffset: y)
-                if f != focusDay { withAnimation(.uiGentle) { focusDay = f } }
+            .background(ThemeColor.canvas.ignoresSafeArea())
+            // Rows scrolling past the pinned bar must not show through the status-bar inset
+            // (the navigation bar would cover it; this header replaces the navigation bar).
+            .overlay(alignment: .top) {
+                ThemeColor.canvas.frame(height: 0.5)
+                    .background(ThemeColor.canvas.ignoresSafeArea(edges: .top))
+                    .allowsHitTesting(false)
             }
-            .overlay(alignment: .top) { compactHeader }
-            // Day rollover while the tab stays mounted: re-centre on the new NOW. The rail has
-            // just re-bucketed every row anyway, so the old scroll position points at nothing.
-            .onChange(of: Formatting.localDayKey(now)) { anchorToNow(proxy) }
-        }
-        .background(AppBackground())
-        .refreshable {
-            await appModel.reload()
-            if !appModel.loadError { Haptics.impact(.light) }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    /// Lands the initial scroll with the NOW marker mid-viewport — past reads upward, upcoming
-    /// downward — without animating. `scheduleDays` can be empty while the library is still
-    /// loading, so re-attempt on data arrival. Idempotent per day: revisits within the same day
-    /// keep whatever position the user scrolled to.
-    private func anchorToNow(_ proxy: ScrollViewProxy) {
-        let today = Formatting.localDayKey(now)
-        guard anchoredDayKey != today, appModel.scheduleDays.contains(where: \.isToday) else { return }
-        anchoredDayKey = today
-        proxy.scrollTo("now", anchor: .center)
-    }
-
-    // MARK: header
-
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Schedule")
-                .scaledFont(28, weight: .bold)
-                .tracking(-0.8)
-            Spacer(minLength: 12)
-            if !appModel.airingFranchises.isEmpty {
-                Text(weekMetaLabel)
-                    .scaledFont(10, weight: .semibold, monospacedDigit: true)
-                    .tracking(1.4)
-                    .foregroundStyle(Theme.text36)
+            .refreshable { await appModel.reload() }
+            .task { await ScheduleReminders.shared.refresh() }
+            .onChange(of: appModel.loading, initial: true) { _, loading in
+                guard !loading, !didLand, !appModel.library.isEmpty else { return }
+                // Two frames so the lazy feed has laid out today's header before we jump to it.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    proxy.scrollTo("day-0", anchor: .top)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { didLand = true }
+                }
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .onChange(of: typeFilter) { _, _ in FeedbackCoordinator.fire(.selection) }
+            .onChange(of: unwatchedOnly) { _, _ in FeedbackCoordinator.fire(.selection) }
+            .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: selectedDay != 0)
+            .confirmationDialog(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
+                                titleVisibility: .visible, presenting: prompt) { p in
+                Button(p.confirm) { p.perform() }
+                Button(Copy.Confirm.cancel, role: .cancel) {}
+            } message: { p in
+                Text(p.message)
             }
         }
     }
 
-    // Blurred compact bar once the large title scrolls away (Apple large-title pattern).
-    @ViewBuilder
-    private var compactHeader: some View {
-        if scrolled {
-            Text("Schedule")
-                .scaledFont(16, weight: .bold)
-                .tracking(-0.2)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 6)
-                .padding(.bottom, 12)
-                .background(.ultraThinMaterial)
-                .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
-                .transition(.opacity)
+    private var filterValue: String {
+        var bits: [String] = []
+        if typeFilter != .all { bits.append(typeFilter == .anime ? "Anime" : "TV") }
+        if unwatchedOnly { bits.append("unwatched only") }
+        return bits.isEmpty ? "Off" : bits.joined(separator: ", ")
+    }
+
+    // MARK: - Sticky bar
+
+    private func stickyBar(_ proxy: ScrollViewProxy) -> some View {
+        let week = weekCells()
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: ThemeSpace.x2) {
+                Text("Schedule").type(ThemeType.screenTitle).foregroundStyle(ThemeColor.textPrimary)
+                Spacer()
+                if selectedDay != 0 {
+                    Button("Today") {
+                        FeedbackCoordinator.fire(.selection)
+                        selectedDay = 0
+                        withAnimation(reduceMotion ? nil : ThemeMotion.uiSnappy) { proxy.scrollTo("day-0", anchor: .top) }
+                    }
+                    .buttonStyle(TertiaryButtonStyle2())
+                    .accessibilityHint("Scrolls to today")
+                    .transition(.opacity)
+                }
+                Menu {
+                    Picker("Type", selection: $typeFilter) {
+                        Text("All").tag(MediaFilter.all)
+                        Text("Anime").tag(MediaFilter.anime)
+                        Text("TV").tag(MediaFilter.tv)
+                    }
+                    .pickerStyle(.inline)
+                    Section("Watched state") {
+                        Toggle("Unwatched only", isOn: $unwatchedOnly)
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(filterActive ? ThemeColor.accent : ThemeColor.textPrimary)
+                        .frame(width: 34, height: 34)
+                        .glassChrome(in: Circle(), interactive: true)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Filter")
+                .accessibilityValue(filterValue)
+            }
+            .padding(.leading, ThemeSpace.x4)
+            .padding(.trailing, 9)
+            .padding(.top, ThemeSpace.x2)
+            .padding(.bottom, ThemeSpace.x2)
+            SectionLabel(text: monthLabel(week))
+                .padding(.leading, ThemeSpace.x4)
+                .accessibilityLabel(monthLabel(week))
+            if isAX {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 4) { ForEach(week) { cell in weekCell(cell, proxy: proxy).frame(minWidth: 44) } }
+                        .padding(.horizontal, ThemeSpace.x4)
+                }
+                .scrollIndicators(.hidden)
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(week) { cell in weekCell(cell, proxy: proxy).frame(maxWidth: .infinity) }
+                }
+                .padding(.horizontal, ThemeSpace.x2)
+            }
         }
+        .padding(.top, 4)
+        .padding(.bottom, 10)
+        .background(ThemeColor.canvas)
+        .overlay(alignment: .bottom) { Rectangle().fill(ThemeColor.separator).frame(height: 1) }
+        .background(GeometryReader { geo in
+            Color.clear.preference(key: BarBottomKey.self, value: geo.frame(in: .named("schedule.feed")).maxY)
+        })
     }
 
-    // MARK: episode counting
-    //
-    // The rail counts EPISODES, not franchises. One TV franchise can drop a whole season on a
-    // single date (`nextAiringCount`), and its row says so ("Season 2 · 8 episodes") — a day rule
-    // reading "1 EP" above it contradicted the row it introduced, and the week strip inherited the
-    // same undercount. An already-aired row reports a single episode ("Ep 12") — the batch size of
-    // a drop that has landed isn't recoverable from `nextAiringCount`, which has moved on to the
-    // next date — so aired rows count one apiece, exactly as they read.
-
-    /// Episodes a scheduled franchise lands on its day: the whole batch for a season drop, else 1.
-    private func scheduledEpisodeCount(_ f: Franchise) -> Int {
-        max(f.releasingPart?.nextAiringCount ?? 1, 1)
-    }
-
-    /// Episodes on a day — what both the day rule and the week strip report.
-    private func episodeCount(_ day: AppModel.ScheduleDay) -> Int {
-        day.franchises.reduce(0) { $0 + scheduledEpisodeCount($1) } + day.airedToday.count
-    }
-
-    /// Deliberately shows, not episodes — "12 AIRING THIS WEEK" is a count of series you follow.
-    /// The day rule and the strip's dots count episodes; see `episodeCount`.
-    private var weekMetaLabel: String {
-        let todayCol = Formatting.localMondayCol(now)
-        let week = (-todayCol)...(6 - todayCol)
-        var ids = Set<String>()
-        for day in appModel.scheduleDays where week.contains(day.id) {
-            for f in day.franchises { ids.insert(f.id) }
-            for f in day.airedToday { ids.insert(f.id) }
-        }
-        return "\(ids.count) AIRING THIS WEEK"
-    }
-
-    // MARK: week strip
-
-    private struct WeekCell: Identifiable {
-        let id: Int        // Monday-first column
-        let offset: Int    // day offset from today (= ScheduleDay.id)
-        let letter: String
-        let dayNum: Int
-        let count: Int
-        let isPast: Bool
+    struct WeekCell: Identifiable {
+        let offset: Int
+        let weekday: String
+        let number: String
+        let date: Date
+        let hasContent: Bool
         let isToday: Bool
+        var id: Int { offset }
     }
 
-    private var weekCells: [WeekCell] {
-        // Anchor on local noon so a day step survives DST transitions (same trick as scheduleDays).
+    /// The week (Mon–Sun) containing the selected day.
+    private func weekCells() -> [WeekCell] {
         let p = Formatting.localParts(now)
         let noon = now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
-        let todayCol = Formatting.localMondayCol(now)
-        let counts = Dictionary(uniqueKeysWithValues: appModel.scheduleDays.map {
-            ($0.id, episodeCount($0))
-        })
-        return (0..<7).map { col in
-            let offset = col - todayCol
-            return WeekCell(
-                id: col,
-                offset: offset,
-                letter: String(Formatting.weekdayNameMonFirst(col).prefix(1)),
-                dayNum: Formatting.localParts(noon + Int64(offset) * Formatting.D).d,
-                count: counts[offset] ?? 0,
-                isPast: offset < 0,
-                isToday: offset == 0
-            )
+        let selectedDate = noon + Int64(selectedDay) * Formatting.D
+        let col = Formatting.localMondayCol(selectedDate)   // 0 = Monday
+        let monday = selectedDay - col
+        let present = Set(unfilteredDays.filter { !$0.isEmpty }.map(\.id))
+        return (0..<7).map { i in
+            let offset = monday + i
+            let ts = noon + Int64(offset) * Formatting.D
+            let parts = Formatting.localParts(ts)
+            return WeekCell(offset: offset, weekday: String(Formatting.weekdayNameMonFirst(i).prefix(1)),
+                            number: String(parts.d), date: Date(timeIntervalSince1970: Double(ts) / 1000),
+                            hasContent: present.contains(offset), isToday: offset == 0)
         }
     }
 
-    /// Days with episodes are tappable (scroll the rail to that day); the day currently under the
-    /// viewport gets a quiet ring, so the strip doubles as a position indicator.
-    private func weekStrip(_ proxy: ScrollViewProxy) -> some View {
-        HStack(spacing: 4) {
-            ForEach(weekCells) { cell in
-                weekCellView(cell, proxy: proxy)
-            }
-        }
+    private func monthLabel(_ week: [WeekCell]) -> String {
+        guard let first = week.first?.date, let last = week.last?.date else { return "" }
+        let cal = Calendar.current
+        let fm = cal.component(.month, from: first), lm = cal.component(.month, from: last)
+        let fy = cal.component(.year, from: first), ly = cal.component(.year, from: last)
+        if fm == lm { return first.formatted(.dateTime.month(.wide).year()) }
+        if fy == ly { return "\(first.formatted(.dateTime.month(.abbreviated)))–\(last.formatted(.dateTime.month(.abbreviated))) \(fy)" }
+        return "\(first.formatted(.dateTime.month(.abbreviated).year())) – \(last.formatted(.dateTime.month(.abbreviated).year()))"
     }
 
-    private func weekCellView(_ cell: WeekCell, proxy: ScrollViewProxy) -> some View {
-        let focused = !cell.isToday && cell.offset == focusDay
-        let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
+    private func weekCell(_ cell: WeekCell, proxy: ScrollViewProxy) -> some View {
+        let selected = cell.offset == selectedDay
+        let enabled = cell.hasContent || cell.isToday
         return Button {
-            Haptics.selection()
-            withAnimation(.uiSmooth) {
-                if cell.isToday {
-                    proxy.scrollTo("now", anchor: .center)
-                } else {
-                    proxy.scrollTo("rule-\(cell.offset)", anchor: .top)
-                }
-            }
+            FeedbackCoordinator.fire(.selection)
+            selectedDay = cell.offset
+            withAnimation(reduceMotion ? nil : ThemeMotion.uiSnappy) { proxy.scrollTo("day-\(cell.offset)", anchor: .top) }
         } label: {
             VStack(spacing: 3) {
-                Text(cell.letter)
-                    .scaledFont(8.5, weight: .medium)
-                    .tracking(0.8)
-                    .foregroundStyle(cell.isToday ? Theme.background.opacity(0.6) : Theme.text36)
-                Text("\(cell.dayNum)")
-                    .scaledFont(13.5, weight: cell.isToday ? .bold : .semibold, monospacedDigit: true)
-                    .foregroundStyle(cell.isToday ? Theme.background
-                                     : (cell.isPast ? Theme.text36 : Theme.text72))
-                HStack(spacing: 3) {
-                    ForEach(0..<min(cell.count, 3), id: \.self) { _ in
-                        Circle()
-                            .fill(cell.isToday ? Theme.background
-                                  : (cell.isPast ? Color.white.opacity(0.28) : Theme.accent))
-                            .frame(width: 3.5, height: 3.5)
-                    }
-                }
-                .frame(height: 4)
+                Text(cell.weekday).type(ThemeType.caption)
+                    .foregroundStyle(selected ? ThemeColor.onAccent.opacity(0.6) : ThemeColor.textTertiary)
+                Text(cell.number).type(ThemeType.time)
+                    .foregroundStyle(selected ? ThemeColor.onAccent : (cell.isToday ? ThemeColor.accent : (enabled ? ThemeColor.textPrimary : ThemeColor.textDisabled)))
+                Circle().fill(selected ? ThemeColor.onAccent.opacity(0.6) : ThemeColor.accent)
+                    .frame(width: 3, height: 3)
+                    .opacity(cell.hasContent || cell.isToday ? 1 : 0)
+                    .frame(height: 4)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background {
-                if cell.isToday {
-                    shape.fill(Theme.accent)
-                } else if focused {
-                    shape.fill(Theme.fillSoft)
-                        .overlay(shape.stroke(Theme.hairlineStrong, lineWidth: 1))
-                }
-            }
-            .contentShape(shape)
+            .frame(minWidth: 44, minHeight: 50)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(selected ? ThemeColor.accent : .clear, in: RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous))
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .contentShape(Rectangle())
+            .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: selected)
         }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.94))
-        .disabled(!cell.isToday && cell.count == 0)
-        .animation(.uiGentle, value: focused)
+        .buttonStyle(RowPressStyle())
+        .disabled(!enabled)
+        .accessibilityLabel(cell.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+        .accessibilityValue(selected ? "Selected" : (cell.isToday ? "Today" : (cell.hasContent ? "" : "No episodes")))
     }
 
-    /// The day whose rule most recently crossed the reading line (~150pt below the viewport top).
-    /// Pure dictionary scan over recorded content-space positions — deliberately no model access;
-    /// this runs on every scroll frame.
-    private func focusedDay(atScrollOffset y: CGFloat) -> Int {
-        var best: (day: Int, y: CGFloat)?
-        var first: (day: Int, y: CGFloat)?
-        for (day, ruleY) in ruleTracker.ys {
-            if first == nil || ruleY < first!.y { first = (day, ruleY) }
-            if ruleY <= y + 150, best == nil || ruleY > best!.y { best = (day, ruleY) }
-        }
-        return best?.day ?? first?.day ?? 0
-    }
-
-    // MARK: rail model — the flattened chronological feed
-
-    private enum RailNode { case ring, unwatched, done, live, nowTick }
-
-    private struct RailRow: Identifiable {
-        enum Kind {
-            case rule(AppModel.ScheduleDay)
-            case episode(Franchise, day: AppModel.ScheduleDay, aired: Bool, hero: Bool)
-            case nowMarker
-            case note(String)
-        }
-        let id: String
-        let kind: Kind
-        var divider = false   // hairline above — only between two adjacent plain episode rows
-    }
-
-    /// Flattens `scheduleDays` in emission order — the rail never re-sorts. That makes the
-    /// "one continuous chronological rail" promise a contract on the model: `scheduleDays` is
-    /// ascending by offset, `airedToday` ascending by air time, `franchises` ascending by next
-    /// airing. Today is therefore earliest-aired → NOW → next-to-air, reading straight down.
-    private var railRows: [RailRow] {
-        var rows: [RailRow] = []
-        var prevWasEpisode = false
-        func add(_ id: String, _ kind: RailRow.Kind, episode: Bool = false) {
-            rows.append(RailRow(id: id, kind: kind, divider: episode && prevWasEpisode))
-            prevWasEpisode = episode
-        }
-        for day in appModel.scheduleDays {
-            add("rule-\(day.id)", .rule(day))
-            if day.isToday {
-                for f in day.airedToday {
-                    add("aired/\(f.id)", .episode(f, day: day, aired: true, hero: false), episode: true)
-                }
-                add("now", .nowMarker)
-                if day.franchises.isEmpty {
-                    add("note-today", .note(day.airedToday.isEmpty
-                                            ? "Nothing airing today" : "No more airings today"))
-                } else {
-                    // The next episode today gets the live node + banner hero treatment.
-                    for (i, f) in day.franchises.enumerated() {
-                        add("sched/\(f.id)", .episode(f, day: day, aired: false, hero: i == 0),
-                            episode: i != 0)
-                    }
-                }
-            } else if day.isPast {
-                for f in day.airedToday {
-                    add("past/\(day.id)/\(f.id)", .episode(f, day: day, aired: true, hero: false),
-                        episode: true)
-                }
-            } else {
-                for f in day.franchises {
-                    add("sched/\(f.id)", .episode(f, day: day, aired: false, hero: false),
-                        episode: true)
-                }
-            }
-        }
-        return rows
-    }
-
-    private var rail: some View {
-        let rows = railRows
-        return VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                railRowView(row, fadeTop: idx == 0, fadeBottom: idx == rows.count - 1)
-                    .id(row.id)
-            }
-            endcap
-        }
-    }
+    // MARK: - Content (state matrix)
 
     @ViewBuilder
-    private func railRowView(_ row: RailRow, fadeTop: Bool, fadeBottom: Bool) -> some View {
-        switch row.kind {
-        case .rule(let day):
-            railRow(node: nil, fadeTop: fadeTop, fadeBottom: fadeBottom) { dayRule(day) }
-                // Content-space frame: constant while scrolling, so this fires only when layout
-                // actually changes. The scroll handler owns the per-frame focus math.
-                .onGeometryChange(for: CGFloat.self) {
-                    $0.frame(in: .named("railContent")).minY
-                } action: { y in
-                    ruleTracker.ys[day.id] = y
-                }
-        case .nowMarker:
-            railRow(node: .nowTick, fadeTop: fadeTop, fadeBottom: fadeBottom) { nowLine }
-        case .note(let text):
-            railRow(node: nil, fadeTop: fadeTop, fadeBottom: fadeBottom) {
-                Text(text)
-                    .scaledFont(13)
-                    .foregroundStyle(Theme.text26)
-                    .padding(.vertical, 13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+    private func content(_ proxy: ScrollViewProxy) -> some View {
+        if appModel.loading && appModel.library.isEmpty {
+            Skeleton.schedule.padding(.top, ThemeSpace.x4)
+        } else if appModel.loadError && appModel.libraryEmpty {
+            EmptyState(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData, prominence: .major) { Task { await appModel.reload() } }
+                .padding(ThemeSpace.x4)
+        } else if appModel.libraryEmpty {
+            EmptyState(.emptyAccount, prominence: .major, primary: onAddShow).padding(ThemeSpace.x4)
+        } else {
+            if appModel.sectionFailed {
+                InlineNotice(Copy.Notice.schedule) { Task { await appModel.reload() } }
+                    .padding(.horizontal, ThemeSpace.x4).padding(.top, ThemeSpace.x3)
+            } else if let since = appModel.staleSince(.exactAiring) {
+                StaleStrip(since: since, now: now).padding(.horizontal, ThemeSpace.x4).padding(.top, ThemeSpace.x2)
             }
-        case .episode(let f, let day, let aired, let hero):
-            // The ✓ node means WATCHED, not merely aired — an aired episode you haven't seen
-            // keeps an accent ring (actionable, matching its check CTA in the row).
-            let watched = f.releasingPart.map { $0.progress >= $0.airedEpisodes } ?? true
-            railRow(node: aired ? (watched ? .done : .unwatched) : (hero ? .live : .ring),
-                    fadeTop: fadeTop, fadeBottom: fadeBottom) {
-                Group {
-                    if hero {
-                        heroCard(f, zoomID: row.id)
-                    } else {
-                        episodeRow(f, day: day, aired: aired, zoomID: row.id)
+            let all = unfilteredDays
+            let shown = days
+            if all.allSatisfy(\.isEmpty) {
+                EmptyState(.nothingScheduled, prominence: .major).padding(ThemeSpace.x4)
+            } else if shown.allSatisfy(\.isEmpty) && filterActive {
+                EmptyState(.noFilterMatches, prominence: .major, primary: {
+                    withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) { typeFilter = .all; unwatchedOnly = false }
+                })
+                .padding(ThemeSpace.x4)
+            } else {
+                ForEach(shown) { day in
+                    if !day.isEmpty || day.isToday {
+                        dayView(day)
                     }
                 }
-                .overlay(alignment: .top) {
-                    if row.divider { Rectangle().fill(Theme.hairline).frame(height: 1) }
-                }
             }
         }
     }
 
-    // MARK: rail scaffold — [gutter | content], node centred on the spine by construction
+    // MARK: - Day
 
-    private func railRow<Content: View>(node: RailNode?, fadeTop: Bool, fadeBottom: Bool,
-                                        @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            railGutter(node: node, fadeTop: fadeTop, fadeBottom: fadeBottom)
-            content().frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // Content decides the row height; the gutter (greedy) then stretches to match it.
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func railGutter(node: RailNode?, fadeTop: Bool, fadeBottom: Bool) -> some View {
-        VStack(spacing: 0) {
-            spineSegment(fadeUp: fadeTop)
-            if let node {
-                nodeView(node).padding(.vertical, 6)
+    private func dayView(_ day: Day) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                SectionLabel(text: day.header, tint: day.isToday ? ThemeColor.accent : ThemeColor.textTertiary)
+                Rectangle().fill(day.isToday ? ThemeColor.accent.opacity(0.25) : ThemeColor.separator).frame(height: 1)
             }
-            spineSegment(fadeDown: fadeBottom)
-        }
-        .frame(width: gutterW)
-        .frame(maxHeight: .infinity)
-    }
+            .padding(.horizontal, ThemeSpace.x4)
+            .padding(.top, ThemeSpace.x6)
+            .padding(.bottom, 6)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(day.header)
+            .accessibilityAddTraits(.isHeader)
+            .id("day-\(day.id)")
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: DayHeaderKey.self, value: [day.id: geo.frame(in: .named("schedule.feed")).minY])
+            })
 
-    /// One flexible stretch of the spine. Both segments flex equally, which is what keeps the
-    /// node vertically centred on the row.
-    private func spineSegment(fadeUp: Bool = false, fadeDown: Bool = false) -> some View {
-        Group {
-            if fadeUp {
-                LinearGradient(colors: [.clear, spineColor], startPoint: .top, endPoint: .bottom)
-            } else if fadeDown {
-                LinearGradient(colors: [spineColor, .clear], startPoint: .top, endPoint: .bottom)
-            } else {
-                spineColor
+            if day.isEmpty {
+                Text(day.timed.isEmpty && day.dateOnly.isEmpty && hasAiredEarlierToday(day) ? "Nothing else airs today" : "Nothing airs today")
+                    .type(ThemeType.metadata).foregroundStyle(ThemeColor.textTertiary)
+                    .padding(.horizontal, ThemeSpace.x4).padding(.top, 10)
+            }
+            if !day.dateOnly.isEmpty {
+                group("Date only", events: day.dateOnly, withNow: false)
+            }
+            if !day.timed.isEmpty {
+                group("Timed", events: day.timed, withNow: day.isToday)
             }
         }
-        .frame(width: 2)
-        .frame(maxHeight: .infinity)
     }
 
-    @ViewBuilder
-    private func nodeView(_ node: RailNode) -> some View {
-        switch node {
-        case .ring:
-            Circle()
-                .strokeBorder(Color.white.opacity(0.38), lineWidth: 2)
-                .frame(width: 10, height: 10)
-        case .unwatched:
-            // Aired but not yet watched — an accent ring: open like the future, warm like the CTA.
-            Circle()
-                .strokeBorder(Theme.accent.opacity(0.7), lineWidth: 2)
-                .frame(width: 10, height: 10)
-        case .done:
-            ZStack {
-                Circle().fill(Color(hex: 0x26211A))
-                Image(systemName: "checkmark")
-                    .scaledFont(7.5, weight: .bold)
-                    .foregroundStyle(Theme.text50)
+    private func hasAiredEarlierToday(_ day: Day) -> Bool {
+        guard day.isToday, let raw = appModel.scheduleDays.first(where: \.isToday) else { return false }
+        return !raw.airedToday.isEmpty
+    }
+
+    private func group(_ label: String, events: [Event], withNow: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionLabel(text: label)
+                .padding(.horizontal, ThemeSpace.x4).padding(.top, 12).padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
+            let nowIndex = withNow ? (events.firstIndex { $0.at > nowMinute } ?? events.count) : -1
+            ForEach(Array(events.enumerated()), id: \.element.id) { i, e in
+                if i == nowIndex { nowLine }
+                row(e, isLast: i == events.count - 1)
             }
-            .frame(width: 17, height: 17)
-        case .live:
-            // The one ambient motion on the rail — a slow breath on a gradient halo, animated via
-            // repeatForever scale/opacity (compositor-cheap; no per-frame shadow re-render, unlike
-            // a TimelineView redrawing at 30fps). The dot itself never moves; Reduce Motion
-            // freezes the glow at rest.
-            ZStack {
-                Circle()
-                    .fill(RadialGradient(colors: [Theme.accent.opacity(0.5), Theme.accent.opacity(0)],
-                                         center: .center, startRadius: 1, endRadius: 13))
-                    .frame(width: 26, height: 26)
-                    .scaleEffect(livePulse ? 1.25 : 0.85)
-                    .opacity(livePulse ? 1 : 0.6)
-                Circle()
-                    .fill(Theme.accent)
-                    .frame(width: 11, height: 11)
-                    .shadow(color: Theme.accent.opacity(0.7), radius: 5)
-            }
-            .frame(width: 11, height: 11)   // layout footprint stays the dot; the halo overflows
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                    livePulse = true
-                }
-            }
-        case .nowTick:
-            Circle()
-                .fill(Theme.accent)
-                .frame(width: 7, height: 7)
-                .shadow(color: Theme.accent.opacity(0.8), radius: 5)
+            if withNow && nowIndex == events.count { nowLine }
         }
     }
-
-    // MARK: day rule — quiet, functional
-
-    private func dayRule(_ day: AppModel.ScheduleDay) -> some View {
-        let count = episodeCount(day)
-        let accent = day.isToday
-        return HStack(spacing: 10) {
-            Text(ruleLabel(day))
-                .scaledFont(10.5, weight: .bold, monospacedDigit: true)
-                .tracking(1.6)
-                .foregroundStyle(accent ? Theme.accent : (day.isPast ? Theme.text40 : Theme.text52))
-                .fixedSize()
-            Rectangle()
-                .fill(accent ? Theme.accent.opacity(0.25) : Theme.hairline)
-                .frame(height: 1)
-            if count > 0 {
-                Text(count == 1 ? "1 EP" : "\(count) EPS")
-                    .scaledFont(10, weight: .medium, monospacedDigit: true)
-                    .tracking(0.6)
-                    .foregroundStyle(accent ? Theme.accent.opacity(0.8) : Theme.text36)
-                    .fixedSize()
-            }
-        }
-        .padding(.top, 24)
-        .padding(.bottom, 7)
-    }
-
-    private func ruleLabel(_ day: AppModel.ScheduleDay) -> String {
-        let wd = day.label.prefix(3).uppercased()
-        let date = day.dateLabel.uppercased()
-        return day.isToday ? "TODAY · \(wd) \(date)" : "\(wd) · \(date)"
-    }
-
-    // MARK: NOW marker
 
     private var nowLine: some View {
-        HStack(spacing: 9) {
-            Text("NOW")
-                .scaledFont(9, weight: .bold)
-                .tracking(1.4)
-                .foregroundStyle(Theme.accent)
-            LinearGradient(colors: [Theme.accent.opacity(0.55), Theme.accent.opacity(0.04)],
-                           startPoint: .leading, endPoint: .trailing)
-                .frame(height: 1)
-            Text(Formatting.fmtTime(now))
-                .scaledFont(9, weight: .semibold, monospacedDigit: true)
-                .tracking(0.8)
-                .foregroundStyle(Theme.accent.opacity(0.65))
+        HStack(spacing: 8) {
+            Circle().fill(ThemeColor.accent).frame(width: 7, height: 7)
+            Text("Now · \(Formatting.fmtTime(nowMinute))").type(ThemeType.sectionLabel).textCase(.uppercase).foregroundStyle(ThemeColor.accent)
+            Rectangle().fill(ThemeColor.accent.opacity(0.7)).frame(height: 1)
         }
+        .padding(.horizontal, ThemeSpace.x4)
         .frame(height: 26)
+        .padding(.vertical, 4)
+        .animation(reduceMotion ? nil : ThemeMotion.uiGentle, value: nowMinute)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Now, \(Formatting.fmtTime(nowMinute))")
     }
 
-    // MARK: episode row — fixed anatomy, aligned trailing column
+    // MARK: - Row
 
-    /// Deep-link target for a row: the releasing season, at the episode the row is about — the
-    /// one that aired that day, or the next one to air.
-    private func episodeFocus(_ f: Franchise, aired: Bool) -> EpisodeFocus? {
-        guard let part = f.releasingPart else { return nil }
-        let ep = aired ? part.airedEpisodes : (part.nextEpisodeNumber ?? part.airedEpisodes + 1)
-        return ep > 0 ? EpisodeFocus(mediaId: part.mediaId, episode: ep) : nil
-    }
-
-    private func episodeRow(_ f: Franchise, day: AppModel.ScheduleDay, aired: Bool,
-                            zoomID: String) -> some View {
-        let vm = CardModel(franchise: f, action: .none, now: now)
-        // An aired episode you haven't watched is actionable — it keeps a check CTA and most of
-        // its ink; only watched history fully recedes.
-        let watched = f.releasingPart.map { $0.progress >= $0.airedEpisodes } ?? true
-        return Button {
-            onOpenDetail(f.id, zoomID, episodeFocus(f, aired: aired))
-        } label: {
-            HStack(spacing: 13) {
-                Thumb(cover: vm.cover, width: 52, height: 70, radius: 8)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(vm.title)
-                        .scaledFont(15.5, weight: .semibold)
-                        .tracking(-0.25)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .foregroundStyle(Theme.textPrimary)
-                    HStack(spacing: 6) {
-                        SourceGlyph(source: vm.source, size: 11)
-                        metaText(vm, aired: aired)
-                            .scaledFont(11.5, weight: .medium, monospacedDigit: true)
-                            .tracking(0.4)
-                            .foregroundStyle(Theme.text50)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 8)
-                trailingColumn(vm, f: f, day: day, aired: aired, watched: watched)
-                    .frame(width: trailW, alignment: .trailing)
-            }
-            .padding(.vertical, 11)
-            .contentShape(Rectangle())
-            // Watched history recedes; an unwatched aired episode stays near full strength so its
-            // check CTA reads as live. The node stays full-strength on the spine either way.
-            .opacity(aired ? (watched ? 0.45 : 0.9) : 1)
-        }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.98))
-        .zoomSource(zoomID)
-        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
-    }
-
-    // Metadata line: anime → "Ep 12"; TV → "Season 2 · Ep 7", or "Season 2 · 8 episodes" for a drop.
-    private func metaText(_ vm: CardModel, aired: Bool) -> Text {
-        let season = (vm.isTV && !vm.partLabel.isEmpty) ? "\(vm.partLabel) · " : ""
-        if aired { return Text("\(season)Ep \(vm.airedEpisodes)") }
-        if vm.isTV && vm.nextAiringCount > 1 {
-            return Text("\(season)\(vm.nextAiringCount) episodes")
-        }
-        return Text("\(season)Ep \(vm.nextEp.map(String.init) ?? "?")")
-    }
-
-    @ViewBuilder
-    private func trailingColumn(_ vm: CardModel, f: Franchise, day: AppModel.ScheduleDay,
-                                aired: Bool, watched: Bool = true) -> some View {
-        if aired {
-            if !watched {
-                // Mark this aired episode watched (catch-up through it) without leaving the rail.
-                MarkCaughtUpCircle { appModel.markCaughtUp(f.id) }
-            } else {
-                // The clock comes from the row's own calendar: a real instant for anime, nothing at
-                // all for TV, whose airDate carries no time of day (fmtTime returns "" there — no
-                // source branch needed at the call site).
-                let clock = f.releasingPart?.lastAiredAt
-                    .map { Formatting.fmtTime($0, anchor: vm.timeAnchor) } ?? ""
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("AIRED")
-                        .scaledFont(9, weight: .semibold)
-                        .tracking(1)
-                        .foregroundStyle(Theme.text28)
-                    if !clock.isEmpty {
-                        Text(clock)
-                            .scaledFont(14, weight: .medium, monospacedDigit: true)
-                            .foregroundStyle(Theme.text62)
-                    }
-                }
-            }
-        } else if vm.isTV {
-            tvLabel(vm)
-        } else if day.isToday && !vm.countdown.isEmpty {
-            AirtimeStack(clock: vm.airTime,
-                         countdown: vm.countdown == "now" ? "now" : "in \(vm.countdown)")
-        } else {
-            AirtimeStack(clock: vm.airTime, countdown: nil)
-        }
-    }
-
-    // TV airing label — Season drop (same-day multi-episode release, from the server's
-    // `nextAiringCount`) / Finale (last episode) / Premiere (first) / New episode.
-    private func tvLabel(_ vm: CardModel) -> ScheduleTVLabel {
-        if vm.nextAiringCount > 1 { return ScheduleTVLabel(text: "Season drop", accent: true) }
-        let total = vm.totalEpisodes
-        let n = vm.nextEp ?? 0
-        if total > 0 && n == total { return ScheduleTVLabel(text: "Finale", dot: true) }
-        if n == 1 { return ScheduleTVLabel(text: "Premiere", accent: true) }
-        return ScheduleTVLabel(text: "New episode")
-    }
-
-    // MARK: hero card — the next episode today, banner treatment on the live node
-
-    private func heroCard(_ f: Franchise, zoomID: String) -> some View {
-        let vm = CardModel(franchise: f, action: .none, now: now)
-        // No landscape banner → don't crop the portrait cover to fill; use it as an ambient
-        // blurred wash and float the sharp poster inside the card instead.
-        let hasBanner = f.banner != nil
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-        return Button {
-            onOpenDetail(f.id, zoomID, episodeFocus(f, aired: false))
-        } label: {
-            ZStack(alignment: .leading) {
-                if hasBanner {
-                    RemoteImageView(url: vm.banner, maxPixel: 1100)
-                        .frame(height: 118)
-                        .frame(maxWidth: .infinity)
-                        .clipped()
-                    LinearGradient(stops: [
-                        .init(color: Color(hex: 0x100D09).opacity(0.94), location: 0),
-                        .init(color: Color(hex: 0x100D09).opacity(0.60), location: 0.44),
-                        .init(color: Color(hex: 0x100D09).opacity(0.15), location: 1),
-                    ], startPoint: .leading, endPoint: .trailing)
-                } else {
-                    RemoteImageView(url: vm.cover, maxPixel: 500)
-                        .frame(height: 118)
-                        .frame(maxWidth: .infinity)
-                        .scaleEffect(1.2)
-                        .blur(radius: 26)
-                        .overlay(Color(hex: 0x100D09).opacity(0.58))
-                        // Flatten the live Gaussian blur into one rasterized layer so scrolling
-                        // composites a texture instead of re-evaluating the filter.
-                        .drawingGroup()
-                }
-                HStack(spacing: 12) {
-                    if !hasBanner {
-                        Thumb(cover: vm.cover, width: 58, height: 82, radius: 8)
-                            .shadow(color: .black.opacity(0.5), radius: 8, y: 4)
-                    }
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(vm.title)
-                            .scaledFont(18, weight: .bold)
-                            .tracking(-0.4)
-                            .lineLimit(1)
-                            .foregroundStyle(Theme.textPrimary)
-                            .shadow(color: .black.opacity(0.55), radius: 10, y: 1)
-                        metaText(vm, aired: false)
-                            .scaledFont(10, weight: .medium, monospacedDigit: true)
-                            .tracking(0.8)
-                            .foregroundStyle(Theme.text72)
-                        // `countdown` is already empty for TV (no clock exists on a date-only
-                        // airing), so the source never has to be tested here.
-                        if !vm.countdown.isEmpty {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(Theme.accent)
-                                    .frame(width: 5, height: 5)
-                                    .shadow(color: Theme.accent, radius: 4)
-                                Text(vm.countdown == "now" ? "OUT NOW" : "IN \(vm.countdown.uppercased())")
-                                    .scaledFont(9.5, weight: .bold, monospacedDigit: true)
-                                    .tracking(1.2)
-                                    .foregroundStyle(Theme.accent)
-                            }
-                            .padding(.top, 3)
+    private func row(_ e: Event, isLast: Bool) -> some View {
+        let f = e.franchise
+        let showsAction = e.aired && !e.watched && !committed.contains(e.id) && appModel.isInLibrary(f.id)
+        let isCommitted = committed.contains(e.id)
+        let watched = e.watched || isCommitted
+        let batch = e.aired && e.episode > e.part.progress + 1
+        let time = e.dateOnly ? nil : Formatting.fmtTime(e.at, anchor: f.timeAnchor)
+        let meta = metaLine(e, inlineTime: showsAction && !isAX ? time : nil)
+        let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x2))
+                          : AnyLayout(HStackLayout(alignment: .center, spacing: ThemeSpace.x3))
+        return VStack(spacing: 0) {
+            layout {
+                Button { onOpenDetail(f.id, "sched/\(f.id)", EpisodeFocus(mediaId: e.part.mediaId, episode: e.episode)) } label: {
+                    HStack(spacing: ThemeSpace.x3) {
+                        PosterSlot(url: f.cover, width: 36, height: 54, radius: 6)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary).lineLimit(isAX ? 3 : 1)
+                            Text(meta).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(isAX ? 2 : 1)
                         }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 8)
-                    heroTrailing(vm)
-                        .frame(width: trailW, alignment: .trailing)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 16)
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(f.title), \(meta)\(time != nil && !showsAction ? ", \(time!)" : "")\(!e.aired && ScheduleReminders.shared.has(mediaId: e.part.mediaId, episode: e.episode) ? ", reminder set" : "")")
+                .accessibilityValue(watched ? "Complete" : "")
+                .accessibilityHint("Opens the show")
+
+                HStack(spacing: ThemeSpace.x2) {
+                    if !e.aired, ScheduleReminders.shared.has(mediaId: e.part.mediaId, episode: e.episode) {
+                        Image(systemName: "bell.fill").font(.system(size: 14)).foregroundStyle(ThemeColor.textTertiary)
+                            .accessibilityHidden(true)
+                    }
+                    if let time, !showsAction, !isAX {
+                        Text(time).type(ThemeType.time).foregroundStyle(ThemeColor.textSecondary)
+                    }
+                    if showsAction {
+                        Button(batch ? "\(Copy.Action.markAsWatched)\u{2026}" : Copy.Action.markAsWatched) { mark(e, batch: batch) }
+                            .buttonStyle(CompactActionButtonStyle())
+                            .accessibilityLabel(batch ? "Mark \(Copy.episodes(e.episode - e.part.progress)) of \(f.title) as watched"
+                                                      : "Mark \(Copy.episode(e.episode)) of \(f.title) as watched")
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    } else if e.aired && watched {
+                        PassiveTick(boxed: true)
+                            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                    }
+                }
+                .fixedSize()
+                .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: isCommitted)
+                .frame(maxWidth: isAX ? .infinity : nil, alignment: .leading)
             }
-            .frame(height: 118)
-            .clipShape(shape)
-            .overlay(shape.stroke(Theme.accent.opacity(0.30), lineWidth: 1))
-            .shadow(color: .black.opacity(0.5), radius: 20, y: 9)
-            .contentShape(shape)
+            .padding(.horizontal, ThemeSpace.x4)
+            .frame(minHeight: 68)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.985))
-        .zoomSource(zoomID)
-        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
-        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            if !isLast { Rectangle().fill(ThemeColor.separator).frame(height: 1).padding(.leading, 64).padding(.trailing, ThemeSpace.x4) }
+        }
     }
 
-    @ViewBuilder
-    private func heroTrailing(_ vm: CardModel) -> some View {
-        if vm.isTV {
-            tvLabel(vm)
+    private func metaLine(_ e: Event, inlineTime: String?) -> String {
+        var s: String
+        if e.franchise.source == .tmdb {
+            let season = e.part.canonicalLabel
+            if !e.aired && e.part.nextAiringCount > 1 {
+                s = season.isEmpty ? Copy.episodes(e.part.nextAiringCount) : "\(season) · \(Copy.episodes(e.part.nextAiringCount))"
+            } else {
+                s = season.isEmpty ? Copy.episode(e.episode) : "\(season) · \(Copy.episode(e.episode))"
+            }
         } else {
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(heroEyebrow(vm))
-                    .scaledFont(9, weight: .bold)
-                    .tracking(1.2)
-                    .foregroundStyle(Theme.text50)
-                Text(vm.airTime)
-                    .scaledFont(20, weight: .bold, monospacedDigit: true)
-                    .tracking(-0.3)
-                    .foregroundStyle(Theme.textPrimary)
+            s = Copy.episode(e.episode)
+        }
+        if let inlineTime { s += " · \(inlineTime)" }
+        return s
+    }
+
+    // MARK: - Mark as watched (the only write)
+
+    private func mark(_ e: Event, batch: Bool) {
+        let f = e.franchise, part = e.part
+        if batch {
+            let count = e.episode - part.progress
+            prompt = .init(title: Copy.Confirm.batchMarkTitle(count),
+                           message: Copy.Confirm.batchMarkMessage(from: part.progress, to: e.episode),
+                           confirm: Copy.Confirm.batchMarkConfirm(count)) {
+                let prev = part.progress
+                appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: e.episode)
+                commit(e) {
+                    appModel.presentUndo(UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev, title: f.title, episode: e.episode, count: count))
+                }
             }
-            .shadow(color: .black.opacity(0.6), radius: 10, y: 1)
+            return
+        }
+        guard let undo = appModel.markNext(franchiseId: f.id, mediaId: part.mediaId) else { return }
+        commit(e) { appModel.presentUndo(undo) }
+    }
+
+    /// The button is replaced in place by the tick; the row never moves (a calendar keeps its
+    /// history) unless "Unwatched only" is on, in which case it leaves after a 650 ms hold.
+    private func commit(_ e: Event, then present: @escaping () -> Void) {
+        _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
+            committed.insert(e.id)
+        } completion: {
+            if unwatchedOnly {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(650))
+                    _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
+                        committed.remove(e.id)
+                    } completion: { present() }
+                }
+            } else {
+                present()
+            }
         }
     }
+}
 
-    /// "TONIGHT" when the episode airs in the evening, "TODAY" before that — keyed to the
-    /// episode's air hour, not the current clock. A date-only airing has no real hour (it is
-    /// synthesized), so it never claims an evening.
-    private func heroEyebrow(_ vm: CardModel) -> String {
-        guard let next = vm.nextAiringAt, !vm.timeAnchor.isDateOnly else { return "TODAY" }
-        return Formatting.isEvening(hour: Formatting.localParts(next, anchor: vm.timeAnchor).hour) ? "TONIGHT" : "TODAY"
+
+private struct DayHeaderKey: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] { [:] }
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
     }
+}
 
-    // MARK: endcap
-
-    private var endcap: some View {
-        Text("NOTHING ELSE SCHEDULED")
-            .scaledFont(9.5, weight: .medium)
-            .tracking(1.6)
-            .foregroundStyle(Theme.text26)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 32)
-    }
+private struct BarBottomKey: PreferenceKey {
+    static var defaultValue: CGFloat { 160 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

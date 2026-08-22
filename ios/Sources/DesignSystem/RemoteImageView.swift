@@ -42,6 +42,6 @@ struct Thumb: View {
         RemoteImageView(url: cover, maxPixel: max(width, height) * 3)
             .frame(width: width, height: height)
             .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .background(Theme.surface)
+            .background(ThemeColor.surfaceRaised)
     }
 }
