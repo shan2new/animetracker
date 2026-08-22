@@ -45,26 +45,24 @@ struct ScheduleView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     header
 
-                    if appModel.loadError && !appModel.libraryEmpty {
-                        RetryBanner { Task { await appModel.reload() } }
+                    if appModel.sectionFailed {
+                        InlineNotice(Copy.Notice.schedule) { Task { await appModel.reload() } }
+                            .padding(.horizontal, ThemeSpace.x4).padding(.top, ThemeSpace.x3)
+                    }
+                    if let since = appModel.staleSince(.exactAiring) {
+                        StaleStrip(since: since, now: now).padding(.horizontal, ThemeSpace.x4).padding(.top, ThemeSpace.x2)
                     }
 
                     if appModel.loading && appModel.library.isEmpty {
-                        Loader()
+                        Skeleton.schedule.padding(.top, ThemeSpace.x4)
                     } else if appModel.loadError && appModel.libraryEmpty {
-                        EmptyStateView(
-                            title: "Couldn't load your shows",
-                            message: "The server couldn't be reached. Check your connection and try again.",
-                            ctaLabel: "Retry",
-                            onCta: { Task { await appModel.reload() } }
-                        )
+                        EmptyState(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData, prominence: .major) {
+                            Task { await appModel.reload() }
+                        }
+                        .padding(ThemeSpace.x4)
                     } else if appModel.airingFranchises.isEmpty {
-                        EmptyStateView(
-                            title: "No airing shows yet",
-                            message: appModel.libraryEmpty
-                                ? "Add currently-airing shows and your weekly schedule fills in here."
-                                : "None of your shows are currently airing. Add airing anime or TV to see them here."
-                        )
+                        EmptyState(appModel.libraryEmpty ? .emptyAccount : .nothingScheduled, prominence: .major)
+                            .padding(ThemeSpace.x4)
                     } else {
                         weekStrip(proxy).padding(.top, 14)
                         rail
@@ -98,7 +96,7 @@ struct ScheduleView: View {
         .background(AppBackground())
         .refreshable {
             await appModel.reload()
-            if !appModel.loadError { Haptics.impact(.light) }
+            if !appModel.loadError { FeedbackCoordinator.fire(.selection) }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
@@ -228,7 +226,7 @@ struct ScheduleView: View {
         let focused = !cell.isToday && cell.offset == focusDay
         let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
         return Button {
-            Haptics.selection()
+            FeedbackCoordinator.fire(.selection)
             withAnimation(.uiSmooth) {
                 if cell.isToday {
                     proxy.scrollTo("now", anchor: .center)
@@ -608,8 +606,12 @@ struct ScheduleView: View {
                                 aired: Bool, watched: Bool = true) -> some View {
         if aired {
             if !watched {
-                // Mark this aired episode watched (catch-up through it) without leaving the rail.
-                MarkCaughtUpCircle { appModel.markCaughtUp(f.id) }
+                // Mark the next unwatched episode without leaving the rail; Undo in the toast.
+                Button(Copy.Action.markAsWatched) {
+                    if let undo = appModel.markNext(franchiseId: f.id) { appModel.presentUndo(undo) }
+                }
+                .buttonStyle(CompactActionButtonStyle())
+                .accessibilityLabel("Mark \(vm.nextWatchLabel ?? "next episode") as watched")
             } else {
                 // The clock comes from the row's own calendar: a real instant for anime, nothing at
                 // all for TV, whose airDate carries no time of day (fmtTime returns "" there — no

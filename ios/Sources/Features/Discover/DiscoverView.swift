@@ -120,7 +120,7 @@ struct DiscoverView: View {
                 let selected = appModel.mediaFilter == scope
                 Button {
                     guard !selected else { return }
-                    Haptics.selection()
+                    FeedbackCoordinator.fire(.selection)
                     withAnimation(.uiSnappy) { appModel.mediaFilter = scope }
                 } label: {
                     Text(scope.chipLabel)
@@ -271,7 +271,7 @@ struct DiscoverView: View {
         .buttonStyle(SpringPressButtonStyle(scale: 0.96))
         .overlay(alignment: .trailing) {
             Button {
-                Haptics.impact(.soft)
+                FeedbackCoordinator.fire(.selection)
                 withAnimation(.uiGentle) { appModel.removeRecentSearch(term) }
             } label: {
                 Image(systemName: "xmark")
@@ -595,133 +595,31 @@ struct DiscoverView: View {
 
     // Skeletons in the results-list shape: a hero-sized slab over three ghost rows.
     private var skeletonList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Theme.surface)
-                .frame(height: 152)
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Theme.hairline, lineWidth: 1))
-                .shimmering()
-                .padding(.bottom, 6)
-            ForEach(0..<3, id: \.self) { _ in
-                HStack(spacing: 13) {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Theme.surface)
-                        .frame(width: 58, height: 82)
-                    VStack(alignment: .leading, spacing: 8) {
-                        RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.07))
-                            .frame(width: 150, height: 12)
-                        RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.05))
-                            .frame(width: 90, height: 9)
-                    }
-                    Spacer()
-                    Circle().fill(Theme.surface).frame(width: 34, height: 34)
-                }
-                .padding(.vertical, 12)
-                .shimmering()
-            }
-        }
+        Skeleton.search
     }
 
-    // Inline notice above a list of now-stale results after a failed re-query.
     private var staleResultsBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "wifi.exclamationmark")
-                .scaledFont(12, weight: .semibold)
-                .foregroundStyle(Theme.accent)
-            Text("Couldn't refresh — results may be out of date.")
-                .scaledFont(12.5)
-                .foregroundStyle(Theme.text72)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Retry") { Haptics.impact(.soft); appModel.retrySearch() }
-                .scaledFont(12.5, weight: .semibold)
-                .foregroundStyle(Theme.accent)
-                .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 10)
-        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.accentBorder, lineWidth: 1))
+        InlineNotice("Results couldn\u{2019}t refresh") { appModel.retrySearch() }
     }
 
-    /// The query DID match — the scope chip is hiding all of it. Name the scope, say how much is
-    /// waiting behind it, and hand back one tap to All.
     private var scopedNoResultsState: some View {
-        let trimmed = appModel.searchQuery.trimmingCharacters(in: .whitespaces)
-        let scope = appModel.mediaFilter.chipLabel
-        let hidden = appModel.searchResults.count
-        return VStack(spacing: 11) {
-            Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(.system(size: 33, weight: .light))
-                .foregroundStyle(Theme.text36)
-                .padding(.bottom, 2)
-            Text("No \(scope) matches")
-                .scaledFont(15, weight: .semibold)
-                .foregroundStyle(Theme.text72)
-            Text("Nothing under \(scope) matches “\(trimmed).” \(hidden == 1 ? "1 result is" : "\(hidden) results are") hidden by this filter.")
-                .scaledFont(13)
-                .foregroundStyle(Theme.text40)
-                .multilineTextAlignment(.center)
-            Button {
-                Haptics.selection()
-                withAnimation(.uiSnappy) { appModel.mediaFilter = .all }
-            } label: {
-                Text("Show all results")
-                    .scaledFont(14, weight: .semibold)
-                    .foregroundStyle(Theme.background)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyleProminentGlass()
-            .clipShape(Capsule())
-            .padding(.top, 10)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 72)
-        .padding(.horizontal, 24)
+        EmptyState(.noFilterMatches, prominence: .section, primary: {
+            FeedbackCoordinator.fire(.selection)
+            withAnimation(ThemeMotion.uiSnappy) { appModel.mediaFilter = .all }
+        })
+        .padding(.top, ThemeSpace.x4)
     }
 
-    // Centered fallback while searching — a failed fetch or a query with no matches.
     private var noResultsState: some View {
         let trimmed = appModel.searchQuery.trimmingCharacters(in: .whitespaces)
-        return VStack(spacing: 11) {
-            Image(systemName: appModel.searchError ? "wifi.exclamationmark" : "magnifyingglass")
-                .font(.system(size: 33, weight: .light))
-                .foregroundStyle(Theme.text36)
-                .padding(.bottom, 2)
-            Text(appModel.searchError ? "Couldn't reach the server" : "No results")
-                .scaledFont(15, weight: .semibold)
-                .foregroundStyle(Theme.text72)
-            Text(appModel.searchError ? "Check your connection and try again."
-                                      : "Nothing matches “\(trimmed).” Try another title.")
-                .scaledFont(13)
-                .foregroundStyle(Theme.text40)
-                .multilineTextAlignment(.center)
-            if appModel.searchError {
-                Button {
-                    Haptics.impact(.soft)
-                    appModel.retrySearch()
-                } label: {
-                    Text("Retry")
-                        .scaledFont(14, weight: .semibold)
-                        .foregroundStyle(Theme.background)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyleProminentGlass()
-                .clipShape(Capsule())
-                .padding(.top, 10)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 72)
-        .padding(.horizontal, 24)
+        let copy: EmptyStateCopy = appModel.searchError
+            ? (SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData)
+            : .noSearchResults(query: trimmed)
+        return EmptyState(copy, prominence: .section, primary: appModel.searchError ? { appModel.retrySearch() } : nil)
+            .padding(.top, ThemeSpace.x4)
     }
 }
 
-/// The one-tap add circle on every search result. `+` (quiet ghost) flips to an accent `✓` the
-/// instant the optimistic add lands — undo lives in the toast, so the ✓ is a passive indicator.
-/// Disabled once owned: a control with nothing left to do must not keep bouncing under taps.
 private struct AddCircle: View {
     let owned: Bool
     let action: () -> Void

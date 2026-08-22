@@ -1,225 +1,152 @@
 import SwiftUI
+import UIKit
 
-// Profile — presented in the SAME grammar as the franchise detail drawer (the app's one
-// big-surface pattern): a .large sheet on Theme.background, a color-wash hero with a floating
-// centerpiece (the avatar, where detail floats the poster), a centered title block, then the
-// content column. Real-data-only: live library stats, the contractual data-source credits,
-// and a version + sign-out footer. Streaks/history/settings wait for real features.
+// Profile (spec board 08): a modal with Done, in the iOS grouped-list grammar. Trust is
+// inspectable here — the sync line and every failed change, with Retry — and nothing else is
+// decorated. No import this version.
 struct ProfileView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AuthManager.self) private var auth
     @Environment(AppModel.self) private var appModel
+    @Environment(AuthManager.self) private var auth
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var hapticsOn = FeedbackCoordinator.enabled
+    @State private var confirmSignOut = false
+
+    private var now: Int64 { appModel.now }
+    private var sync: SyncCenter { SyncCenter.shared }
 
     var body: some View {
-        ZStack {
-            Theme.background.ignoresSafeArea()
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    hero
-
-                    VStack(alignment: .leading, spacing: 0) {
-                        titleBlock
-                        statsRow.padding(.top, 26)
-                        sectionCap("DATA SOURCES").padding(.top, 28)
-                        sourceList.padding(.top, 8)
-                        footer.padding(.top, 30)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 44)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeSpace.x5) {
+                    account
+                    syncSection
+                    settings
+                    about
+                    signOut
                 }
+                .padding(ThemeSpace.x4)
+                .padding(.bottom, 80)
             }
             .scrollIndicators(.hidden)
+            .background(ThemeColor.canvasRaised.ignoresSafeArea())
+            .navigationTitle("Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(Copy.Action.done) { dismiss() }.fontWeight(.semibold)
+                }
+            }
         }
-        .ignoresSafeArea(edges: .top)
-        .scrollContentBackground(.hidden)
-        .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
+        .onAppear { sync.profileIsOpen = true }
+        .onDisappear { sync.profileIsOpen = false }
+        .confirmationDialog("Sign out?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("Sign out", role: .destructive) {
+                FeedbackCoordinator.fire(.destructive)
+                Task { await auth.signOut() }
+            }
+            Button(Copy.Confirm.cancel, role: .cancel) {}
+        } message: {
+            Text("Your library stays in your account. Changes that haven’t synced yet are kept on this device.")
+        }
     }
 
-    // MARK: hero — the detail drawer's color wash, warmed to the brand, avatar floating
+    // MARK: - Sections
 
-    private var hero: some View {
-        ZStack(alignment: .top) {
-            // Same construction as the detail hero's wash — warm-tinted for the profile.
-            LinearGradient(
-                colors: [Color(hex: 0x3A2F1F), Theme.background],
-                startPoint: .top, endPoint: .bottom
-            )
-            .overlay(alignment: .top) {
-                RadialGradient(
-                    colors: [Color(hex: 0x4A3B24).opacity(0.85), .clear],
-                    center: .top, startRadius: 0, endRadius: 300
-                )
-            }
-            .frame(height: 232)
-            .frame(maxWidth: .infinity)
-
-            // Floating centerpiece — the avatar, where detail floats the cover.
-            Text(auth.avatarInitial)
-                .scaledFont(36, weight: .bold)
-                .foregroundStyle(Theme.background)
-                .frame(width: 96, height: 96)
-                .background(
-                    LinearGradient(colors: [Theme.accent, Color(hex: 0xC9702E)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: Circle()
-                )
-                .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 1))
-                .shadow(color: .black.opacity(0.6), radius: 24, y: 16)
-                .padding(.top, 88)
-
-            // Overlaid dismiss control, same as the detail drawer's.
-            HStack {
-                GlassCircleButton(systemName: "chevron.down", size: 34, iconSize: 16,
-                                  foreground: Theme.textPrimary,
-                                  accessibilityLabel: "Close") { dismiss() }
+    private var account: some View {
+        GroupedList {
+            HStack(spacing: ThemeSpace.x3) {
+                ZStack {
+                    Circle().fill(ThemeColor.surfaceFloating)
+                    Circle().stroke(ThemeColor.stroke, lineWidth: 1)
+                    Text(initials).type(ThemeType.bodyEmphasis).foregroundStyle(ThemeColor.textSecondary)
+                }
+                .frame(width: 44, height: 44)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(accountName).type(ThemeType.bodyEmphasis).foregroundStyle(ThemeColor.textPrimary).lineLimit(1)
+                    Text("\(Copy.titles(appModel.library.count)) in your library")
+                        .type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary)
+                }
                 Spacer()
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-        }
-        .frame(height: 232)
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: title block — centered, like the detail's
-
-    private var titleBlock: some View {
-        VStack(spacing: 6) {
-            Text(auth.displayName)
-                .scaledFont(23, weight: .semibold)
-                .tracking(-0.6)
-                .multilineTextAlignment(.center)
-                .lineLimit(1)
-            Text(accountLine)
-                .scaledFont(12.5, weight: .medium)
-                .foregroundStyle(Theme.text62)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 2)
-    }
-
-    private var accountLine: String {
-        switch auth.mode {
-        case .clerk: "Signed in with Clerk"
-        case let .dev(clerkId): clerkId.isEmpty ? "Dev mode" : "Dev · \(clerkId)"
+            .padding(.horizontal, 14)
+            .frame(minHeight: 68)
         }
     }
 
-    // MARK: stats (live library data only)
-
-    private var statsRow: some View {
-        let watching = appModel.library.filter { $0.effectiveStatus == .watching }.count
-        let completed = appModel.library.filter { $0.effectiveStatus == .completed }.count
-        let planned = appModel.library.filter { $0.effectiveStatus == .planned }.count
-        return HStack(spacing: 0) {
-            stat(watching, label: "WATCHING")
-            listDivider
-            stat(completed, label: "COMPLETED")
-            listDivider
-            stat(planned, label: "PLANNED")
-        }
-        .background(cardShape)
-    }
-
-    private func stat(_ value: Int, label: String) -> some View {
-        VStack(spacing: 3) {
-            Text("\(value)")
-                .scaledFont(20, weight: .bold, monospacedDigit: true)
-                .tracking(-0.4)
-                .contentTransition(.numericText())
-            Text(label)
-                .scaledFont(8.5)
-                .tracking(1.4)
-                .foregroundStyle(Theme.text36)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 13)
-    }
-
-    private var listDivider: some View {
-        Rectangle().fill(Theme.hairline).frame(width: 1).padding(.vertical, 8)
-    }
-
-    // MARK: data sources — compact, quiet
-
-    private func sectionCap(_ label: String) -> some View {
-        Text(label)
-            .scaledFont(9)
-            .tracking(1.6)
-            .foregroundStyle(Theme.text36)
-            .padding(.leading, 4)
-    }
-
-    private var sourceList: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Text("AniList")
-                    .scaledFont(13.5, weight: .semibold)
-                    .foregroundStyle(Theme.text72)
-                Spacer(minLength: 8)
-                Text("Anime metadata & airing schedules")
-                    .scaledFont(11)
-                    .foregroundStyle(Theme.text40)
-                    .lineLimit(1)
+    private var syncSection: some View {
+        GroupedList(header: "Sync") {
+            GroupedRow(symbol: sync.isOnline ? "arrow.triangle.2.circlepath" : "wifi.slash",
+                       symbolTint: sync.isOnline ? ThemeColor.accentSoft : ThemeColor.warning.opacity(0.2),
+                       title: sync.syncedLine(now: now),
+                       subtitle: sync.isOnline ? nil : Copy.Notice.noConnection,
+                       trailing: appModel.isRefreshing ? .none : .chevron(nil),
+                       separator: !sync.failedChanges.isEmpty) {
+                Task { await appModel.reload() }
             }
-            .padding(.vertical, 12)
-
-            Rectangle().fill(Theme.hairline).frame(height: 1)
-
-            // TMDB attribution — the logo + this exact line are a condition of TMDB's API terms.
-            HStack(alignment: .center, spacing: 12) {
-                Image("TMDBLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(height: 11)
-                Spacer(minLength: 8)
-                Text("This product uses the TMDB API but is not endorsed or certified by TMDB.")
-                    .scaledFont(9.5)
-                    .foregroundStyle(Theme.text40)
-                    .lineSpacing(1.5)
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: 220, alignment: .trailing)
+            ForEach(Array(sync.failedChanges.enumerated()), id: \.element.id) { i, change in
+                GroupedRow(symbol: "exclamationmark.triangle", symbolTint: ThemeColor.warning.opacity(0.2),
+                           title: "\(change.command) · \(change.title)", subtitle: change.reason, warning: true,
+                           trailing: change.canRetry(sync) ? .chevron(Copy.Action.retry) : .none,
+                           separator: i < sync.failedChanges.count - 1) {
+                    if change.canRetry(sync) { sync.retry(change.id) }
+                }
+                .contextMenu {
+                    Button(role: .destructive) { sync.discard(change.id) } label: { Label(Copy.Action.discard, systemImage: "trash") }
+                }
             }
-            .padding(.vertical, 12)
         }
-        .padding(.horizontal, 14)
-        .background(cardShape)
     }
 
-    // MARK: footer
-
-    private var footer: some View {
-        HStack {
-            Text("PREVIOUSLY. 1.0")
-                .scaledFont(9.5, weight: .medium)
-                .tracking(1.4)
-                .foregroundStyle(Theme.text36)
-            Spacer()
-            Button {
-                Haptics.impact(.soft)
-                Task { await auth.signOut() }
-            } label: {
-                Text("SIGN OUT")
-                    .scaledFont(9.5, weight: .semibold)
-                    .tracking(1.4)
-                    .foregroundStyle(Theme.destructive.opacity(0.85))
+    private var settings: some View {
+        GroupedList(header: "Settings") {
+            GroupedRow(symbol: "bell", symbolTint: ThemeColor.information.opacity(0.2), title: "Notifications",
+                       subtitle: "Episode alerts and the Live Activity", trailing: .chevron(nil)) {
+                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
-            .buttonStyle(.plain)
+            GroupedRow(symbol: "hand.tap", symbolTint: ThemeColor.accentSoft, title: "Haptics",
+                       subtitle: "Confirms marks and milestones", trailing: .toggle($hapticsOn), separator: false)
         }
-        .padding(.horizontal, 4)
+        .onChange(of: hapticsOn) { _, on in
+            FeedbackCoordinator.enabled = on
+            if on { FeedbackCoordinator.fire(.selection) }
+        }
     }
 
-    // MARK: chrome
+    private var about: some View {
+        GroupedList(header: "About") {
+            GroupedRow(symbol: "info.circle", symbolTint: ThemeColor.surfacePressed, title: "Previously",
+                       trailing: .value(version))
+            GroupedRow(symbol: "film", symbolTint: ThemeColor.surfacePressed, title: "Data from AniList and TMDB",
+                       subtitle: "This product uses the TMDB API but is not endorsed or certified by TMDB.", separator: false)
+        }
+    }
 
-    private var cardShape: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .fill(Color.white.opacity(0.03))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Theme.hairline, lineWidth: 1)
-            )
+    private var signOut: some View {
+        Button("Sign out") { confirmSignOut = true }
+            .buttonStyle(TertiaryButtonStyle2(destructive: true))
+            .frame(maxWidth: .infinity)
+            .padding(.top, ThemeSpace.x2)
+    }
+
+    // MARK: - Helpers
+
+    /// A Clerk user id is not a name: show the account generically rather than an opaque token.
+    private var accountName: String {
+        let n = auth.displayName.trimmingCharacters(in: .whitespaces)
+        return (n.isEmpty || n.hasPrefix("user_")) ? "Your account" : n
+    }
+
+    private var initials: String {
+        let parts = accountName.split(separator: " ").prefix(2).compactMap { $0.first }
+        let s = String(parts).uppercased()
+        return s.isEmpty ? "•" : s
+    }
+
+    private var version: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        return b.map { "\(v) (\($0))" } ?? v
     }
 }

@@ -1,447 +1,378 @@
 import SwiftUI
 
-// "Library" tab — the user's Library v4 design (Claude Design: templates/library-v4, default
-// config artMoment=shelf, progressStyle=ring). Top to bottom:
-//  - large "Library" title + search, with a blurred compact header fading in on scroll,
-//  - "Coming back" as a horizontal poster shelf (the anticipation section owns the art moment),
-//  - Watching + Planned as native-ratio thumbnail rows (never crop a poster); Watching rows carry
-//    a tappable progress ring that logs the next episode,
-//  - Finished as a quiet 4-up mini poster grid,
-//  - tapping any show opens the full franchise detail sheet directly. (A 292pt "quick sheet" used
-//    to sit between the row and the detail; it was one hop of chrome with no information the
-//    detail doesn't have, so it's gone.)
-// The urgency pact still holds: facts, not obligations — the one time-bound accent is the
-// airing-today fact ("Tonight, 9:00 PM" before the slot, "New episode out" after it) and the
-// Coming back return dates (anticipation relaxes).
+// Library (spec board 05): a calm root of shelves with zero controls, and "All titles" — the
+// instrument (search, sort, filter, view) behind one row. Urgency lives on Today, never here.
 struct LibraryView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
+    @State private var all: AllTitlesRoute?
+
     private var now: Int64 { appModel.now }
-    @State private var scrolled = false
+
+    struct AllTitlesRoute: Hashable, Identifiable {
+        var status: WatchStatus?
+        var id: String { status?.rawValue ?? "all" }
+    }
 
     var body: some View {
-        @Bindable var model = appModel
-
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Library")
-                    .scaledFont(30, weight: .bold)
-                    .tracking(-0.8)
-                    .padding(.horizontal, Theme.Space.gutter)
-
-                SearchField(text: $model.libQuery, prompt: "Search your library")
-                    .padding(.horizontal, Theme.Space.gutter)
-                    .padding(.top, 12)
-
-                content
-            }
-            .padding(.top, 8)
-            .padding(.bottom, 120)
-            .animation(.uiGentle, value: appModel.loading)
-            .animation(.uiGentle, value: appModel.loadError)
-        }
-        .scrollContentBackground(.hidden)
-        .scrollIndicators(.hidden)
-        .background(AppBackground())
-        .scrollDismissesKeyboard(.interactively)
-        .onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y > 64 } action: { _, isPast in
-            withAnimation(.uiGentle) { scrolled = isPast }
-        }
-        .overlay(alignment: .top) { compactHeader }
-        .refreshable {
-            await appModel.reload()
-            if !appModel.loadError { Haptics.impact(.light) }
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .navigationBar)
-    }
-
-    /// Straight to the full detail — the row already names the show; the tap should answer it.
-    private func openDetail(_ f: Franchise) {
-        onOpenDetail(f.id, "lib/\(f.id)")
-    }
-
-    // Blurred compact bar once the large title scrolls away (Apple large-title pattern).
-    @ViewBuilder
-    private var compactHeader: some View {
-        if scrolled {
-            Text("Library")
-                .scaledFont(16, weight: .bold)
-                .tracking(-0.2)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 6)
-                .padding(.bottom, 12)
-                .background(.ultraThinMaterial)
-                .overlay(alignment: .bottom) { Rectangle().fill(Theme.hairline).frame(height: 1) }
-                .transition(.opacity)
-        }
-    }
-
-    // MARK: content
-
-    @ViewBuilder
-    private var content: some View {
-        if appModel.loadError && !appModel.libraryEmpty {
-            RetryBanner { Task { await appModel.reload() } }
-                .padding(.horizontal, Theme.Space.gutter).padding(.top, 14)
-        }
-
-        if appModel.loading && appModel.library.isEmpty {
-            Loader()
-        } else if appModel.loadError && appModel.libraryEmpty {
-            EmptyStateView(
-                title: "Couldn't load your library",
-                message: "The server couldn't be reached. Check your connection and try again.",
-                ctaLabel: "Retry",
-                onCta: { Task { await appModel.reload() } }
-            )
-        } else if appModel.libraryEmpty && !appModel.loading {
-            EmptyStateView(
-                title: "Your library is empty",
-                message: "Add shows from the Add tab and they'll live here — what you're watching, what's coming back, and what you've finished."
-            )
-        } else if appModel.libraryShelves.isEmpty {
-            Text("No matches")
-                .scaledFont(11, weight: .semibold)
-                .tracking(1.2)
-                .textCase(.uppercase)
-                .foregroundStyle(Theme.text36)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 56)
-        } else {
-            let shelves = Dictionary(uniqueKeysWithValues: appModel.libraryShelves.map { ($0.shelf, $0.franchises) })
-            VStack(alignment: .leading, spacing: 0) {
-                if let coming = shelves[.comingBack] { comingBackShelf(coming) }
-                if let watching = shelves[.watching] {
-                    rowSection("Watching", watching) { f in watchingRow(f) }
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Library").type(ThemeType.screenTitle).foregroundStyle(ThemeColor.textPrimary)
+                    Spacer()
+                    RefreshIndicator(isRefreshing: appModel.isRefreshing)
                 }
-                if let planned = shelves[.planned] {
-                    rowSection("Planned", planned) { f in plannedRow(f) }
+                .padding(.horizontal, ThemeSpace.x4)
+                .padding(.top, ThemeSpace.x2)
+
+                if let since = appModel.staleSince(.catalogue) {
+                    StaleStrip(since: since, now: now).padding(.horizontal, ThemeSpace.x4).padding(.top, ThemeSpace.x2)
                 }
-                if let finished = shelves[.finished] { finishedGrid(finished) }
-            }
-            .animation(.uiSmooth, value: appModel.libraryShelves.map { $0.franchises.map(\.id) })
-        }
-    }
+                if appModel.sectionFailed {
+                    InlineNotice(Copy.Notice.library) { Task { await appModel.reload() } }
+                        .padding(.horizontal, ThemeSpace.x4).padding(.top, ThemeSpace.x3)
+                }
 
-    private func whisperHeader(_ label: String, count: Int) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .scaledFont(11, weight: .semibold)
-                .tracking(1.2)
-                .textCase(.uppercase)
-                .foregroundStyle(Theme.text46)
-            Text("\(count)")
-                .scaledFont(11, monospacedDigit: true)
-                .contentTransition(.numericText())
-                .foregroundStyle(Theme.text28)
-        }
-    }
-
-    // MARK: Coming back — the poster shelf (the art moment)
-
-    private func comingBackShelf(_ items: [Franchise]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            whisperHeader("Coming back", count: items.count)
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.top, 22)
-
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(items) { f in
-                        Button { openDetail(f) } label: {
-                            VStack(alignment: .leading, spacing: 0) {
-                                Thumb(cover: f.cover, width: 112, height: 168, radius: 12)
-                                    .shadow(color: .black.opacity(0.45), radius: 12, y: 6)
-                                Text(f.title)
-                                    .scaledFont(12, weight: .semibold)
-                                    .tracking(-0.1)
-                                    .lineLimit(1)
-                                    .foregroundStyle(Theme.textPrimary)
-                                    .padding(.top, 8)
-                                let fact = comingBackFact(f)
-                                Text(fact.text)
-                                    .scaledFont(11, monospacedDigit: true)
-                                    .foregroundStyle(fact.dated ? Theme.accent : Theme.text46)
-                                    .lineLimit(1)
-                                    .padding(.top, 1)
-                            }
-                            .frame(width: 112, alignment: .leading)
+                SkeletonGate(isLoading: appModel.loading && appModel.library.isEmpty) {
+                    Skeleton.libraryRoot.padding(.top, ThemeSpace.x4)
+                } content: {
+                    if appModel.library.isEmpty {
+                        EmptyState(appModel.emptyStateCopy, prominence: .major) {
+                            if appModel.loadError { Task { await appModel.reload() } }
                         }
-                        .buttonStyle(SpringPressButtonStyle(scale: 0.96))
-                        .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+                        .padding(ThemeSpace.x4)
+                    } else {
+                        root
                     }
                 }
-                .padding(.horizontal, Theme.Space.gutter)
-                .padding(.top, 12)
-                .scrollTargetLayout()
             }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollIndicators(.hidden)
+            .padding(.bottom, 120)
         }
+        .scrollIndicators(.hidden)
+        .background(ThemeColor.canvas.ignoresSafeArea())
+        .refreshable { await appModel.reload() }
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(item: $all) { route in
+            LibraryAllView(initialStatus: route.status, onOpenDetail: onOpenDetail)
+        }
+        .onAppear { appModel.libQuery = "" }
     }
 
-    // MARK: row sections
+    // MARK: - Root
 
-    private func rowSection<Row: View>(
-        _ label: String, _ items: [Franchise],
-        @ViewBuilder row: @escaping (Franchise) -> Row
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            whisperHeader(label, count: items.count)
-                .padding(.top, 24).padding(.bottom, 2)
-            VStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { idx, f in
-                    row(f)
-                    if idx < items.count - 1 { HairlineDivider() }
+    private var root: some View {
+        VStack(alignment: .leading, spacing: ThemeSpace.x6) {
+            GroupedList {
+                GroupedRow(symbol: "rectangle.stack", symbolTint: ThemeColor.accentSoft,
+                           title: "All titles", trailing: .chevron("\(appModel.library.count)"), separator: false) {
+                    all = AllTitlesRoute(status: nil)
+                }
+            }
+            .padding(.horizontal, ThemeSpace.x4)
+            .padding(.top, ThemeSpace.x4)
+
+            ForEach(orderedShelves) { section in
+                VStack(alignment: .leading, spacing: ThemeSpace.x3) {
+                    SectionHeaderRow(section.shelf.label, count: section.franchises.count,
+                                     actionLabel: section.franchises.count > 6 ? Copy.Action.seeAll : nil) {
+                        all = AllTitlesRoute(status: filterStatus(for: section.shelf))
+                    }
+                    .padding(.horizontal, ThemeSpace.x4)
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: ThemeSpace.x3) {
+                            ForEach(section.franchises.prefix(12)) { f in
+                                shelfCard(f, shelf: section.shelf)
+                            }
+                        }
+                        .padding(.horizontal, ThemeSpace.x4)
+                    }
+                    .scrollIndicators(.hidden)
+                    .scrollClipDisabled()
                 }
             }
         }
-        .padding(.horizontal, Theme.Space.gutter)
     }
 
-    private func watchingRow(_ f: Franchise) -> some View {
-        let fact = watchingFact(f)
-        return libRow(f, fact: fact.text, accent: fact.accent) {
-            if let part = f.releasingPart ?? f.resumePart {
-                // The ring only LOGS while there's an unwatched episode actually out. Once you're
-                // level with what aired it becomes a plain progress indicator — a live "+1" here
-                // has nothing left to count, and tapping on past the end of a season is exactly
-                // how a 10-episode season ended up recorded at 59 watched.
-                let canLog = part.progress < part.availableEpisodes()
-                ProgressRing(fill: WatchProgress(part)?.ringFill ?? .fraction(0), onLog: canLog ? {
-                    appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId,
-                                         episodes: part.progress + 1)
-                } : nil)
-            }
+    /// Board 05 order: Returning · Watching · Planned · Finished.
+    private var orderedShelves: [AppModel.LibShelfSection] {
+        let rank: [AppModel.LibShelf: Int] = [.comingBack: 0, .watching: 1, .planned: 2, .finished: 3]
+        return appModel.libraryShelves.sorted { (rank[$0.shelf] ?? 9) < (rank[$1.shelf] ?? 9) }
+    }
+
+    private func filterStatus(for shelf: AppModel.LibShelf) -> WatchStatus? {
+        switch shelf {
+        case .watching: return .watching
+        case .planned: return .planned
+        case .finished, .comingBack: return .completed
         }
     }
 
-    private func plannedRow(_ f: Franchise) -> some View {
-        let year = f.year.map { " · \($0)" } ?? ""
-        return libRow(f, fact: "\(f.source.shortLabel)\(year)", accent: false) { EmptyView() }
-    }
-
-    private func libRow<Trailing: View>(
-        _ f: Franchise, fact: String, accent: Bool,
-        @ViewBuilder trailing: @escaping () -> Trailing
-    ) -> some View {
-        Button { openDetail(f) } label: {
-            HStack(spacing: 12) {
-                Thumb(cover: f.cover, width: 46, height: 69, radius: 7)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(f.title)
-                        .scaledFont(15, weight: .semibold)
-                        .tracking(-0.2)
-                        .lineLimit(1)
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(fact)
-                        .scaledFont(12, monospacedDigit: true)
-                        .foregroundStyle(accent ? Theme.accent : Theme.text50)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                trailing()
-                Image(systemName: "chevron.right")
-                    .scaledFont(12, weight: .semibold)
-                    .foregroundStyle(Theme.text36)
+    private func shelfCard(_ f: Franchise, shelf: AppModel.LibShelf) -> some View {
+        Button { onOpenDetail(f.id, "lib/\(f.id)") } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                PosterSlot(url: f.cover, width: 104, height: 156)
+                Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary)
+                    .lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                Text(caption(f, shelf: shelf)).type(ThemeType.caption).foregroundStyle(ThemeColor.textTertiary).lineLimit(1)
             }
-            .padding(.vertical, 9)
+            .frame(width: 104, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(SpringPressButtonStyle(scale: 0.98))
+        .buttonStyle(.plain)
         .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+        .accessibilityLabel("\(f.title), \(caption(f, shelf: shelf))")
     }
 
-    // MARK: Finished — quiet 4-up poster grid
-
-    private func finishedGrid(_ items: [Franchise]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            whisperHeader("Finished", count: items.count)
-                .padding(.top, 26).padding(.bottom, 10)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
-                      spacing: 10) {
-                ForEach(items) { f in
-                    Button { openDetail(f) } label: {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Theme.surface)
-                            .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                            .overlay { RemoteImageView(url: f.cover, maxPixel: 300) }
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Theme.hairline, lineWidth: 1))
-                            .opacity(0.82)
-                    }
-                    .buttonStyle(SpringPressButtonStyle(scale: 0.94))
-                    .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
-                    .accessibilityLabel(f.title)
-                }
+    /// Calm captions: a fact about where you are, never a nudge.
+    private func caption(_ f: Franchise, shelf: AppModel.LibShelf) -> String {
+        switch shelf {
+        case .watching:
+            if let p = f.currentPart, !p.isUpcoming {
+                if p.isReleasing && p.episodesBehind == 0 { return Copy.Progress.caughtUp }
+                return Copy.Progress.episodeNext(p.progress + 1)
             }
-        }
-        .padding(.horizontal, Theme.Space.gutter)
-    }
-
-    // MARK: facts
-
-    /// Watching-row fact: accent "Tonight, 9:00 PM · S4 E2" when the next episode is still to land
-    /// today, "New episode out · S4 E2" once that slot has passed (day words only for TV); quiet
-    /// "S2 · E6 next" otherwise.
-    private func watchingFact(_ f: Franchise) -> (text: String, accent: Bool) {
-        if let part = f.releasingPart, let next = f.nextAiring(now: now), f.dayDiff(of: next, now: now) == 0 {
-            let ep = [seasonToken(part), part.nextEpisodeNumber.map { "E\($0)" }].compactMap { $0 }
-                .joined(separator: " ")
-            // A same-day slot is KEPT after it passes (see `scheduledAiring`), so "Tonight, 9:00 AM"
-            // was still being promised at 8pm for an episode out since morning. Once the instant is
-            // behind us the episode is a fact, not a wait — but only for a real instant: a TV date's
-            // 17:00 is synthesized, so it has no moment to be past.
-            if !f.timeAnchor.isDateOnly, next <= now {
-                // Unwatched is judged against the episode that just landed, not `airedEpisodes` —
-                // the aired count trails the hourly sync, so it can still read yesterday's number.
-                let unwatched = part.nextEpisodeNumber.map { part.progress < $0 } ?? part.isBehind
-                if unwatched {
-                    return (ep.isEmpty ? "New episode out" : "New episode out · \(ep)", true)
-                }
-            } else {
-                let when = dayPartLabel(f, at: next)
-                return (ep.isEmpty ? when : "\(when) · \(ep)", true)
-            }
-        }
-        if let part = f.releasingPart ?? f.resumePart {
-            let season = seasonToken(part).map { "\($0) · " } ?? ""
-            return ("\(season)E\(part.progress + 1) next", false)
-        }
-        // An explicit "Watching" status keeps a show on this shelf even with nothing left to
-        // resume (`libShelf` honours the user's word). Say what IS true rather than nothing —
-        // an announced return if there is one, else the plain shape of the show. No accent:
-        // Library stays calm, Today carries urgency.
-        let comingBack = comingBackFact(f)
-        return (comingBack.text.isEmpty ? quietFact(f) : comingBack.text, false)
-    }
-
-    /// "Tonight, 9:00 PM" / "Today, 9:00 AM" for a real broadcast instant; the bare day word for a
-    /// date-only (TV) release, which has no clock to name a part of the day with.
-    private func dayPartLabel(_ f: Franchise, at ts: Int64) -> String {
-        guard !f.timeAnchor.isDateOnly else { return f.whenLabel(ts: ts, now: now) }
-        let hour = Formatting.localParts(ts, anchor: f.timeAnchor).hour
-        return "\(Formatting.isEvening(hour: hour) ? "Tonight" : "Today"), \(Formatting.fmtTime(ts, anchor: f.timeAnchor))"
-    }
-
-    private func comingBackFact(_ f: Franchise) -> (text: String, dated: Bool) {
-        if let premiere = appModel.nextPremiere(of: f) {
-            let part = f.parts.first { $0.premiereAt == premiere }
-            let label = part.map { $0.label.isEmpty ? "New season" : $0.label } ?? "New season"
-            let date = part?.premiereDateLabel(source: f.source)
-                ?? Formatting.fmtFullDate(premiere, anchor: f.timeAnchor)
-            return ("\(label) · \(date)", true)
-        }
-        if let badge = f.upcoming?.cardBadge, !badge.isEmpty {
-            return (badge, f.upcoming?.releaseSortKey != nil)
-        }
-        return ("", false)
-    }
-}
-
-// MARK: - Shared row facts
-
-private func seasonToken(_ part: FranchisePart) -> String? {
-    part.kind == .season && part.sequence >= 1 ? "S\(part.sequence)" : nil
-}
-
-/// The always-true, never-urgent descriptor for a show with nothing scheduled and nothing queued:
-/// its season count, else source + year. Used wherever a fact line would otherwise be blank.
-private func quietFact(_ f: Franchise) -> String {
-    if let counts = f.partCounts, counts.season > 0 {
-        return "\(counts.season) \(counts.season == 1 ? "season" : "seasons")"
-    }
-    let year = f.year.map { " · \($0)" } ?? ""
-    return "\(f.source.shortLabel)\(year)"
-}
-
-/// What a progress indicator can HONESTLY say about a part you're watching.
-///
-/// A season whose size the catalogue doesn't publish (ongoing AniList shows carry `episodes: null`)
-/// has no completion to express. Measuring progress against the AIRED count instead rendered a
-/// caught-up ongoing show as a closed ring and "100% watched" — an in-progress series presented as
-/// finished. Caught up is its own state, not 100%.
-private enum WatchProgress {
-    /// Known season size: a real fraction of the whole.
-    case ofSeason(watched: Int, total: Int)
-    /// Unknown size, level with everything aired so far.
-    case caughtUp(watched: Int)
-    /// Unknown size, still behind: progress through what has AIRED, and labelled as such.
-    case throughAired(watched: Int, aired: Int)
-
-    init?(_ part: FranchisePart) {
-        if part.totalEpisodes > 0 {
-            self = .ofSeason(watched: part.progress, total: part.totalEpisodes)
-        } else if part.airedEpisodes > 0 {
-            self = part.progress >= part.airedEpisodes
-                ? .caughtUp(watched: part.progress)
-                : .throughAired(watched: part.progress, aired: part.airedEpisodes)
-        } else {
-            return nil
-        }
-    }
-
-    /// How the tappable ring fills. `caughtUp` never closes a circle — a closed ring reads as
-    /// "series complete", and this one is still running.
-    var ringFill: RingFill {
-        switch self {
-        case .ofSeason(let watched, let total): return .fraction(min(1, Double(watched) / Double(total)))
-        case .caughtUp: return .caughtUp
-        // Can't reach 1: this case exists only while watched < aired.
-        case .throughAired(let watched, let aired): return .fraction(min(1, Double(watched) / Double(aired)))
+            return Copy.Status(.watching)
+        case .comingBack:
+            if let at = appModel.nextPremiere(of: f) { return TemporalCopy.returns(at: at, now: now, source: f.source) }
+            return "Announced"
+        case .planned:
+            return Copy.Status(.planned)
+        case .finished:
+            return f.effectiveStatus == .completed ? Copy.Status(.completed) : f.effectiveStatus.displayName
         }
     }
 }
 
-/// How much of the Watching ring is filled — or that there is nothing left to fill toward.
-private enum RingFill {
-    case fraction(Double)
-    case caughtUp
-}
+// MARK: - All titles (the instrument)
 
-// MARK: - Progress ring
+struct LibraryAllView: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var initialStatus: WatchStatus? = nil
+    let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
 
-/// The v4 Watching-row ring: a conic progress fill you can TAP to log the next episode.
-/// 20pt visual, 34pt tap target. Fills with accent; a small pop on change. A show that's level
-/// with what aired but whose season size is unknown gets the passive ✓ instead of a closed ring
-/// (the ✓ is the app's "Caught up" status mark — DECISION A).
-private struct ProgressRing: View {
-    let fill: RingFill
-    /// nil ⇒ nothing left to log: render the ring as a passive indicator, not a dead button that
-    /// still bounces and haptics on every tap.
-    let onLog: (() -> Void)?
+    enum Sort: String, CaseIterable, Identifiable {
+        case title = "Title", recent = "Recently updated", progress = "Most left to watch"
+        var id: String { rawValue }
+    }
+    enum Display: String, CaseIterable, Identifiable {
+        case posters = "Posters", list = "List"
+        var id: String { rawValue }
+        var symbol: String { self == .posters ? "square.grid.2x2" : "list.bullet" }
+    }
+
+    @State private var query = ""
+    @State private var sort: Sort = .title
+    @State private var status: WatchStatus?
+    @State private var display: Display = .list
+    @State private var unwatchedOnly = false
+    @State private var showArrange = false
+
+    private var now: Int64 { appModel.now }
+
+    private var results: [Franchise] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        var arr = appModel.library.filter { f in
+            (status == nil || f.effectiveStatus == status)
+            && (q.isEmpty || f.title.lowercased().contains(q))
+            && (!unwatchedOnly || (f.currentPart.map { $0.markTarget(now: now) > $0.progress } ?? false))
+        }
+        switch sort {
+        case .title: arr.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .recent: arr.sort { ($0.lastAiredSortKey, $0.title) > ($1.lastAiredSortKey, $1.title) }
+        case .progress: arr.sort { ($0.continueBacklog, $0.title) > ($1.continueBacklog, $1.title) }
+        }
+        return arr
+    }
+
+    private var isArranged: Bool { sort != .title || status != nil || display != .list || unwatchedOnly }
 
     var body: some View {
-        Button(action: { onLog?() }) {
-            ZStack {
-                Circle().stroke(Theme.hairlineStrong, lineWidth: 3)
-                switch fill {
-                case .fraction(let fraction):
-                    Circle()
-                        .trim(from: 0, to: fraction)
-                        .stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                        .animation(.uiSnappy, value: fraction)
-                case .caughtUp:
-                    Image(systemName: "checkmark")
-                        .scaledFont(10, weight: .bold)
-                        .foregroundStyle(Theme.accent)
+        ScrollView {
+            VStack(alignment: .leading, spacing: ThemeSpace.x3) {
+                if isArranged {
+                    HStack(spacing: ThemeSpace.x2) {
+                        Text(summary).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(2)
+                        Spacer()
+                        Button(Copy.Action.clear) {
+                            withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
+                                sort = .title; status = nil; display = .list; unwatchedOnly = false
+                            }
+                        }
+                        .buttonStyle(TertiaryButtonStyle2())
+                    }
+                    .padding(.horizontal, ThemeSpace.x4)
                 }
+                if results.isEmpty {
+                    EmptyState(query.isEmpty ? .noFilterMatches : .noSearchResults(query: query), prominence: .section,
+                               primary: isArranged ? { sort = .title; status = nil; unwatchedOnly = false } : nil)
+                        .padding(.horizontal, ThemeSpace.x4)
+                } else if display == .posters {
+                    grid
+                } else {
+                    list
+                }
+                Text(Copy.titles(results.count))
+                    .type(ThemeType.caption).foregroundStyle(ThemeColor.textTertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, ThemeSpace.x2)
             }
-            .frame(width: 20, height: 20)
-            .frame(width: 34, height: 34)
-            .contentShape(Circle())
+            .padding(.top, ThemeSpace.x2)
+            .padding(.bottom, 120)
         }
-        .buttonStyle(BounceButtonStyle())
-        .disabled(onLog == nil)
-        .accessibilityLabel(ringLabel)
+        .scrollIndicators(.hidden)
+        .background(ThemeColor.canvas.ignoresSafeArea())
+        .navigationTitle("All titles")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search your library")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showArrange = true } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .accessibilityLabel(Copy.Action.arrange)
+            }
+        }
+        .sheet(isPresented: $showArrange) {
+            ArrangeSheet(sort: $sort, status: $status, display: $display, unwatchedOnly: $unwatchedOnly)
+                .presentationDetents([.height(520), .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onAppear { if let initialStatus, status == nil { status = initialStatus } }
     }
 
-    private var ringLabel: String {
-        if case .caughtUp = fill { return "Caught up" }
-        return onLog == nil ? "Watch progress" : "Log next episode"
+    private var summary: String {
+        var bits: [String] = []
+        if let status { bits.append(status.displayName) }
+        if unwatchedOnly { bits.append("Unwatched only") }
+        if sort != .title { bits.append(sort.rawValue) }
+        if display != .list { bits.append(display.rawValue) }
+        return bits.joined(separator: " · ")
+    }
+
+    private var list: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(results.enumerated()), id: \.element.id) { i, f in
+                Button { onOpenDetail(f.id, "all/\(f.id)") } label: {
+                    HStack(spacing: ThemeSpace.x3) {
+                        PosterSlot(url: f.cover, width: 40, height: 60)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary).lineLimit(2)
+                            Text(rowCaption(f)).type(ThemeType.metadata).foregroundStyle(ThemeColor.textSecondary).lineLimit(1)
+                        }
+                        Spacer(minLength: ThemeSpace.x2)
+                        Image(systemName: "chevron.forward").font(.system(size: 12, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 68)
+                    .contentShape(Rectangle())
+                    .overlay(alignment: .bottom) {
+                        if i < results.count - 1 { Rectangle().fill(ThemeColor.separator).frame(height: 1).padding(.leading, 66) }
+                    }
+                }
+                .buttonStyle(GroupedRowPressStyle())
+                .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+                .accessibilityLabel("\(f.title), \(rowCaption(f))")
+            }
+        }
+        .background(ThemeColor.surfaceRaised, in: RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous).stroke(ThemeColor.separator, lineWidth: 1))
+        .padding(.horizontal, ThemeSpace.x4)
+    }
+
+    private var grid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 120), spacing: ThemeSpace.x3, alignment: .top)],
+                  alignment: .leading, spacing: ThemeSpace.x4) {
+            ForEach(results) { f in
+                Button { onOpenDetail(f.id, "all/\(f.id)") } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        PosterSlot(url: f.cover, width: 104, height: 156)
+                        Text(f.title).type(ThemeType.showTitleS).foregroundStyle(ThemeColor.textPrimary)
+                            .lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                        Text(rowCaption(f)).type(ThemeType.caption).foregroundStyle(ThemeColor.textTertiary).lineLimit(1)
+                    }
+                    .frame(width: 104, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+                .accessibilityLabel("\(f.title), \(rowCaption(f))")
+            }
+        }
+        .padding(.horizontal, ThemeSpace.x4)
+    }
+
+    private func rowCaption(_ f: Franchise) -> String {
+        let status = f.effectiveStatus.displayName
+        guard f.effectiveStatus == .watching, let p = f.currentPart, !p.isUpcoming else { return status }
+        if p.isReleasing && p.episodesBehind == 0 { return "\(status) · \(Copy.Progress.caughtUp)" }
+        let left = max(0, p.markTarget(now: now) - p.progress)
+        return left > 0 ? "\(status) · \(p.watchContext(episode: p.progress + 1)) next" : status
+    }
+}
+
+// MARK: - Arrange (grouped-list grammar)
+
+private struct ArrangeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var sort: LibraryAllView.Sort
+    @Binding var status: WatchStatus?
+    @Binding var display: LibraryAllView.Display
+    @Binding var unwatchedOnly: Bool
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: ThemeSpace.x5) {
+                    GroupedList(header: "Sort by") {
+                        ForEach(Array(LibraryAllView.Sort.allCases.enumerated()), id: \.element.id) { i, s in
+                            GroupedRow(title: s.rawValue, trailing: .check(sort == s), separator: i < LibraryAllView.Sort.allCases.count - 1) {
+                                FeedbackCoordinator.fire(.selection); sort = s
+                            }
+                        }
+                    }
+                    GroupedList(header: "Status") {
+                        GroupedRow(title: "All", trailing: .check(status == nil)) { FeedbackCoordinator.fire(.selection); status = nil }
+                        ForEach(Array(WatchStatus.menuOrder.enumerated()), id: \.element) { i, s in
+                            GroupedRow(title: s.displayName, trailing: .check(status == s), separator: i < WatchStatus.menuOrder.count - 1) {
+                                FeedbackCoordinator.fire(.selection); status = s
+                            }
+                        }
+                    }
+                    GroupedList(header: "View") {
+                        GroupedRow(title: "Unwatched only", trailing: .toggle($unwatchedOnly), separator: true)
+                        HStack {
+                            Text("View as").type(ThemeType.body).foregroundStyle(ThemeColor.textPrimary)
+                            Spacer()
+                            Picker("View as", selection: $display) {
+                                ForEach(LibraryAllView.Display.allCases) { d in
+                                    Image(systemName: d.symbol).tag(d)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 120)
+                        }
+                        .padding(.leading, 14).padding(.trailing, 16)
+                        .frame(minHeight: 52)
+                    }
+                }
+                .padding(ThemeSpace.x4)
+            }
+            .background(ThemeColor.canvasRaised.ignoresSafeArea())
+            .navigationTitle(Copy.Action.arrange)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if sort != .title || status != nil || display != .list || unwatchedOnly {
+                        Button(Copy.Action.reset) { sort = .title; status = nil; display = .list; unwatchedOnly = false }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button(Copy.Action.done) { dismiss() }.fontWeight(.semibold) }
+            }
+        }
     }
 }

@@ -170,7 +170,7 @@ struct FranchiseDetailView: View {
                 .padding(.horizontal, ThemeSpace.x4)
                 .padding(.bottom, ThemeSpace.x2)
             }
-            .padding(.top, 56)
+            .padding(.top, 28)
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
@@ -184,8 +184,8 @@ struct FranchiseDetailView: View {
     }
 
     private func metaLine(_ f: Franchise) -> String {
-        let genres = f.parts.flatMap(\.genres).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(3)
         let studio = f.parts.flatMap(\.studios).first
+        let genres = f.parts.flatMap(\.genres).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }.prefix(studio == nil ? 3 : 2)
         return (Array(genres) + [studio].compactMap { $0 }).joined(separator: " · ")
     }
 
@@ -311,12 +311,13 @@ struct FranchiseDetailView: View {
             return NextUp(kind: .caughtUp, part: part, line1: Copy.Progress.caughtUp, line2: when, line3: nil, episode: nil, behind: 0)
         }
         let episode = part.progress + 1
+        let context = f.parts.count > 1 ? part.watchContext(episode: episode) : Copy.episode(episode)
         if behind > 1 {
-            return NextUp(kind: .backlog, part: part, line1: Copy.episode(episode), line2: Copy.Progress.behind(behind),
+            return NextUp(kind: .backlog, part: part, line1: context, line2: Copy.Progress.behind(behind),
                           line3: nil, episode: episode, behind: behind)
         }
         let aired: String? = part.lastAiredAt.map { TemporalCopy.aired(at: $0, now: now, source: f.source) }
-        return NextUp(kind: .actionable, part: part, line1: Copy.episode(episode), line2: aired,
+        return NextUp(kind: .actionable, part: part, line1: context, line2: aired,
                       line3: Copy.Progress.caughtUpAfterThisEpisode, episode: episode, behind: 1)
     }
 
@@ -502,7 +503,6 @@ struct FranchiseDetailView: View {
                     withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) { synopsisExpanded.toggle() }
                 }
                 .buttonStyle(TertiaryButtonStyle2())
-                .padding(.leading, -ThemeSpace.x1)
             }
         }
     }
