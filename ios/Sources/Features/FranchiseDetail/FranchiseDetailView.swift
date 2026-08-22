@@ -537,13 +537,7 @@ struct FranchiseDetailView: View {
 
     // MARK: helpers
 
-    private func statusLabel(_ s: WatchStatus) -> String {
-        switch s {
-        case .watching: return "Watching"
-        case .completed: return "Completed"
-        case .planned: return "Plan"
-        }
-    }
+    private func statusLabel(_ s: WatchStatus) -> String { Copy.Status(s) }
 
     /// "4 Seasons · 1 Movie · 2 OVAs" — only non-zero kinds, properly pluralised.
     private func partBreakdown(_ counts: PartCounts?) -> String? {

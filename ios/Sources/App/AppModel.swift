@@ -1031,7 +1031,7 @@ extension Franchise {
                 nextAiringAt: p.nextAiringAt, lastAiredAt: p.lastAiredAt, synopsis: p.synopsis,
                 genres: p.genres, progress: max(0, episodes),
                 year: p.year, studios: p.studios, nextAiringCount: p.nextAiringCount,
-                episodes: p.episodes
+                episodes: p.episodes, release: p.release
             )
         }
         return Franchise(copying: self, parts: newParts)
@@ -1042,7 +1042,10 @@ extension Franchise {
     func withStatus(_ newStatus: WatchStatus) -> Franchise {
         Franchise(id: id, source: source, title: title, cover: cover, banner: banner, synopsis: synopsis,
                   genres: genres, isReleasing: isReleasing, partCounts: partCounts, parts: parts,
-                  subscription: Subscription(status: newStatus), upcoming: upcoming,
+                  // `addedAt` is a fact about the account, not about the status: an optimistic
+                  // status flip must not erase when the user added the show.
+                  subscription: Subscription(status: newStatus, addedAt: subscription?.addedAt),
+                  upcoming: upcoming,
                   year: year, studios: studios,
                   status: newStatus, behind: behind, newParts: newParts)
     }

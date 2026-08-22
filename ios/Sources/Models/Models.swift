@@ -5,10 +5,15 @@ import Foundation
 
 // MARK: - Enums
 
+/// The five watch statuses (spec board 09). `completed` is the wire name; the user's word is
+/// "Finished" — see `WatchStatus.displayName` / `Copy.Status(_:)`, the only places it becomes text.
+/// The server column is `text()`, so `paused` and `dropped` needed no migration.
 enum WatchStatus: String, Codable, Sendable, CaseIterable {
     case watching
     case completed
     case planned
+    case paused
+    case dropped
 }
 
 /// Which catalogue a franchise came from. A franchise never mixes sources; absent in older
@@ -106,6 +111,42 @@ struct Episode: Codable, Identifiable, Sendable {
     }
 }
 
+// MARK: - Release precision
+
+/// How precisely the next release instant is known — **stated by the server, never inferred from
+/// `source`** (docs/api-contract.md). AniList publishes a real broadcast instant; TMDB publishes a
+/// calendar date the sync synthesizes to 17:00 UTC, so its clock half is not a fact and must never
+/// be rendered. Absent in older server responses, which is why every field is optional here.
+struct ReleasePrecision: Codable, Sendable {
+    enum Precision: String, Codable, Sendable {
+        /// `at` is a real broadcast instant.
+        case exact
+        /// `date` is the fact; `at` is synthesized and its clock half is fiction.
+        case dateOnly = "date_only"
+        /// Nothing is scheduled.
+        case unknown
+    }
+
+    let precision: Precision
+    /// ms epoch. Authoritative only when `precision == .exact`.
+    let at: Int64?
+    /// "YYYY-MM-DD" (UTC). Authoritative only when `precision == .dateOnly`.
+    let date: String?
+
+    enum CodingKeys: String, CodingKey { case precision, at, date }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        precision = (try? c.decode(Precision.self, forKey: .precision)) ?? .unknown
+        at = try? c.decodeIfPresent(Int64.self, forKey: .at)
+        date = try? c.decodeIfPresent(String.self, forKey: .date)
+    }
+
+    init(precision: Precision, at: Int64?, date: String?) {
+        self.precision = precision; self.at = at; self.date = date
+    }
+}
+
 // MARK: - FranchisePart
 
 struct FranchisePart: Codable, Identifiable, Sendable {
@@ -131,6 +172,8 @@ struct FranchisePart: Codable, Identifiable, Sendable {
     let studios: [String]      // studios (anime) / networks (TV)
     let nextAiringCount: Int   // episodes sharing the next airing date; > 1 ⇒ a full-season drop
     let episodes: [Episode]    // detail response only; [] on list/library payloads
+    /// The honest shape of `nextAiringAt`. `nil` from a server that predates the field.
+    let release: ReleasePrecision?
 
     var id: Int { mediaId }
 
@@ -139,7 +182,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         case mediaId, kind, sequence, label, title, cover, banner, format, status
         case isReleasing, totalEpisodes, airedEpisodes, nextEpisodeNumber, nextAiringAt
         case lastAiredAt, synopsis, genres, progress
-        case year, studios, nextAiringCount, episodes
+        case year, studios, nextAiringCount, episodes, release
     }
 
     init(from decoder: Decoder) throws {
@@ -167,6 +210,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         nextAiringCount = (try? c.decode(Int.self, forKey: .nextAiringCount)) ?? 0
         // `Episode.id` is its number, so a malformed/duplicate 0 would collide inside a ForEach.
         episodes = ((try? c.decode([Episode].self, forKey: .episodes)) ?? []).filter { $0.number > 0 }
+        release = try? c.decodeIfPresent(ReleasePrecision.self, forKey: .release)
     }
 
     // Memberwise init for previews/tests. New fields default so existing call sites keep working.
@@ -175,7 +219,8 @@ struct FranchisePart: Codable, Identifiable, Sendable {
          isReleasing: Bool, totalEpisodes: Int, airedEpisodes: Int,
          nextEpisodeNumber: Int?, nextAiringAt: Int64?, lastAiredAt: Int64?,
          synopsis: String?, genres: [String], progress: Int,
-         year: Int? = nil, studios: [String] = [], nextAiringCount: Int = 0, episodes: [Episode] = []) {
+         year: Int? = nil, studios: [String] = [], nextAiringCount: Int = 0, episodes: [Episode] = [],
+         release: ReleasePrecision? = nil) {
         self.mediaId = mediaId; self.kind = kind; self.sequence = sequence
         self.label = label; self.title = title; self.cover = cover; self.banner = banner
         self.format = format; self.status = status; self.isReleasing = isReleasing
@@ -185,6 +230,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         self.progress = progress
         self.year = year; self.studios = studios
         self.nextAiringCount = nextAiringCount; self.episodes = episodes
+        self.release = release
     }
 
     /// A copy with the episode list replaced — grafts detail-fetched episodes onto the live
@@ -195,7 +241,8 @@ struct FranchisePart: Codable, Identifiable, Sendable {
                       isReleasing: isReleasing, totalEpisodes: totalEpisodes, airedEpisodes: airedEpisodes,
                       nextEpisodeNumber: nextEpisodeNumber, nextAiringAt: nextAiringAt, lastAiredAt: lastAiredAt,
                       synopsis: synopsis, genres: genres, progress: progress,
-                      year: year, studios: studios, nextAiringCount: nextAiringCount, episodes: eps)
+                      year: year, studios: studios, nextAiringCount: nextAiringCount, episodes: eps,
+                      release: release)
     }
 
     /// Unwatched episodes that have already aired (0 unless currently releasing).
@@ -289,6 +336,14 @@ struct PartCounts: Codable, Sendable {
 
 struct Subscription: Codable, Sendable {
     let status: WatchStatus
+    /// When the user subscribed (ms since epoch). Absent in older server responses, so Library's
+    /// "recently added" ordering must treat `nil` as unknown rather than as the epoch.
+    let addedAt: Int64?
+
+    init(status: WatchStatus, addedAt: Int64? = nil) {
+        self.status = status
+        self.addedAt = addedAt
+    }
 }
 
 // Web-sourced "what's next" news for a franchise (announced/airing seasons & films). `release`
@@ -504,6 +559,34 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
 
 struct FranchiseListResponse: Codable, Sendable {
     let franchises: [FranchiseSummary]
+    /// `/search` only — set when the server spell-corrected/completed the query before searching.
+    let correctedQuery: String?
+    /// `/search` only — the query the caller sent, echoed **only** alongside `correctedQuery`.
+    let originalQuery: String?
+    /// `/search` only — per-catalogue outcome (`ok` / `failed` / `disabled`). Absent means
+    /// "nothing to report", never "everything failed": a catalogue that FAILED is not a
+    /// catalogue with no matches.
+    let sources: [String: String]?
+
+    enum CodingKeys: String, CodingKey { case franchises, correctedQuery, originalQuery, sources }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // `franchises` stays a hard requirement: a body without it is a broken response, not an
+        // empty result, and swallowing that would render "no results" for a server fault.
+        franchises = try c.decode([FranchiseSummary].self, forKey: .franchises)
+        correctedQuery = try? c.decodeIfPresent(String.self, forKey: .correctedQuery)
+        originalQuery = try? c.decodeIfPresent(String.self, forKey: .originalQuery)
+        sources = try? c.decodeIfPresent([String: String].self, forKey: .sources)
+    }
+
+    init(franchises: [FranchiseSummary], correctedQuery: String? = nil,
+         originalQuery: String? = nil, sources: [String: String]? = nil) {
+        self.franchises = franchises
+        self.correctedQuery = correctedQuery
+        self.originalQuery = originalQuery
+        self.sources = sources
+    }
 }
 
 struct LibraryResponse: Codable, Sendable {

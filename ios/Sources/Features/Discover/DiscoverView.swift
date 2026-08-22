@@ -497,12 +497,7 @@ struct DiscoverView: View {
     private func libraryChip(_ summary: FranchiseSummary) -> some View {
         var label = "✓ IN LIBRARY"
         if let status = appModel.franchise(id: summary.id)?.status {
-            let word = switch status {
-            case .watching:  "WATCHING"
-            case .completed: "COMPLETED"
-            case .planned:   "PLANNED"
-            }
-            label += " · \(word)"
+            label += " · \(Copy.Status(status).uppercased())"
         }
         return Text(label)
             .scaledFont(9, weight: .semibold, monospacedDigit: true)
