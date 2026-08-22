@@ -773,11 +773,13 @@ final class AppModel {
     /// action. Local commit first, one `.commitLight`, no toast here: the card shows the result and the
     /// view presents the Undo toast when its handoff settles (spec: mark timeline).
     @discardableResult
-    func markNext(franchiseId: String) -> UndoState? {
-        guard let f = franchise(id: franchiseId), let part = f.releasingPart ?? f.resumePart else { return nil }
+    func markNext(franchiseId: String, mediaId: Int? = nil, haptic: FeedbackToken = .commitLight) -> UndoState? {
+        guard let f = franchise(id: franchiseId) else { return nil }
+        let chosen = mediaId.flatMap { id in f.parts.first { $0.mediaId == id } }
+        guard let part = chosen ?? f.currentPart ?? f.releasingPart ?? f.resumePart else { return nil }
         let target = min(part.progress + 1, part.progressCeiling)
         guard target > part.progress else { return nil }
-        FeedbackCoordinator.fire(.commitLight)
+        FeedbackCoordinator.fire(haptic)
         let prev = part.progress
         applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: target)
         Task {
