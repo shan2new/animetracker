@@ -189,17 +189,17 @@ struct CardModel: Identifiable {
     /// own because TV carries a date without an episode number, and its countdown is always empty.
     var isAiring: Bool { nextEp != nil || nextAiringAt != nil || !countdown.isEmpty }
 
-    /// Just the season half of the watch context — "S4", or "" when the part isn't a season.
+    /// The installment half of the watch context — the SOURCE'S OWN label ("Season 4", "Part 2"),
+    /// never a number invented from `sequence` (board 13, P0 #3: the ordering key never displays).
     func seasonToken() -> String {
-        guard kind == .season, let s = sequence, s >= 1 else { return "" }
-        return "S\(s)"
+        guard kind == .season || kind == .movie else { return "" }
+        return partLabel.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Compact watch context for a metadata line: "S4 · E2" / "E2" / "S4" / "".
-    /// The episode half is the next episode to AIR (`nextEp`), matching schedule/airing surfaces.
+    /// Watch context for a metadata line: "Season 4 · Episode 2" / "Episode 2" / "Season 4" / "".
     var seasonEpisodeToken: String {
         let season = seasonToken()
-        let episode = nextEp.map { "E\($0)" } ?? ""
+        let episode = nextEp.map { Copy.episode($0) } ?? ""
         if season.isEmpty { return episode }
         if episode.isEmpty { return season }
         return "\(season) · \(episode)"
@@ -234,7 +234,7 @@ struct CardModel: Identifiable {
         } else {
             return nil
         }
-        return "Next: Ep \(nextToWatch)"
+        return "\(Copy.episode(nextToWatch)) next"
     }
 
     /// DECISION B — next-airing hint for cards that are airing but not behind/caught-up. Framed
@@ -248,7 +248,7 @@ struct CardModel: Identifiable {
             return word.isEmpty ? "" : "Airs \(word)"
         }
         if !countdown.isEmpty { return "Airs in \(countdown)" }
-        if let next = nextEp { return "Ep \(next) airing" }
+        if let next = nextEp { return "\(Copy.episode(next)) airing" }
         return "Airing"
     }
 

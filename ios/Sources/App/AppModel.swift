@@ -37,6 +37,8 @@ final class AppModel {
     private(set) var pendingAdds: Set<String> = []
     var prevOpenedAt: Int64 = 0
     var loading = true
+    /// Epoch-ms of the last library payload that actually arrived (freshness source for SyncCenter).
+    var lastLoadedAt: Int64 = 0
     /// True once the cold-launch splash has left and Today is actually visible — the recap waits for it.
     var surfaceReady = false
     var loadError = false
@@ -151,6 +153,7 @@ final class AppModel {
             if res.prevOpenedAt > 0 { prevOpenedAt = max(prevOpenedAt, res.prevOpenedAt) }
             loadError = false
             loading = false
+            lastLoadedAt = .nowMs
             await syncAmbient()
         } catch APIError.unauthorized {
             guard seq == reloadSeq else { return }
@@ -782,9 +785,15 @@ final class AppModel {
                 _ = try await api.setProgress(mediaId: part.mediaId, episodes: target)
                 settleLocalProgress(mediaId: part.mediaId, episodes: target)
             } catch {
-                applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: prev)
-                settleLocalProgress(mediaId: part.mediaId, episodes: prev)
-                showError("1 change couldn\u{2019}t sync")
+                // A mark is a fact about the user: it stays. The failure goes to the SyncBanner
+                // with a Retry that re-issues exactly this write.
+                SyncCenter.shared.record(command: Copy.Action.markAsWatched, title: f.title,
+                                         reason: Copy.Notice.reason(error)) { [weak self] in
+                    guard let self else { return }
+                    if let _ = try? await self.api.setProgress(mediaId: part.mediaId, episodes: target) {
+                        self.settleLocalProgress(mediaId: part.mediaId, episodes: target)
+                    }
+                }
             }
         }
         return UndoState(mediaId: part.mediaId, franchiseId: franchiseId, prevProgress: prev, title: f.title, episode: target)
@@ -855,7 +864,7 @@ final class AppModel {
     }
 
     func setStatus(franchiseId: String, status: WatchStatus) {
-        Haptics.selection()
+        FeedbackCoordinator.fire(.selection)
         guard let idx = library.firstIndex(where: { $0.id == franchiseId }) else {
             // Not in the loaded library (e.g. a pending add) — fire and hope; reload reconciles.
             Task { _ = try? await api.setStatus(franchiseId: franchiseId, status: status) }
@@ -872,14 +881,17 @@ final class AppModel {
                 if let i = library.firstIndex(where: { $0.id == franchiseId }) {
                     library[i] = library[i].withStatus(prevStatus)
                 }
-                showError("Couldn't update status — check your connection.")
+                SyncCenter.shared.record(command: Copy.Toast.movedTo(status.displayName), title: self.franchise(id: franchiseId)?.title ?? "",
+                                         reason: Copy.Notice.reason(error)) { [weak self] in
+                    self?.setStatus(franchiseId: franchiseId, status: status)
+                }
             }
         }
     }
 
     /// `haptic: false` for the undo path — performUndo already fired its own impact.
     func removeFromLibrary(franchiseId: String, haptic: Bool = true) {
-        if haptic { Haptics.impact(.rigid) }
+        if haptic { FeedbackCoordinator.fire(.commitLight) }
         pendingAdds.remove(franchiseId)
         let idx = library.firstIndex(where: { $0.id == franchiseId })
         let removed = idx.map { library[$0] }
@@ -895,14 +907,17 @@ final class AppModel {
                 if let removed, !library.contains(where: { $0.id == franchiseId }) {
                     library.insert(removed, at: min(idx ?? library.count, library.count))
                 }
-                showError("Couldn't remove \(removed?.title ?? "show") — check your connection.")
+                SyncCenter.shared.record(command: Copy.Action.removeFromLibrary, title: removed?.title ?? "",
+                                         reason: Copy.Notice.reason(error)) { [weak self] in
+                    self?.removeFromLibrary(franchiseId: franchiseId, haptic: false)
+                }
             }
         }
     }
 
     func performUndo() {
         guard let u = undo else { return }
-        Haptics.impact(.medium)
+        FeedbackCoordinator.fire(.selection)
         if u.added, let fid = u.franchiseId {
             removeFromLibrary(franchiseId: fid, haptic: false)
         } else if let fid = u.franchiseId, let mediaId = u.mediaId, isInLibrary(fid) {

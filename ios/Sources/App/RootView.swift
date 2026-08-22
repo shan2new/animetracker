@@ -134,6 +134,13 @@ struct MainTabView: View {
                 }
             }
             .sensoryFeedback(.selection, trigger: selectedTab)
+            .task {
+                // One freshness source for every stale strip and Profile's sync line.
+                SyncCenter.shared.signals = { [weak appModel] in
+                    .init(lastLoadedAt: appModel?.lastLoadedAt ?? 0, loading: appModel?.loading ?? false)
+                }
+                SyncCenter.shared.startMonitoring()
+            }
 
             // Undo/error toasts float above the tab bar. (The detail sheet mounts its own
             // ToastHost — a sheet presents above this whole ZStack.)
