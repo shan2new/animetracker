@@ -2,34 +2,37 @@ import SwiftUI
 import UIKit
 
 // Profile (spec board 08): the modal where trust is inspectable — the sync line and every failed
-// change with Retry — in the iOS grouped-list grammar, over the ambient wash of the account's own
+// change with Retry — in the iOS grouped-list grammar, over the ambient warmth of the account's own
 // library. No import this version.
 //
-// POLISH PASS. What the shipped screen (`g-profile-full.png`) got wrong, and what replaces it:
+// POLISH PASS 2. What round 1 still got wrong, measured off `after-*.png`, and what replaces it:
 //
-//  • It opened on a generic `person.fill` glyph beside the words "Your account" — a placeholder
-//    where the identity belongs. It now opens on an 84-pt monogram over a full-bleed warm wash
-//    taken from the account's own library, the name at `heroTitle`, how they signed in at
-//    `heroMeta`, and a three-up count of what is in that library. `fresh/today-profile-sheet.png`
-//    had exactly this block and it is most of why the original modal felt like a place.
-//  • The wash could not be restored under an OPAQUE toolbar: a backdrop that reaches full strength
-//    behind the bar meets the bar's bottom edge as a hard horizontal seam across the screen (the
-//    first iteration of this pass shipped one: 17 luminance levels in 6 pt). The bar's background
-//    is hidden instead, the art runs to the top of the sheet the way the original's did, and the
-//    only thing over it is `Done` in its own glass capsule. There is no title to ghost under,
-//    because the account name IS the title.
-//  • Every row carried a 28-pt tinted tile: amber for Sync, amber for Haptics, blue for
-//    Notifications, grey for About. Four decorative colours, two of them accent, on a screen whose
-//    only real accent belongs to Done. The tiles are gone; the glyph column is one monochrome ramp
-//    and colour appears only where it carries state (a warning) or selection (the toggle).
-//  • The Sync row wore a chevron, which promises a push and delivers a refresh. The leading glyph
-//    now reports the state (a bare `checkmark` when settled) and the trailing control is the verb —
-//    `arrow.clockwise` in a 44-pt target, or a spinner while the check is in flight.
-//  • Section labels sat at gutter + 16, aligned to nothing. They align to the 16-pt gutter now, so
-//    the labels, the plates and the identity all share one left rail.
-//  • "Sign out" was a floating red word under 300 pt of void. It is a row in its own plate.
-//  • The About group was a list row with a film glyph and a three-line wrapping subtitle. It is
-//    fine print, so it is set as fine print, under the wordmark that ends the screen.
+//  • THE WASH WAS A GRADIENT BUG. `ArtBackdrop` blurs the poster's own top-left corner and pushes
+//    `.saturation(1.25)` through it, so this screen opened on rgb(66,80,94) at the left and
+//    rgb(29,49,67) at the right: a steel blue, 2.2x brighter on one side than the other, with no
+//    relationship to the brand — and Schedule rendered the same primitive olive and Search slate,
+//    so the app's atmosphere changed hue by tab. Scrolled, it became an opaque blue rectangle with
+//    settings rows sliding under it. It is replaced here by `ProfileWash`: the derived colour mixed
+//    half-way to `accent`, laid down as an elliptical field that is even by construction (no crop,
+//    no blur, nothing to be brighter on one side of), and faded to nothing over the first 40 pt of
+//    scroll so the settings sheet keeps no coloured band. The systemic fix belongs in `ArtBackdrop`
+//    and is filed as a shared request; this is the local stand-in.
+//  • THE AVATAR WORE THE APP'S OWN BOOKMARK. A product logo in an avatar slot, on an account whose
+//    name renders "Your account", is the same failure the direction named for `person.crop.circle`.
+//    It is a monogram now — Clerk first name, else the email's first letter, else the first letter
+//    of the account label — on an `accentSoft` disc. Never the mark, never a stock glyph.
+//  • THE SYNC ROW WAS A 56-PT GUTTER. "Synced just now" at the left, a 20-pt refresh glyph at the
+//    far right, 300 pt of nothing between. The row is two lines now — the state, then the stamp —
+//    the whole row is the refresh target, and the standard gesture (`.refreshable`) refreshes the
+//    sheet. Nothing floats at the far edge.
+//  • TWO EXPORT ROWS, IDENTICAL, one of them lead by `curlybraces` — a developer glyph in a
+//    consumer list. One `Export library` row now, `tray.and.arrow.up`, and the format is a menu.
+//  • `Done` was a bordered amber capsule floating on the wash where iOS puts plain text, and with
+//    no navigation title VoiceOver never announced the screen. The bar is a real inline navigation
+//    bar now: it announces "Profile", it earns its own scroll-edge material, and `Done` is text.
+//  • The failure badge was a saturated filled `exclamationmark.triangle.fill` — a fourth warm hue
+//    on a screen that already had amber Retry and red Sign out, and the loudest object in the frame
+//    was the badge rather than the change it described. Unfilled, at `warning`, sized to its row.
 struct ProfileView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AuthManager.self) private var auth
@@ -43,6 +46,9 @@ struct ProfileView: View {
     /// poster, so nothing else on it would ever prime the cache and the wash would fall back to
     /// neutral on a cold open.
     @State private var washTint: Color?
+    /// Drives the wash out. Read from scroll geometry rather than a `GeometryReader` sentinel so
+    /// nothing in the content tree has to know the wash exists.
+    @State private var scrollOffset: CGFloat = 0
 
     private var now: Int64 { appModel.now }
     private var sync: SyncCenter { SyncCenter.shared }
@@ -50,14 +56,10 @@ struct ProfileView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-                // The account's own library warms the top of the modal — the one thing the
-                // original profile had that the rebuild dropped. Full bleed under the bar, at full
-                // strength where it starts, decaying to canvas on its own ramp: a wash that is
-                // strongest at an edge it shares with nothing can never seam. `intensity` is the
-                // list-screen value, not the hero's: at 1 the blurred poster lit the left third to
-                // rgb(92,90,94) and the right to rgb(38,42,50), which reads as a stain rather than
-                // as atmosphere.
-                ArtBackdrop(url: washArtwork, tint: washTint, height: 360, intensity: 0.62)
+                ProfileWash(tint: washTint)
+                    // Gone by 40 pt. A settings sheet that keeps a coloured band behind its rows
+                    // while they scroll under it is a broken sticky header, not atmosphere.
+                    .opacity(Double(max(0, 1 - scrollOffset / 40)))
                     .ignoresSafeArea(edges: .top)
 
                 ScrollView {
@@ -72,39 +74,52 @@ struct ProfileView: View {
                         colophon.padding(.top, ThemeSpace.x10)
                     }
                     .padding(.horizontal, ThemeMetrics.gutter)
-                    .padding(.top, ThemeSpace.x4)
+                    // Generous under the bar: the identity is the hero of this screen and 16 pt
+                    // put the monogram's shadow within a hair of the bar's edge.
+                    .padding(.top, ThemeSpace.x6)
                     .padding(.bottom, ThemeSpace.x8)
                 }
                 .scrollIndicators(.hidden)
-                // The screen has no navigation bar to hide behind, so scrolling content is
-                // dissolved instead of cut: without this the account name slides up and prints
-                // itself across the `Done` capsule. The wash is OUTSIDE this mask, so the
-                // atmosphere at the top of the sheet is untouched by it.
-                .mask(
-                    VStack(spacing: 0) {
-                        LinearGradient(stops: [
-                            .init(color: .clear, location: 0.00),
-                            .init(color: .black.opacity(0.10), location: 0.62),
-                            .init(color: .black, location: 1.00),
-                        ], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 84)
-                        Rectangle().fill(.black)
-                    }
-                    .ignoresSafeArea(edges: .top)
-                )
+                // A settings sheet needs a real edge, not a progressive blur: with the soft
+                // default the 28-pt account name scrolled up and ghosted through the bar directly
+                // behind the word "Profile". `.hard` is the system's own answer and it lands the
+                // rows cleanly at the bar's bottom.
+                .scrollEdgeEffectStyle(.hard, for: .top)
+                // The row is tappable, but the gesture people already know is the one that should
+                // work: this is the screen that answers "is my library actually saved".
+                .refreshable { await appModel.reload() }
+                .onScrollGeometryChange(for: CGFloat.self) { geo in
+                    geo.contentOffset.y + geo.contentInsets.top
+                } action: { _, y in
+                    scrollOffset = y
+                }
             }
             .background(ThemeColor.canvas.ignoresSafeArea())
             .task { washTint = await PaletteCache.shared.resolve(url: washArtwork, maxPixel: 320) }
+            // A real inline navigation bar, for two reasons the round-1 screen paid for by not
+            // having one: VoiceOver announces the screen, and the system's own scroll-edge
+            // material takes over from the wash as it fades — so rows never slide under a
+            // coloured rectangle. The identity block below is still the visual header.
+            .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
-            // No title, no bar background: the identity block is this screen's header, and a
-            // second one printed 40 pt above it in a grey band is the "empty header row" defect
-            // wearing a different hat. Done keeps the system's glass capsule, so content that
-            // scrolls behind it stays legible without a bar to slide under.
-            .toolbarBackground(.hidden, for: .navigationBar)
+            // An OPAQUE bar, not the SDK's default progressive blur and not `.visible` glass:
+            // both let the 28-pt account name dissolve directly behind the word "Profile" on the
+            // way up, and a bold title ghosting through a title is an artefact, not a transition.
+            // A settings sheet wants a real edge. The seam this would otherwise create with the
+            // wash is handled in `ProfileWash`, which starts below the bar and ramps up.
+            .toolbarBackground(ThemeColor.canvas, for: .navigationBar)
+            .toolbarBackgroundVisibility(.visible, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(Copy.Action.done) { dismiss() }.fontWeight(.semibold)
+                    // Plain text where iOS puts plain text. A bordered capsule here is the same
+                    // class of mistake as a filled Cancel in a sheet — and on this SDK the capsule
+                    // is the toolbar's own shared glass, so `buttonStyle` alone does not remove it.
+                    Button(Copy.Action.done) { dismiss() }
+                        .buttonStyle(.plain)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(ThemeColor.accent)
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         .onAppear { sync.profileIsOpen = true }
@@ -158,39 +173,30 @@ struct ProfileView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// 84 pt, lit along its top edge like every other object in this app: tone and light, not an
-    /// outline. The monogram when there is a name to take one from, the app's own mark when the
-    /// account has no name — never a stock `person` glyph, and never "YA" scraped off a label.
+    /// The monogram, on the one warm disc this screen is allowed. Round 1 put the app's own
+    /// bookmark here, which is a product logo standing in for a person.
     ///
-    /// The disc is NEUTRAL. An accent-filled avatar is a fifth amber object on a screen whose one
-    /// primary action is `Done`, and rule 7 gives accent to actions, forward facts, selection and
-    /// links — not to decoration. What separates it from the wash is LIGHT: `controlSheen` poured
-    /// down its dome, dead by the centre, exactly as a filled control is lit. Measured on the
-    /// previous iteration, a plain `surfaceFloating` disc sat at rgb(32,34,42) inside a wash at
-    /// rgb(48,56,65) — darker than its own ground, which is a hole, not an avatar.
+    /// It is a filled `accent` disc with the monogram in `onAccent`, lit along its top edge by
+    /// `controlSheen` the way rule 7 lights every filled object. The first attempt at this pass
+    /// used `accentSoft` and it measured rgb(48,40,32) on the capture — a brown smudge that read
+    /// as a hole in the wash, not as a person; `fresh/today-profile-sheet.png`, the baseline this
+    /// screen has to beat, used exactly this lit amber disc. It is the only filled accent object
+    /// on the screen: `Done` is text and `Sign out` is `destructive`.
     private var avatar: some View {
         ZStack {
-            Circle().fill(
-                LinearGradient(colors: [ThemeColor.surfaceFloating, ThemeColor.surfaceFlat],
-                               startPoint: .top, endPoint: .bottom)
-            )
+            Circle().fill(ThemeColor.accent)
             Circle().fill(
                 LinearGradient(colors: [ThemeColor.controlSheen, .clear],
                                startPoint: .top, endPoint: .center)
             )
-            Circle().strokeBorder(
-                LinearGradient(colors: [ThemeColor.controlSheen, .clear], startPoint: .top, endPoint: .center),
-                lineWidth: 1
-            )
-            if hasRealName {
-                Text(initial).type(ThemeType.displayL).foregroundStyle(ThemeColor.textPrimary)
-            } else {
-                // `.none`: at this size the progress slot is a 3-pt black dash across the ribbon,
-                // and a smudge is not an identity.
-                PreviouslyMark(width: 30, detail: .none)
-            }
+            Text(monogram)
+                .type(ThemeType.displayL)
+                .foregroundStyle(ThemeColor.onAccent)
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .padding(.horizontal, ThemeSpace.x2)
         }
-        .frame(width: 84, height: 84)
+        .frame(width: 72, height: 72)
         .shadow(.art)
         .accessibilityHidden(true)
     }
@@ -264,25 +270,25 @@ struct ProfileView: View {
 
     private var syncSection: some View {
         ProfileSection(label: "Sync") {
+            // Two lines, the way every other row on this plate is two lines: the state, then the
+            // stamp. Round 1 printed the stamp as the title and then had nothing to put on the
+            // second line, so it hung a lone glyph 300 pt away instead.
             ProfileRow(symbol: syncSymbol,
                        symbolTint: syncTint,
-                       title: sync.syncedLine(now: now),
-                       subtitle: sync.isOnline ? nil : Copy.Notice.noConnection,
+                       symbolWeight: sync.failedChanges.isEmpty ? .medium : .regular,
+                       title: syncTitle,
+                       subtitle: syncStamp,
                        separator: !sync.failedChanges.isEmpty,
                        action: { Task { await appModel.reload() } }) {
-                // The verb, not a chevron: this row refreshes, it does not push.
-                Group {
-                    if sync.checking {
-                        ProgressView().controlSize(.small).tint(ThemeColor.textTertiary)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(ThemeColor.textTertiary)
-                    }
+                // Nothing at rest. The row IS the control; a check in flight is the only thing
+                // worth putting in the trailing column, because it is the only thing that changes.
+                if sync.checking {
+                    ProgressView().controlSize(.small).tint(ThemeColor.textTertiary)
+                        .frame(width: 28, height: 44)
                 }
-                .frame(width: 28, height: 44)
             }
-            .accessibilityLabel("\(sync.syncedLine(now: now)). Check for changes")
+            .accessibilityLabel(syncStamp.map { "\(syncTitle). \($0)" } ?? syncTitle)
+            .accessibilityHint("Checks for changes")
 
             // No glyph on the detail rows: the section's state is declared ONCE, by the summary
             // row above them. A stack of identical `warning` triangles down one plate is the same
@@ -318,8 +324,30 @@ struct ProfileView: View {
         }
     }
 
+    /// The state, in one sentence. Precedence matches `SyncCenter.syncedLine`; only the stamp is
+    /// split off, because a stamp is not a state.
+    private var syncTitle: String {
+        if !sync.failedChanges.isEmpty { return Copy.Toast.syncFailed(sync.failedChanges.count) }
+        if sync.checking { return Copy.State.checkingForChanges }
+        if !sync.isOnline { return Copy.State.couldNotCheck }
+        if sync.lastSyncedAt == nil { return Copy.State.neverSynced }
+        return Copy.State.everythingSynced
+    }
+
+    /// "Synced 2 min ago". Suppressed while something has FAILED to sync — the stamp of the last
+    /// successful check under the words "1 change couldn't sync" reads as a contradiction, and the
+    /// rows underneath already carry the detail. Suppressed too when there is no stamp to print.
+    private var syncStamp: String? {
+        guard sync.failedChanges.isEmpty else { return nil }
+        if !sync.isOnline { return Copy.Notice.noConnection }
+        guard let at = sync.lastSyncedAt else { return nil }
+        return Copy.synced(at: at, now: now)
+    }
+
     private var syncSymbol: String {
-        if !sync.failedChanges.isEmpty { return "exclamationmark.triangle.fill" }
+        // Unfilled. A saturated yellow solid was the loudest object on a screen whose subject is
+        // the change that failed — `warning` belongs on the edge of a failure, not in a badge.
+        if !sync.failedChanges.isEmpty { return "exclamationmark.triangle" }
         if !sync.isOnline { return "wifi.slash" }
         if sync.checking || sync.lastSyncedAt == nil { return "arrow.triangle.2.circlepath" }
         // A settled fact is a bare checkmark, never a filled disc.
@@ -336,21 +364,32 @@ struct ProfileView: View {
 
     private var settings: some View {
         ProfileSection(label: "Settings") {
-            ShareLink(item: LibraryExport(appModel: appModel, format: .json),
-                      preview: SharePreview("Previously library (JSON)")) {
-                ProfileRowLabel(symbol: "curlybraces",
-                                title: "Export as JSON",
-                                subtitle: "Every title with progress and status") { shareGlyph }
+            // One row, one glyph, one menu. Round 1 shipped two rows of identical shape carrying
+            // the same trailing share glyph twice, the first of them lead by `curlybraces`.
+            Menu {
+                ShareLink(item: LibraryExport(appModel: appModel, format: .json),
+                          preview: SharePreview("Previously library (JSON)")) {
+                    Label("JSON", systemImage: "curlybraces")
+                }
+                ShareLink(item: LibraryExport(appModel: appModel, format: .csv),
+                          preview: SharePreview("Previously library (CSV)")) {
+                    Label("CSV", systemImage: "tablecells")
+                }
+            } label: {
+                ProfileRowLabel(symbol: "tray.and.arrow.up",
+                                title: "Export library",
+                                subtitle: "Every title with progress and status") {
+                    // The iOS menu affordance, not a chevron: this row opens a menu in place, it
+                    // does not push.
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(ThemeColor.textDisabled)
+                        .frame(width: 28, height: 44)
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
+                }
             }
             .buttonStyle(GroupedRowPressStyle())
-
-            ShareLink(item: LibraryExport(appModel: appModel, format: .csv),
-                      preview: SharePreview("Previously library (CSV)")) {
-                ProfileRowLabel(symbol: "tablecells",
-                                title: "Export as CSV",
-                                subtitle: "One row per season or movie") { shareGlyph }
-            }
-            .buttonStyle(GroupedRowPressStyle())
+            .accessibilityLabel("Export library")
 
             ProfileRow(symbol: "bell",
                        title: "Notifications",
@@ -365,6 +404,7 @@ struct ProfileView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(ThemeColor.textTertiary)
                     .frame(width: 28, height: 44)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             }
 
             ProfileRowLabel(symbol: "hand.tap",
@@ -373,20 +413,18 @@ struct ProfileView: View {
                             separator: false) {
                 // Amber, not system green: a switch reports selection, and selection in this app
                 // is one colour. Green here is decoration, and `success` is never decoration.
+                //
+                // The guide is the AX1 fix: a `labelsHidden` toggle carries no text baseline, so
+                // in a baseline-aligned row it fell back to the row's vertical centre while its
+                // three sibling glyphs sat on the first line. The column was visibly crooked.
                 Toggle("Haptics", isOn: $hapticsOn).labelsHidden().tint(ThemeColor.accent)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             }
         }
         .onChange(of: hapticsOn) { _, on in
             FeedbackCoordinator.enabled = on
             if on { FeedbackCoordinator.fire(.selection) }
         }
-    }
-
-    private var shareGlyph: some View {
-        Image(systemName: "square.and.arrow.up")
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(ThemeColor.textTertiary)
-            .frame(width: 28, height: 44)
     }
 
     // MARK: - Sign out
@@ -405,7 +443,7 @@ struct ProfileView: View {
         }
     }
 
-    // MARK: - Colophon
+    // MARK: - About
 
     /// How the screen ends: the mark, the version, and the attribution the TMDB terms require —
     /// set as fine print, because that is what it is.
@@ -432,6 +470,7 @@ struct ProfileView: View {
                 .padding(.horizontal, ThemeSpace.x6)
         }
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Helpers
@@ -443,8 +482,6 @@ struct ProfileView: View {
         return (n.isEmpty || n == "Signed in" || n.hasPrefix("user_")) ? "Your account" : n
     }
 
-    private var hasRealName: Bool { accountName != "Your account" }
-
     /// The one fact a profile screen exists to answer besides "who": how this device is signed in.
     /// It is deliberately not the sync line — that belongs to Sync, and printing it twice is how
     /// the shipped build ended up with two greys saying the same thing.
@@ -453,9 +490,14 @@ struct ProfileView: View {
         return "Signed in with Clerk"
     }
 
-    /// One letter, never two: "YA" scraped off the words "Your account" is not a monogram.
-    private var initial: String {
-        accountName.first.map { String($0).uppercased() } ?? "•"
+    /// One letter, never two: Clerk's first name, else the first letter of the email, else the
+    /// first letter of the label the account renders under. Never the app's mark, never a stock
+    /// person glyph, and never "YA" scraped off two words.
+    private var monogram: String {
+        let source = accountName.drop { !$0.isLetter && !$0.isNumber }
+        return source.first.map { String($0).uppercased() }
+            ?? accountName.first.map { String($0).uppercased() }
+            ?? "•"
     }
 
     private var version: String {
@@ -468,6 +510,68 @@ struct ProfileView: View {
     /// they have. `nil` on an empty account, where the plain canvas is the honest ground.
     private var washArtwork: String? {
         (appModel.library.first { $0.status == .watching } ?? appModel.library.first)?.cover
+    }
+}
+
+// MARK: - Wash
+
+/// The ambient field at the top of the sheet — the local stand-in for the shared `ArtBackdrop`
+/// fix filed with this pass.
+///
+/// It draws NO image. `ArtBackdrop` blurs the poster's own top-left corner, which is why this
+/// screen measured rgb(66,80,94) on one side against rgb(29,49,67) on the other: a blurred crop of
+/// an off-centre region is lit by whatever happened to be in that region, and a 2.2x left-to-right
+/// falloff reads as a bug, not as atmosphere. An elliptical field centred on the top edge is even
+/// by construction, and mixing the derived colour half-way to `accent` keeps every screen's
+/// atmosphere inside the brand's warm range instead of letting one poster turn the app steel blue.
+private struct ProfileWash: View {
+    var tint: Color?
+    var height: CGFloat = 420
+
+    /// Where the field is allowed to start: the bottom of the opaque navigation bar. Above this
+    /// there is nothing to see, and the ramp below it means the bar's bottom edge is never a seam.
+    private var barBottom: CGFloat { ThemeMetrics.topSafeInset + 44 }
+
+    /// The field's HUE is the brand's; the poster only modulates how saturated and how present it
+    /// is. A straight 50/50 RGB mix of the derived colour with `accent` — the first thing tried —
+    /// measured rgb(37,36,33) on the capture: this account's cover derives a steel blue, and blue
+    /// plus amber in equal parts is grey. Anchoring the hue is what actually delivers the rule the
+    /// finding was written for: the app's atmosphere must not change hue from tab to tab.
+    private var warm: Color {
+        var bh: CGFloat = 0, bs: CGFloat = 0, bb: CGFloat = 0, ba: CGFloat = 0
+        var ah: CGFloat = 0, asat: CGFloat = 0, ab: CGFloat = 0, aa: CGFloat = 0
+        UIColor(tint ?? PaletteCache.fallback).getHue(&bh, saturation: &bs, brightness: &bb, alpha: &ba)
+        UIColor(ThemeColor.accent).getHue(&ah, saturation: &asat, brightness: &ab, alpha: &aa)
+        let saturation = min(max(bs * 0.5 + asat * 0.5, 0.30), asat)
+        return Color(hue: Double(ah), saturation: Double(saturation), brightness: 0.85)
+    }
+
+    var body: some View {
+        EllipticalGradient(
+            stops: [
+                .init(color: warm.opacity(0.26), location: 0.00),
+                .init(color: warm.opacity(0.15), location: 0.42),
+                .init(color: warm.opacity(0.05), location: 0.75),
+                .init(color: .clear, location: 1.00),
+            ],
+            center: UnitPoint(x: 0.5, y: 0.42),
+            startRadiusFraction: 0,
+            endRadiusFraction: 0.92
+        )
+        .frame(height: height)
+        .frame(maxWidth: .infinity, alignment: .top)
+        // Nothing above the bar, and a 90-pt ramp under it. The peak lands behind the monogram,
+        // which is where a wash on an identity screen belongs.
+        .mask(
+            VStack(spacing: 0) {
+                Color.clear.frame(height: barBottom)
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 90)
+                Rectangle().fill(.black)
+            }
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -493,7 +597,7 @@ private struct ProfileSection<Content: View>: View {
 // MARK: - Rows
 
 /// A settings row, in the shape this screen needs: one monochrome glyph column, a title, one
-/// support line, and exactly one trailing control.
+/// support line, and at most one trailing control.
 ///
 /// It is deliberately not `GroupedRow`: that primitive paints a tinted 28-pt tile behind its
 /// symbol, hard-codes `success` as its toggle tint and has no destructive or in-flight state —
@@ -504,6 +608,7 @@ private struct ProfileRowLabel<Trailing: View>: View {
     /// already carries the group's state.
     let symbol: String?
     var symbolTint: Color = ThemeColor.textSecondary
+    var symbolWeight: Font.Weight = .medium
     let title: String
     var subtitle: String? = nil
     var separator = true
@@ -523,7 +628,7 @@ private struct ProfileRowLabel<Trailing: View>: View {
             Group {
                 if let symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 16, weight: symbolWeight))
                         .foregroundStyle(symbolTint)
                 } else {
                     Color.clear.frame(height: 1)
@@ -538,7 +643,7 @@ private struct ProfileRowLabel<Trailing: View>: View {
                 if let subtitle {
                     Text(subtitle)
                         .type(ThemeType.metadata)
-                        .foregroundStyle(ThemeColor.textSecondary)
+                        .foregroundStyle(ThemeColor.textTertiary)
                         .lineLimit(2)
                 }
             }
@@ -562,6 +667,7 @@ private struct ProfileRowLabel<Trailing: View>: View {
 private struct ProfileRow<Trailing: View>: View {
     let symbol: String?
     var symbolTint: Color = ThemeColor.textSecondary
+    var symbolWeight: Font.Weight = .medium
     let title: String
     var subtitle: String? = nil
     var separator = true
@@ -570,8 +676,9 @@ private struct ProfileRow<Trailing: View>: View {
 
     var body: some View {
         Button(action: action) {
-            ProfileRowLabel(symbol: symbol, symbolTint: symbolTint, title: title,
-                            subtitle: subtitle, separator: separator, trailing: trailing)
+            ProfileRowLabel(symbol: symbol, symbolTint: symbolTint, symbolWeight: symbolWeight,
+                            title: title, subtitle: subtitle, separator: separator,
+                            trailing: trailing)
         }
         .buttonStyle(GroupedRowPressStyle())
     }
