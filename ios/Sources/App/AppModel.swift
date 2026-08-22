@@ -47,10 +47,20 @@ final class AppModel {
     var loadError = false
 
     // Discover/search.
-    var searchQuery = "" { didSet { scheduleSearch() } }
+    var searchQuery = "" { didSet { searchExactOnce = false; scheduleSearch() } }
     var searchResults: [FranchiseSummary] = []
     var searchBusy = false
     var searchError = false
+    /// The server's spell correction for the results currently on screen.
+    ///
+    /// `/search` has always returned `correctedQuery` + `originalQuery`, `FranchiseListResponse`
+    /// has always decoded them, and **no view ever read them**: a search for "one pieceszz" showed
+    /// a flat "No results" while the backend had already worked out what was meant. Search renders
+    /// it as "Showing results for …" with a literal-search escape hatch.
+    var searchCorrection: SearchCorrection?
+    /// Set by `searchLiterally` for exactly one request: the user asked for the words they typed,
+    /// so that request opts out of the server's correction (`exact=1`). Any keystroke clears it.
+    private var searchExactOnce = false
     // Persisted recent search terms, most-recent first — the search surface's empty state.
     var recentSearches: [String] = []
     // Trending franchises for the search zero-state shelf. Fetched once per session, lazily on
@@ -208,6 +218,7 @@ final class AppModel {
         searchResults = []
         searchBusy = false
         searchError = false
+        searchCorrection = nil
         trending = []
         libQuery = ""
         mediaFilter = .all
@@ -303,6 +314,7 @@ final class AppModel {
             searchBusy = false
             searchError = false
             searchResults = []
+            searchCorrection = nil
             searchTask = nil
             return
         }
@@ -318,18 +330,30 @@ final class AppModel {
 
     private func runSearch(query: String) async {
         let seq = nextSeq()
+        let exact = searchExactOnce
         do {
-            let results = try await api.search(query: query)
+            let response: SearchResponse = try await api.search(query: query, exact: exact)
             guard seq == searchSeq else { return }   // a newer keystroke superseded this request
-            searchResults = results
+            searchResults = response.franchises
+            searchCorrection = SearchCorrection(response)
+            searchExactOnce = false
             searchError = false
             searchBusy = false
         } catch {
             guard !isCancellation(error) else { return }  // cancelled by a newer keystroke — not a failure
             guard seq == searchSeq else { return }
+            searchCorrection = nil
             searchError = true
             searchBusy = false
         }
+    }
+
+    /// "Search instead for …": re-run the words the user actually typed, with the server's
+    /// spell correction turned off for that one request.
+    func searchLiterally(_ term: String) {
+        if searchQuery != term { searchQuery = term }   // didSet clears the flag and re-schedules
+        searchExactOnce = true                          // set AFTER, so the request below reads it
+        retrySearch()
     }
 
     /// Re-run the current query immediately (no debounce) — the Retry affordance on a failed search.
@@ -1019,6 +1043,21 @@ final class AppModel {
             if Task.isCancelled { return }
             await MainActor.run { self?.undo = nil }
         }
+    }
+}
+
+/// A zero-result query the server was able to repair, and the words the user actually typed.
+/// Present only when the two differ — "showing results for X" that echoes X back is noise.
+struct SearchCorrection: Equatable, Sendable {
+    let original: String
+    let corrected: String
+
+    init?(_ response: SearchResponse) {
+        guard let corrected = response.correctedQuery,
+              let original = response.originalQuery,
+              corrected.caseInsensitiveCompare(original) != .orderedSame else { return nil }
+        self.original = original
+        self.corrected = corrected
     }
 }
 

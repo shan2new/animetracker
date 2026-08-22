@@ -78,20 +78,40 @@ struct SignInView: View {
 
     // MARK: - Action
 
+    /// Whether the developer bypass may be offered at all.
+    ///
+    /// Two gates, both required. `#if DEBUG` keeps the panel out of any build that can reach the
+    /// App Store — a raw text field and the string "the backend must allow DEV_AUTH_BYPASS outside
+    /// production" as the first screen of a submitted app is an automatic rejection and a one-star
+    /// screenshot. `isLocalBackend` keeps it out of a debug build that has been pointed at a real
+    /// host, because a `dev:` bearer must never be SENT toward production even if the server there
+    /// would refuse it.
+    private var devSignInAvailable: Bool {
+        #if DEBUG
+        return !AppConfig.isClerkConfigured && AppConfig.isLocalBackend
+        #else
+        return false
+        #endif
+    }
+
     private var action: some View {
         VStack(spacing: ThemeSpace.x3) {
             if AppConfig.isClerkConfigured {
                 Button("Sign in") { showClerkAuth = true }
                     .buttonStyle(PrimaryButtonStyle2())
-            } else {
+            } else if devSignInAvailable {
                 #if DEBUG
                 DevSignInCard(devId: $devId) { auth.signInDev(clerkId: devId) }
-                #else
-                Text("Sign-in isn’t configured for this build.")
+                #endif
+            } else {
+                // Fails CLOSED: no key, no field, no bypass, and nothing a reviewer could mistake
+                // for a way in. The condition is a build misconfiguration, so it is stated as one
+                // rather than dressed up as a temporary outage the user could wait out.
+                Text("Sign-in isn\u{2019}t available in this build.")
                     .type(ThemeType.metadata)
                     .foregroundStyle(ThemeColor.textTertiary)
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, alignment: .center)
-                #endif
             }
             if let error = auth.lastError {
                 InlineNotice(error)
