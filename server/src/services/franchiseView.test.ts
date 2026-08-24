@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EpisodeMeta } from '../types/api.js'
-import { deriveAiredEpisodes } from './franchiseView.js'
+import { airingsWindow, deriveAiredEpisodes } from './franchiseView.js'
 
 // Fixed "now": 2026-07-01T00:00Z.
 const NOW = Date.UTC(2026, 6, 1)
@@ -68,5 +68,60 @@ describe('deriveAiredEpisodes', () => {
     expect(deriveAiredEpisodes({ status: 'FINISHED', totalEpisodes: 25, next: null, episodes: [], nowMs: NOW })).toBe(25)
     expect(deriveAiredEpisodes({ status: 'CANCELLED', totalEpisodes: 8, next: null, episodes: [], nowMs: NOW })).toBe(8)
     expect(deriveAiredEpisodes({ status: null, totalEpisodes: 0, next: null, episodes: [], nowMs: NOW })).toBe(0)
+  })
+})
+
+describe('airingsWindow', () => {
+  it('lists every dated episode inside the window, oldest first, and nothing outside it', () => {
+    // Weekly from 3 weeks ago: episodes 1–2 are past the 8-day floor, 3 aired last week,
+    // 4 airs in 4 days, 5 in 11, 6 (in 18) is past the 15-day ceiling.
+    const list = eps(6, NOW - 17 * D)
+    const out = airingsWindow({ episodes: list, next: null, airedEpisodes: 3, lastAiredAt: null, nowMs: NOW })
+    expect(out.map((a) => a.episode)).toEqual([3, 4, 5])
+    expect(out[0]?.at).toBe(NOW - 3 * D)
+    expect(out[2]?.at).toBe(NOW + 11 * D)
+  })
+
+  it('adds the catalogue next slot and lastAiredAt when the list carries no dates (AniList before backfill)', () => {
+    const out = airingsWindow({
+      episodes: eps(12, null),
+      next: { episode: 8, airingAt: (NOW + 2 * D) / 1000 },
+      airedEpisodes: 7,
+      lastAiredAt: NOW - 5 * D,
+      nowMs: NOW,
+    })
+    expect(out).toEqual([
+      { episode: 7, at: NOW - 5 * D },
+      { episode: 8, at: NOW + 2 * D },
+    ])
+  })
+
+  it('lets the per-episode list win over the derived slots on the same episode number', () => {
+    const list = eps(10, NOW - 42 * D) // ep n airs at NOW − 42d + (n−1)·7d ⇒ ep 7 = NOW
+    const out = airingsWindow({
+      episodes: list,
+      next: { episode: 8, airingAt: (NOW + 6 * D) / 1000 }, // list says ep 8 = NOW + 7d
+      airedEpisodes: 7,
+      lastAiredAt: NOW - D, // list says ep 7 = NOW
+      nowMs: NOW,
+    })
+    // 6 (−7d) and 9 (+14d) sit inside the window too; 5 (−14d) and 10 (+21d) do not.
+    expect(out).toEqual([
+      { episode: 6, at: NOW - 7 * D },
+      { episode: 7, at: NOW },
+      { episode: 8, at: NOW + 7 * D },
+      { episode: 9, at: NOW + 14 * D },
+    ])
+  })
+
+  it('drops undated, zero-numbered and zero-timestamp entries', () => {
+    const out = airingsWindow({
+      episodes: [{ number: 0, title: null, airDate: NOW, overview: null, still: null, runtime: null }],
+      next: { episode: 3, airingAt: 0 },
+      airedEpisodes: 0,
+      lastAiredAt: NOW,
+      nowMs: NOW,
+    })
+    expect(out).toEqual([])
   })
 })

@@ -90,6 +90,20 @@ export interface FranchisePart {
    * empty on the library/summary payloads to keep those lean.
    */
   episodes: EpisodeMeta[]
+  /**
+   * Dated episodes inside Schedule's window (`SCHEDULE_WINDOW`: 8 days back … 15 days ahead of
+   * now), oldest first. Present on EVERY payload — list, library and detail — because it is the
+   * one per-episode fact Schedule needs and it is tiny; `episodes` stays detail-only. A weekly
+   * show therefore appears on every one of its air dates in the window, not once on its next.
+   * Empty when nothing in the window is dated.
+   */
+  airings: Airing[]
+}
+
+/** One dated episode: its number and its air instant (ms epoch; TMDB's is date-only at 17:00 UTC). */
+export interface Airing {
+  episode: number
+  at: number
 }
 
 export interface Franchise {

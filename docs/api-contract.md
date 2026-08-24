@@ -78,7 +78,23 @@ authenticated user's progress.
   "year": 2013,               // premiere/season year, or null
   "studios": ["Wit Studio"],  // studios (anime) or networks (TV) — names only
   "nextAiringCount": 1,       // episodes sharing the next airing date; >1 ⇒ a full-season "drop"
-  "episodes": [ EpisodeMeta, … ] // FULL list on GET /franchises/:id ONLY; [] on list/library payloads
+  "episodes": [ EpisodeMeta, … ], // FULL list on GET /franchises/:id ONLY; [] on list/library payloads
+  "airings": [ Airing, … ]     // dated episodes inside Schedule's window, oldest first — on EVERY payload
+}
+```
+
+### Airing
+One dated episode of a part, for the Schedule calendar. `airings` covers the window **8 days back
+… 15 days ahead** of the request (`SCHEDULE_WINDOW` in `franchiseView.ts` — a day wider than the
+client's own −7…+14 so no timezone sees an edge day undated; clients window precisely). Merged from
+the dated episode list (TMDB always; AniList after `backfill-episodes`), the catalogue's next slot
+and `lastAiredAt`, de-duplicated by episode number — the list wins. Present on list, library **and**
+detail payloads; a weekly show therefore appears on every air date in the window, not once on its
+next. Empty when nothing in the window is dated.
+```jsonc
+{
+  "episode": 14,
+  "at": 1756226400000    // ms epoch; TMDB's is date-only (17:00 UTC) — read it in the source's calendar
 }
 ```
 

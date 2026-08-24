@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions } from '../db/schema.js'
 import type { PartKind } from '../grouping/partKind.js'
 import type {
+  Airing,
   EpisodeMeta,
   Franchise,
   FranchisePart,
@@ -60,6 +61,44 @@ export function deriveAiredEpisodes(m: {
   return m.totalEpisodes
 }
 
+/** Schedule's window, in days either side of now. A day wider than the client's own −7…+14 so a
+ *  device at UTC±14 never sees an edge day arrive undated; the client windows precisely. */
+export const SCHEDULE_WINDOW = { backDays: 8, aheadDays: 15 } as const
+
+/**
+ * Every dated episode of a part inside Schedule's window, oldest first — the per-episode facts a
+ * calendar needs, without shipping the whole list on the library payload.
+ *
+ * Three sources of a date, merged and de-duplicated by episode number: the dated episode list
+ * (TMDB always; AniList once `backfill-episodes` has run), the catalogue's own next slot (AniList
+ * always has one while releasing, even with no per-episode dates), and `lastAiredAt` for the
+ * latest aired episode (so an un-backfilled AniList part still puts its most recent episode on
+ * the calendar). The list wins on a conflict: it is the only one of the three that is per-episode.
+ * Pure so it can be unit-tested (see `franchiseView.test.ts`).
+ */
+export function airingsWindow(m: {
+  episodes: EpisodeMeta[]
+  next: { episode: number; airingAt: number } | null
+  airedEpisodes: number
+  lastAiredAt: number | null
+  nowMs: number
+}): Airing[] {
+  const lo = m.nowMs - SCHEDULE_WINDOW.backDays * D
+  const hi = m.nowMs + SCHEDULE_WINDOW.aheadDays * D
+  const byEpisode = new Map<number, number>()
+  const consider = (episode: number, at: number | null | undefined) => {
+    if (at == null || at <= 0 || episode <= 0) return
+    if (at < lo || at > hi) return
+    if (!byEpisode.has(episode)) byEpisode.set(episode, at)
+  }
+  for (const e of m.episodes) consider(e.number, e.airDate)
+  if (m.next) consider(m.next.episode, m.next.airingAt * 1000)
+  if (m.airedEpisodes > 0) consider(m.airedEpisodes, m.lastAiredAt)
+  return [...byEpisode.entries()]
+    .map(([episode, at]) => ({ episode, at }))
+    .sort((a, b) => a.at - b.at || a.episode - b.episode)
+}
+
 type MediaRow = typeof media.$inferSelect
 type MemberRow = typeof franchiseMember.$inferSelect
 type FranchiseRow = typeof franchise.$inferSelect
@@ -109,6 +148,7 @@ function toPart(
 
   // Episodes sharing the exact next airing instant ⇒ a same-day multi-episode / full-season drop.
   const nextAiringCount = nextAiringAt != null ? eps.filter((e) => e.airDate === nextAiringAt).length : 0
+  const airings = airingsWindow({ episodes: eps, next, airedEpisodes, lastAiredAt, nowMs: Date.now() })
 
   return {
     mediaId: m.id,
@@ -136,6 +176,7 @@ function toPart(
     studios: m.studios ?? [],
     nextAiringCount,
     episodes: opts?.episodes ? eps : [],
+    airings,
   }
 }
 
