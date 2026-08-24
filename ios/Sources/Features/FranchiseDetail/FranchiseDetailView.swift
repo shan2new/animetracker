@@ -650,13 +650,15 @@ struct FranchiseDetailView: View {
             }
             let nextEp = part.nextEpisodeNumber ?? part.progress + 1
             let when: String = {
-                if let at = f.nextAiring(now: now) { return "\(Copy.episode(nextEp)) · \(TemporalCopy.airs(at: at, now: now, source: f.source))" }
+                // The shared watch-context rule: a multi-season show names its season here too.
+                // This card said "Episode 20" for the show Schedule labels "Season 4 · Episode 20".
+                if let at = f.nextAiring(now: now) { return "\(f.watchContext(part: part, episode: nextEp)) · \(TemporalCopy.airs(at: at, now: now, source: f.source))" }
                 return "No date announced"
             }()
             return NextUp(kind: .caughtUp, part: part, line1: Copy.Progress.caughtUp, line2: when, line3: nil, episode: nil, behind: 0)
         }
         let episode = part.progress + 1
-        let context = f.parts.count > 1 ? part.watchContext(episode: episode) : Copy.episode(episode)
+        let context = f.watchContext(part: part, episode: episode)
         if behind > 1 {
             return NextUp(kind: .backlog, part: part, line1: context, line2: part.isReleasing ? Copy.Progress.behind(behind) : Copy.Progress.left(behind),
                           line3: nil, episode: episode, behind: behind)

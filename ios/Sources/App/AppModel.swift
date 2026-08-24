@@ -22,6 +22,7 @@ final class AppModel {
     // could not reach in time was still exactly 6 seconds long.
     static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
     static let recentsKey = "recentSearches"
+    static let recentItemsKey = "recentSearchItems"
     static let maxRecents = 10
     // Foreground-refresh thresholds: reload when the app was backgrounded long enough for aired
     // counts to be stale; re-stamp /me/opened only when the away-time reads as a NEW visit (so
@@ -33,7 +34,14 @@ final class AppModel {
 
     // Library (full franchises with parts + status/behind/newParts). `libraryIds` mirrors it for
     // O(1) membership checks — the Discover grid calls isInLibrary per card on every (animating) frame.
-    var library: [Franchise] = [] { didSet { libraryIds = Set(library.map(\.id)) } }
+    var library: [Franchise] = [] {
+        didSet {
+            libraryIds = Set(library.map(\.id))
+            libraryVersion &+= 1
+        }
+    }
+    /// Bumped on every library write; the key the derived-feed caches (`scheduleDays`) hang off.
+    @ObservationIgnored private var libraryVersion = 0
     private(set) var libraryIds: Set<String> = []
     // Ids optimistically added but not yet confirmed by a reload — isInLibrary includes them so
     // "+" buttons flip instantly instead of waiting a network round-trip.
@@ -58,24 +66,43 @@ final class AppModel {
     /// a flat "No results" while the backend had already worked out what was meant. Search renders
     /// it as "Showing results for …" with a literal-search escape hatch.
     var searchCorrection: SearchCorrection?
+    /// Per-catalogue outcome of the results on screen (`anilist`/`tmdb` → `ok`|`failed`|
+    /// `disabled`). The server has always sent it and no view ever read it, so a TMDB outage
+    /// rendered as "no TV results". Search renders a notice per failed catalogue.
+    var searchSources: [String: String]?
     /// Set by `searchLiterally` for exactly one request: the user asked for the words they typed,
     /// so that request opts out of the server's correction (`exact=1`). Any keystroke clears it.
     private var searchExactOnce = false
+    /// The trimmed text the last search was scheduled for — see `scheduleSearch`.
+    private var lastScheduledQuery = ""
     // Persisted recent search terms, most-recent first — the search surface's empty state.
     var recentSearches: [String] = []
+    /// Shows the user opened or added FROM a search, most recent first — Search's "Recently
+    /// searched" rows (Apple Music's model: the things you found, not the strings you typed).
+    var recentItems: [FranchiseSummary] = []
     // Trending franchises for the search zero-state shelf. Fetched once per session, lazily on
     // first visit to the search tab; a failure just leaves the shelf out (nothing to retry into).
     var trending: [FranchiseSummary] = []
     private var trendingTask: Task<Void, Never>?
 
-    // Library filtering.
-    var libQuery = ""
+    /// A CTA elsewhere ("Add a show", the empty Schedule) asked for the search field itself, not
+    /// just the Search tab. Consumed by `DiscoverView`, which presents the field and clears it.
+    var searchFieldRequested = false
     // Anime/TV filter — SEARCH ONLY. Today, Schedule and Library are your shows and always show
     // everything: a filter set once while browsing used to silently hide half of what aired.
     var mediaFilter: MediaFilter = .all
 
     // Live clock for countdowns.
-    var now: Int64 = .nowMs
+    var now: Int64 = .nowMs {
+        didSet {
+            let minute = (now / Formatting.minuteMs) * Formatting.minuteMs
+            if minute != nowMinute { nowMinute = minute }
+        }
+    }
+    /// `now` truncated to the minute, written only when the minute changes. A screen whose every
+    /// fact is minute-grained (Schedule) observes THIS, so the 20-second tick does not re-lay it
+    /// out three times a minute for nothing.
+    private(set) var nowMinute: Int64 = (Int64.nowMs / Formatting.minuteMs) * Formatting.minuteMs
 
     // Celebration + undo + error surfacing.
     var justCaught: Set<String> = []          // franchise ids currently celebrating
@@ -122,6 +149,10 @@ final class AppModel {
     init(api: APIClient) {
         self.api = api
         recentSearches = UserDefaults.standard.stringArray(forKey: AppModel.recentsKey) ?? []
+        if let data = UserDefaults.standard.data(forKey: AppModel.recentItemsKey),
+           let items = try? JSONDecoder().decode([FranchiseSummary].self, from: data) {
+            recentItems = items
+        }
     }
 
     // MARK: - Lifecycle
@@ -214,13 +245,15 @@ final class AppModel {
         loading = true          // the next sign-in mounts on the loader, not on an empty shelf
         backgroundedAt = nil
 
+        lastScheduledQuery = ""
         searchQuery = ""        // didSet clears the results/busy/error triad
         searchResults = []
         searchBusy = false
         searchError = false
         searchCorrection = nil
+        searchSources = nil
         trending = []
-        libQuery = ""
+        searchFieldRequested = false
         mediaFilter = .all
 
         justCaught = []
@@ -299,6 +332,32 @@ final class AppModel {
         persistRecents()
     }
 
+    /// A show acted on from a result set (opened or added) is worth remembering as itself.
+    func recordRecentItem(_ item: FranchiseSummary) {
+        recentItems.removeAll { $0.id == item.id }
+        recentItems.insert(item, at: 0)
+        if recentItems.count > AppModel.maxRecents {
+            recentItems = Array(recentItems.prefix(AppModel.maxRecents))
+        }
+        persistRecentItems()
+    }
+
+    func removeRecentItem(_ id: String) {
+        recentItems.removeAll { $0.id == id }
+        persistRecentItems()
+    }
+
+    /// Everything under "Recently searched": the shows and the leftover terms.
+    func clearRecents() {
+        recentItems = []
+        persistRecentItems()
+        clearRecentSearches()
+    }
+
+    private func persistRecentItems() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(recentItems), forKey: AppModel.recentItemsKey)
+    }
+
     private func persistRecents() {
         UserDefaults.standard.set(recentSearches, forKey: AppModel.recentsKey)
     }
@@ -306,8 +365,12 @@ final class AppModel {
     // MARK: - Search (debounced)
 
     private func scheduleSearch() {
-        searchTask?.cancel()
         let trimmed = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A whitespace-only edit ("naruto" → "naruto ") is not a new query. It used to cancel the
+        // in-flight request and re-issue the identical one 300 ms later.
+        if trimmed == lastScheduledQuery, !trimmed.isEmpty, !searchExactOnce { return }
+        lastScheduledQuery = trimmed
+        searchTask?.cancel()
 
         // Cleared box: cancel any pending search and fall back to the recent-searches empty state.
         if trimmed.isEmpty {
@@ -315,6 +378,7 @@ final class AppModel {
             searchError = false
             searchResults = []
             searchCorrection = nil
+            searchSources = nil
             searchTask = nil
             return
         }
@@ -336,6 +400,7 @@ final class AppModel {
             guard seq == searchSeq else { return }   // a newer keystroke superseded this request
             searchResults = response.franchises
             searchCorrection = SearchCorrection(response)
+            searchSources = response.sources
             searchExactOnce = false
             searchError = false
             searchBusy = false
@@ -343,6 +408,7 @@ final class AppModel {
             guard !isCancellation(error) else { return }  // cancelled by a newer keystroke — not a failure
             guard seq == searchSeq else { return }
             searchCorrection = nil
+            searchSources = nil
             searchError = true
             searchBusy = false
         }
@@ -425,10 +491,11 @@ final class AppModel {
         }
     }
 
-    /// All subscribed franchises that have a currently-releasing part. Never media-filtered: what
-    /// aired today is a fact about your library, not about a chip you last touched in search.
+    /// All subscribed franchises that have a currently-releasing part AND belong on the calendar
+    /// (`Franchise.tracksAirings` — a `planned` show does not). Never media-filtered: what aired
+    /// today is a fact about your library, not about a chip you last touched in search.
     var airingFranchises: [Franchise] {
-        library.filter { $0.releasingPart != nil }
+        library.filter { $0.releasingPart != nil && $0.tracksAirings }
     }
 
     var libraryEmpty: Bool { library.isEmpty }
@@ -598,75 +665,99 @@ final class AppModel {
 
     // ----- Schedule (a chronological calendar feed around today) -----
 
+    /// One episode on the calendar: which show, which part, which episode, when.
+    struct ScheduleEntry: Identifiable {
+        let franchise: Franchise
+        let part: FranchisePart
+        let episode: Int
+        let at: Int64
+        /// It has happened: an exact instant that has passed, or a date-only release whose day is
+        /// today or earlier — a TMDB drop is out at some point on its day, and the calendar cannot
+        /// know when, so the whole day counts (the row can be marked from the morning on).
+        let aired: Bool
+        var id: String { "\(franchise.id)/\(part.mediaId)/\(episode)" }
+        var dateOnly: Bool { franchise.timeAnchor.isDateOnly }
+        var watched: Bool { aired && part.progress >= episode }
+    }
+
     struct ScheduleDay: Identifiable {
         /// Day offset from today in local days — negative for past days.
         let id: Int
-        let label: String
-        let isToday: Bool
-        let isPast: Bool
-        let dateLabel: String
-        /// Episodes still to air on this day (future days + later today).
-        let franchises: [Franchise]
-        /// Episodes that already aired on this day — populated for past days and earlier today.
-        let airedToday: [Franchise]
-
-        init(id: Int, label: String, isToday: Bool, dateLabel: String,
-             franchises: [Franchise], airedToday: [Franchise] = [], isPast: Bool = false) {
-            self.id = id
-            self.label = label
-            self.isToday = isToday
-            self.isPast = isPast
-            self.dateLabel = dateLabel
-            self.franchises = franchises
-            self.airedToday = airedToday
-        }
+        /// Local noon of the day, so day arithmetic and labels never land on a DST seam.
+        let noon: Int64
+        var isToday: Bool { id == 0 }
+        var isPast: Bool { id < 0 }
+        /// Ascending by instant, then title.
+        let entries: [ScheduleEntry]
     }
 
-    /// A week back through two weeks ahead, chronological. Empty days are omitted so the feed stays
-    /// content-forward; today is always kept and stays highlighted even when nothing airs.
-    /// A franchise carries a single `nextAiringAt`, so it lands on at most one future day.
+    /// A week back through two weeks ahead, chronological, one entry per DATED EPISODE — every
+    /// air date of a weekly show inside the window, not once on its next (`FranchisePart.airings`;
+    /// `scheduleAirings` falls back to the next/last slots for a server without the field). Empty
+    /// days are omitted; today is always present, empty or not, as the feed's anchor — and
+    /// `ScheduleView` must RENDER that anchor, empty or not (see `Derived.ahead`).
+    /// `planned` shows are excluded (`Franchise.tracksAirings`).
+    ///
+    /// **Cached.** This used to be a bare computed property, and `ScheduleView` read it through a
+    /// dozen of its own computed properties — about thirty full rebuilds per body evaluation. The
+    /// feed only changes when the library changes or the minute turns, so that is the cache key.
     var scheduleDays: [ScheduleDay] {
-        // Anchor on local noon so a day step survives DST transitions.
+        let key = scheduleFeedKey
+        if let cached = scheduleCache, cached.key == key { return cached.days }
+        let days = buildScheduleDays()
+        scheduleCache = (key, days)
+        return days
+    }
+
+    /// Identity of the current feed. Equal keys ⇒ identical `scheduleDays`, so a screen can key its
+    /// own derivations on it instead of walking the feed again.
+    struct ScheduleFeedKey: Equatable { let library: Int; let minute: Int64 }
+    var scheduleFeedKey: ScheduleFeedKey { ScheduleFeedKey(library: libraryVersion, minute: nowMinute) }
+    @ObservationIgnored private var scheduleCache: (key: ScheduleFeedKey, days: [ScheduleDay])?
+
+    /// Local noon of today, the anchor every day offset is measured from.
+    var scheduleTodayNoon: Int64 {
+        let now = nowMinute
         let p = Formatting.localParts(now)
-        let noon = now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
+        return now - (Int64(p.hour) * Formatting.H + Int64(p.minute) * Formatting.minuteMs) + 12 * Formatting.H
+    }
+
+    private func buildScheduleDays() -> [ScheduleDay] {
+        let now = nowMinute
+        let noon = scheduleTodayNoon
+        let todayKey = Formatting.localDayKey(noon)
+        var buckets: [Int: [ScheduleEntry]] = [:]
+
+        // Every part, not only the releasing one: a season that premieres inside the window is
+        // announced, not releasing, and a finale that aired three days ago belongs to a finished
+        // part. The window is the filter, not the part's status.
+        //
+        // The SHOW's status is a filter, though — `tracksAirings` keeps `planned` off the
+        // calendar. Not written as `airingFranchises` (which is releasing-only): an announced
+        // season premiering inside the window has no releasing part and still belongs here.
+        for f in library where f.tracksAirings {
+            for part in f.parts {
+                for a in part.scheduleAirings {
+                    // Bucketed by the calendar day the episode lives in, read in ITS source's
+                    // calendar: a TMDB drop is a date-only fact, and reading its synthesized
+                    // instant locally filed it a day late east of UTC+7.
+                    let offset = Int((f.dayKey(of: a.at) - todayKey) / Formatting.D)
+                    guard (AppModel.scheduleBack...AppModel.scheduleAhead).contains(offset) else { continue }
+                    let aired = f.timeAnchor.isDateOnly ? offset <= 0 : a.at <= now
+                    buckets[offset, default: []].append(
+                        ScheduleEntry(franchise: f, part: part, episode: a.episode, at: a.at, aired: aired))
+                }
+            }
+        }
 
         return (AppModel.scheduleBack...AppModel.scheduleAhead).compactMap { offset -> ScheduleDay? in
-            let dayDate = noon + Int64(offset) * Formatting.D
-            let dayKey = Formatting.localDayKey(dayDate)
-            let isToday = offset == 0
-
-            // Each franchise is bucketed by the calendar day IT lives in (`dayKey(of:)`): a TMDB
-            // drop is a date-only fact, so reading its synthesized instant locally filed it a day
-            // late east of UTC+7. Today's cell then splits into "still to come" / "already aired"
-            // — but only anime has a real clock to split on; a date-only row stays ahead of you
-            // for the whole of its day instead of flipping at a fabricated 17:00 UTC.
-            let items = airingFranchises
-                .filter {
-                    guard let next = $0.releasingPart?.nextAiringAt,
-                          $0.dayKey(of: next) == dayKey else { return false }
-                    return $0.timeAnchor.isDateOnly ? offset >= 0 : next > now
-                }
-                .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
-            // Ascending, like `items`: the rail is one continuous time axis, and flipping the
-            // aired half to newest-first ran the morning backwards under the afternoon.
-            let aired = airingFranchises
-                .filter {
-                    guard let last = $0.releasingPart?.lastAiredAt,
-                          $0.dayKey(of: last) == dayKey else { return false }
-                    return $0.timeAnchor.isDateOnly ? offset <= 0 : last <= now
-                }
-                .sorted { $0.lastAiredSortKey < $1.lastAiredSortKey }
-
-            guard isToday || !items.isEmpty || !aired.isEmpty else { return nil }
-            return ScheduleDay(
-                id: offset,
-                label: Formatting.weekdayNameMonFirst(Formatting.localMondayCol(dayDate)),
-                isToday: isToday,
-                dateLabel: Formatting.fmtMonthDay(dayDate),
-                franchises: items,
-                airedToday: aired,
-                isPast: offset < 0
-            )
+            let entries = (buckets[offset] ?? []).sorted {
+                $0.at != $1.at ? $0.at < $1.at
+                    : ($0.franchise.title != $1.franchise.title ? $0.franchise.title < $1.franchise.title
+                                                                 : $0.episode < $1.episode)
+            }
+            guard offset == 0 || !entries.isEmpty else { return nil }
+            return ScheduleDay(id: offset, noon: noon + Int64(offset) * Formatting.D, entries: entries)
         }
     }
 
@@ -682,17 +773,9 @@ final class AppModel {
     enum LibShelf: Int, CaseIterable, Identifiable {
         case planned, comingBack, watching, finished
         var id: Int { rawValue }
-        var label: String {
-            switch self {
-            case .watching: return "Watching"
-            case .comingBack: return "Coming back"
-            case .planned: return "Planned"
-            // "Watched", the same word `LibrarySection.finished` renders and the same word
-            // `Copy.statusLabel` now returns for `.completed`. "Finished" is out of the vocabulary
-            // (SYS-4): it was naming the user's list state and the series' production state at once.
-            case .finished: return "Watched"
-            }
-        }
+        // No `label` here: the shelf's on-screen name is `LibrarySection.label` (LibraryFacts),
+        // the only one ever rendered. A second vocabulary ("Coming back" for the shelf the screen
+        // calls "Returning") lived here with no call sites.
     }
 
     /// One show, one shelf.
@@ -716,13 +799,12 @@ final class AppModel {
         var id: Int { shelf.id }
     }
 
-    /// The crate, in shelf order, search-filtered; empty shelves are omitted. No other filters —
-    /// the Library is one collection and search is its only control.
+    /// The crate, in shelf order; empty shelves are omitted. No filters — the Library root is one
+    /// collection (All titles owns search and Arrange). The old `libQuery` filter here had no
+    /// writer left anywhere in the app.
     var libraryShelves: [LibShelfSection] {
-        let q = libQuery.lowercased().trimmingCharacters(in: .whitespaces)
-        let filtered = library.filter { q.isEmpty || $0.title.lowercased().contains(q) }
         return LibShelf.allCases.compactMap { shelf in
-            let arr = sortedForShelf(filtered.filter { libShelf(of: $0) == shelf }, shelf: shelf)
+            let arr = sortedForShelf(library.filter { libShelf(of: $0) == shelf }, shelf: shelf)
             return arr.isEmpty ? nil : LibShelfSection(shelf: shelf, franchises: arr)
         }
     }
@@ -882,9 +964,10 @@ final class AppModel {
         FeedbackCoordinator.fire(.success)
         pendingAdds.insert(franchiseId)
         let status: WatchStatus = isReleasing ? .watching : .planned
-        let label = status == .watching ? "Watching" : "Plan to watch"
+        // `Copy.Status`, never a local spelling: this line used to say "Plan to watch", a string the
+        // copy table explicitly bans, in the one toast every first-time user reads.
         undo = UndoState(mediaId: nil, franchiseId: franchiseId, prevProgress: 0,
-                         title: title, episode: 0, added: true, statusLabel: label)
+                         title: title, episode: 0, added: true, statusLabel: Copy.Status(status))
         scheduleUndoDismissal()
         // **An add never raises the system permission alert.**
         //
@@ -900,11 +983,23 @@ final class AppModel {
         // Profile → Notifications. The system prompt only ever follows the user asking for it.
         Task {
             do {
-                _ = try await api.subscribe(franchiseId: franchiseId, status: nil)
+                // The status the toast promised is the status that is sent. Letting the server
+                // re-derive it from `nil` meant the toast could name one shelf and the show land
+                // on another whenever the two `isReleasing` readings disagreed.
+                _ = try await api.subscribe(franchiseId: franchiseId, status: status)
                 await reload()
             } catch {
                 if let cur = undo, cur.added, cur.franchiseId == franchiseId { undo = nil }
-                showError("Couldn't add \(title) — check your connection.")
+                pendingAdds.remove(franchiseId)
+                // Membership rolls back (the `pendingAdds` entry is gone) and the failure goes
+                // where every other membership failure goes: the SyncBanner, with a Retry that
+                // re-issues exactly this add. It was the only write in the app that ended in a
+                // transient toast with no way back.
+                SyncCenter.shared.record(command: Copy.Action.add, title: title,
+                                         reason: Copy.Notice.reason(error)) {
+                    self.addToLibrary(franchiseId: franchiseId, title: title, isReleasing: isReleasing)
+                }
+                return
             }
             pendingAdds.remove(franchiseId)
         }

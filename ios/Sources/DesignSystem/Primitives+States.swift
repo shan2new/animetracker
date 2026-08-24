@@ -1100,20 +1100,26 @@ private struct Freshness: ViewModifier {
     let pullDriving: Bool
 
     func body(content: Content) -> some View {
-        VStack(alignment: .leading, spacing: ThemeSpace.x1) {
-            HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-                content
-                RefreshIndicator(isRefreshing: appModel.isRefreshing, suppressed: pullDriving)
-                Spacer(minLength: 0)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            content
             if let since = appModel.staleSince(dataClass) {
-                // 4 pt below the title (the VStack's own spacing), 8 pt above the first content
-                // block — the strip is part of the header's rhythm, not a band pressed into it.
                 StaleStrip(since: since, now: appModel.now)
-                    .padding(.bottom, ThemeSpace.x2)
+                    .padding(.vertical, ThemeSpace.x2)
             }
         }
-        // Both halves arrive and leave on the same gentle curve; neither is ever a spring.
+        // The refresh spinner lives in the NAVIGATION BAR, beside the title, where a spinner
+        // about the screen belongs. In flow above the content it reserved a 16-pt row at idle —
+        // the void between "Library" and the All titles row (user, 24 Aug).
+        .toolbar {
+            // Only while refreshing, and with no glass behind it: iOS 26+ wraps every toolbar item
+            // in a glass disc, which for an invisible spinner is an empty disc beside the title.
+            if appModel.isRefreshing, !pullDriving {
+                ToolbarItem(placement: .topBarTrailing) {
+                    RefreshIndicator(isRefreshing: appModel.isRefreshing, suppressed: pullDriving)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+        }
         .animation(ThemeMotion.uiGentle, value: appModel.isRefreshing)
         .animation(ThemeMotion.uiGentle, value: appModel.staleSince(dataClass))
     }

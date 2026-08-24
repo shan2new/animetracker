@@ -100,9 +100,11 @@ struct TodayView: View {
     /// proportional gradient was already down to ~30 % by the bottom of the wordmark band, and a
     /// scrolling 34-pt title read through the brand mark at half strength.
     private static let veilRamp: CGFloat = 100
-    /// The cinematic band. 0.46 × screen is where the original opened and is the proportion at
-    /// which artwork still leaves room for a real reading order underneath it.
-    private static let heroFraction: CGFloat = 0.46
+    /// The resting focus stage. Today is a glanceable queue, so its normal hero cannot consume
+    /// nearly half of a compact iPhone before the next actionable item appears. Recap remains a
+    /// full-frame moment, and accessibility sizes retain the more expansive original geometry.
+    private static let heroFraction: CGFloat = 0.36
+    private static let accessibilityHeroFraction: CGFloat = 0.46
     /// What the full-bleed recap frame leaves below itself.
     ///
     /// It must clear the bottom chrome's whole ramp, not just the tab bar: at 96 pt the card's
@@ -112,7 +114,8 @@ struct TodayView: View {
     /// The photograph that must remain visible above the hero copy at any type size. The hero
     /// grows past `heroFraction` by the copy's overflow rather than holding a fixed fraction and
     /// letting a taller text block spill off the top of its own protection.
-    private static let artBand: CGFloat = 210
+    private static let artBand: CGFloat = 132
+    private static let accessibilityArtBand: CGFloat = 210
     /// What a `MediaRow` already contributes above and below itself.
     ///
     /// The row carries `ThemeSpace.x2` of vertical padding INSIDE its own minimum height, so a
@@ -438,7 +441,7 @@ struct TodayView: View {
 
     private func heroHeight(_ screenH: CGFloat) -> CGFloat {
         // The arrival owns the whole screen. Nothing follows the recap while it is held — at the
-        // resting 46 % the card floated in the middle of the frame with half a screen of canvas
+        // resting focus height the card floated in the middle of the frame with canvas
         // under it, which reads as a notification banner rather than as a moment. Edge to edge,
         // down to the tab bar, the same art then simply *shrinks* into the Focus hero on handoff:
         // one object resizing, which is what `uiSettle` is for.
@@ -447,8 +450,10 @@ struct TodayView: View {
         // height depends only on the width, never on this, so there is no layout cycle — and at
         // AX5 the block gets exactly the room it needs instead of 0.56 × screen and a clipped
         // title. `artBand` is the minimum photograph that must survive above the copy.
-        let base = screenH * TodayView.heroFraction
-        return max(base, heroCopyHeight + TodayView.artBand)
+        let fraction = isAX ? TodayView.accessibilityHeroFraction : TodayView.heroFraction
+        let artBand = isAX ? TodayView.accessibilityArtBand : TodayView.artBand
+        let base = screenH * fraction
+        return max(base, heroCopyHeight + artBand)
     }
 
     /// The art the hero is made of.
@@ -474,7 +479,7 @@ struct TodayView: View {
     @ViewBuilder
     private func hero(_ f: Franchise?, screenH: CGFloat, topInset: CGFloat) -> some View {
         // The fraction is of the WHOLE screen, status bar included: the art bleeds up into it, so
-        // adding the inset on top would push the hero to 52 % and eat the fold.
+        // adding the inset again would silently undo the compact resting geometry.
         let h = heroHeight(screenH)
         let art = heroArt(f)
         // Keyed on the PHOTOGRAPH, not on the franchise id: the image only has a reason to
@@ -535,7 +540,7 @@ struct TodayView: View {
                 }
             }
             .padding(.horizontal, ThemeMetrics.gutter)
-            .padding(.bottom, ThemeSpace.x5)
+            .padding(.bottom, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heroCopyHeight = $0 }
         }
         .frame(height: h)
@@ -662,7 +667,7 @@ struct TodayView: View {
             let copy: (eyebrow: String, fact: String, support: String?) = committed
                 ? advanced(kind, f: f, part: part, from: committedEpisode ?? nextEpisode, behind: behind)
                 : (eyebrow(kind, f: f, part: part),
-                   Copy.watchContext(part: part.label, episode: nextEpisode),
+                   f.watchContext(part: part, episode: nextEpisode),
                    supportLine(kind, f: f, part: part))
             HeroFocus(
                 franchise: f,
@@ -703,7 +708,9 @@ struct TodayView: View {
         let hasQueue = showsHero && (!queue.isEmpty || showsViewAll)
         // The first block under a hero gets the hero's clearance; every block after it gets a
         // section gap. One rhythm, decided once, instead of 16 pt between everything.
-        let first = showsHero ? ThemeMetrics.heroClearance : ThemeMetrics.sectionGap
+        let first = showsHero
+            ? (isAX ? ThemeMetrics.heroClearance : ThemeSpace.x5)
+            : ThemeMetrics.sectionGap
         let gap = ThemeMetrics.sectionGap
         // A section that ENDS in a `MediaRow` has already spent `rowOwnInset` below its last row.
         let gapAfterRow = gap - TodayView.rowOwnInset
@@ -765,12 +772,10 @@ struct TodayView: View {
                          meta: queueMeta(f),
                          lead: queueLead(f),
                          poster: f.cover,
-                         // `.row` (56×84) at `rowMedia`, not the 44×66 `.queue` slot. A logotype
-                         // cover — Game of Thrones, Attack on Titan — is an unreadable smear at
-                         // 44 pt, and it sat beside ~300 pt of empty row. Apple TV's Up Next never
-                         // goes below a slot you can recognise the show from. `Upcoming` below
-                         // keeps `.queue`: it is the quieter block and is allowed to be smaller.
-                         slot: .row,
+                         // Today's purpose-built 52×78 slot keeps logo-led covers recognisable
+                         // without borrowing the catalogue's 60×90 / 100-pt row. Accessibility
+                         // sizes keep the larger slot while text expands.
+                         slot: isAX ? .row : .todayQueue,
                          // No chevron: this row has a trailing CONTROL. A disclosure indicator and
                          // a mark ring in the same column is two trailing affordances on one row.
                          chevron: false,
@@ -780,6 +785,8 @@ struct TodayView: View {
                          trailing: { queueMark(f) }) {
                     onOpenDetail(f.id, "queue/\(f.id)")
                 }
+                // The same long-press menu every Library card carries. Today's rows had none.
+                .franchiseQuickActions(f, appModel: appModel)
                 .padding(.horizontal, ThemeMetrics.gutter)
                 .transition(handoff)
             }
@@ -904,6 +911,7 @@ struct TodayView: View {
                      zoomID: "next/\(f.id)") {
                 onOpenDetail(f.id, "next/\(f.id)")
             }
+            .franchiseQuickActions(f, appModel: appModel)
             .padding(.horizontal, ThemeMetrics.gutter)
             .padding(.top, ThemeMetrics.labelGap - TodayView.rowOwnInset)
         }
@@ -965,6 +973,7 @@ struct TodayView: View {
                          zoomID: "shelfrow/\(f.id)") {
                     onOpenDetail(f.id, "shelfrow/\(f.id)")
                 }
+                .franchiseQuickActions(f, appModel: appModel)
                 .padding(.horizontal, ThemeMetrics.gutter)
             }
         }
@@ -984,10 +993,11 @@ struct TodayView: View {
                               // was already honoured by Library's RETURNING shelf.
                               captionIsLead: caption?.lead ?? false,
                               poster: f.cover,
-                              slot: .shelfMedium,
+                              slot: .todayShelf,
                               zoomID: "shelf/\(f.id)") {
                         onOpenDetail(f.id, "shelf/\(f.id)")
                     }
+                    .franchiseQuickActions(f, appModel: appModel)
                 }
             }
             .padding(.leading, ThemeMetrics.gutter)
@@ -1094,7 +1104,7 @@ struct TodayView: View {
                 return "\(Copy.episode(episode + 1)) airs \(TodayView.midSentence(when))"
             }
             return (Copy.Progress.caughtUp,
-                    Copy.watchContext(part: part.label, episode: episode),
+                    f.watchContext(part: part, episode: episode),
                     next)
         }
         let count: String = {
@@ -1102,7 +1112,7 @@ struct TodayView: View {
             return Copy.Progress.behind(left)
         }()
         return (count,
-                Copy.watchContext(part: part.label, episode: episode + 1),
+                f.watchContext(part: part, episode: episode + 1),
                 left == 1 ? Copy.Progress.caughtUpAfterThisEpisode : nil)
     }
 
@@ -1117,12 +1127,11 @@ struct TodayView: View {
         return head.lowercased() + phrase.dropFirst(head.count)
     }
 
-    /// "Season 7 · Episode 5" on a multi-part franchise, "Episode 5" on a single one. The queue
-    /// used a bare `Copy.episode` while the recap card, on the same tab, printed the same fact with
-    /// its season — so a seven-season show said "Episode 5 next" in one block and
-    /// "Season 7 · Episode 5 next" in the block above it.
+    /// The shared watch-context rule (`Franchise.watchContext`): "Season 7 · Episode 5" on a
+    /// multi-part franchise, "Episode 5" on a single one. This screen used to own the rule
+    /// privately while Library, Schedule and Detail each spelled it differently.
     private func watchLabel(_ f: Franchise, part: FranchisePart, episode n: Int) -> String {
-        f.parts.count > 1 ? Copy.watchContext(part: part.label, episode: n) : Copy.episode(n)
+        f.watchContext(part: part, episode: n)
     }
 
     // MARK: - Skeleton
@@ -1146,7 +1155,7 @@ struct TodayView: View {
                 SkeletonBlock(height: 48, radius: 24).padding(.top, 18)
             }
             .padding(.horizontal, ThemeMetrics.gutter)
-            .padding(.bottom, ThemeSpace.x5)
+            .padding(.bottom, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: heroHeight(screenH), alignment: .bottom)
             // The remembered tint, not `surfacePlate`. There is no artwork yet by definition, and
@@ -1176,16 +1185,16 @@ struct TodayView: View {
                 SkeletonLine(width: 62, height: 10)
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(0..<2, id: \.self) { _ in
-                        // The slot the queue actually uses — now `.row`, matching the promotion of
-                        // the queue to `rowMedia`. A stand-in of the wrong size moves every title
-                        // sideways and every row down at the swap.
-                        SkeletonRow(poster: PosterSize.row.size, lines: [180, 110],
-                                    posterRadius: PosterSize.row.radius)
+                        // The same Today-specific slot as the loaded row, so the handoff does not
+                        // move every title sideways or push the next section down.
+                        let slot: PosterSize = isAX ? .row : .todayQueue
+                        SkeletonRow(poster: slot.size, lines: [180, 110],
+                                    posterRadius: slot.radius)
                     }
                 }
             }
             .padding(.horizontal, ThemeMetrics.gutter)
-            .padding(.top, ThemeMetrics.heroClearance)
+            .padding(.top, isAX ? ThemeMetrics.heroClearance : ThemeSpace.x5)
 
             VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
                 SkeletonLine(width: 84, height: 10)
@@ -1197,7 +1206,7 @@ struct TodayView: View {
                 // is up, which is exactly why it survived. A scroller takes the width it is
                 // offered, like the shelf it stands in for.
                 ScrollView(.horizontal) {
-                    SkeletonShelf(count: 4, size: PosterSize.shelfMedium.size, caption: true)
+                    SkeletonShelf(count: 4, size: PosterSize.todayShelf.size, caption: true)
                         .padding(.horizontal, ThemeMetrics.gutter)
                 }
                 .scrollDisabled(true)
@@ -1503,9 +1512,9 @@ private struct HeroFocus: View {
                 VStack(alignment: .leading, spacing: 0) {
                     OverArtLabel(text: eyebrow, dot: eyebrowDot)
                     Text(franchise.title)
-                        .type(ThemeType.displayXL)
+                        .type(isAX ? ThemeType.displayXL : ThemeType.heroTitle)
                         .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(3)
+                        .lineLimit(isAX ? 3 : 2)
                         // At AX5 a four-word title otherwise runs to five 60-pt lines and pushes
                         // the fact, the footnote and the primary action off the frame.
                         .minimumScaleFactor(isAX ? 0.85 : 1)
@@ -1540,7 +1549,7 @@ private struct HeroFocus: View {
             .accessibilityElement(children: .combine)
             .accessibilityHint("Opens the show")
 
-            actions.padding(.top, ThemeSpace.x5)
+            actions.padding(.top, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
         }
         .allowsHitTesting(interactive)
     }

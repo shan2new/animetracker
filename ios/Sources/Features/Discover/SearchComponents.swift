@@ -1,7 +1,6 @@
 import SwiftUI
 
-// The three objects Search repeats everywhere, each of which the shipped build drew more than one
-// way.
+// The objects Search repeats everywhere, each of which the shipped build drew more than one way.
 //
 //  • `AddControl` — the primary action of the whole screen. It measured ~25 pt over artwork (below
 //    the 44-pt minimum), 55×43 as a bordered `Add` in a row (1 pt under it), and **vanished
@@ -13,10 +12,32 @@ import SwiftUI
 //    same data set rendered three ways in three places, truncating mid-word in the narrow ones
 //    ("2026 ·" — an orphaned separator). Facts are supplied in priority order and the line prints
 //    only as many as actually fit. A dropped fact beats a fragment.
-//  • `RankNumeral` / `RankGutter` — a chart position, drawn over the artwork where the artwork is
-//    big enough to carry it and in the row's own leading gutter where it is not.
+//  • `RankGutter` — a chart position, in the row's own leading gutter. The over-art numeral is
+//    gone: "03" painted straight over the poster's own title lockup on the first screen a new user
+//    sees, so on the shelf the rank now leads the caption instead.
+
+/// Sizes these controls need that have no token equivalent. Each says why it is the number it is.
+private enum Metrics {
+    /// The 44-pt minimum target (HIG), held by both placements in both states.
+    static let hitTarget: CGFloat = 44
+    /// The over-art disc: the smallest circle that still reads as a control inset in a 124-pt poster.
+    static let overArtDisc: CGFloat = 26
+    /// The owned ring's alpha over art — measured against the brightest chart posters so the ring
+    /// reads on all of them without becoming a second amber object.
+    static let ownedRingOverArt: Double = 0.45
+    /// The owned ring's alpha on a surface, where the `accentSoft` fill already carries the state.
+    static let ownedRingOnSurface: Double = 0.35
+}
 
 // MARK: - Add / added
+
+/// Where the control sits, which decides its shape.
+enum AddControlPlacement {
+    /// Inset into the corner of a poster.
+    case overArt
+    /// The trailing column of a row or card, on a surface rather than on art.
+    case row
+}
 
 /// The one add control.
 ///
@@ -27,49 +48,82 @@ import SwiftUI
 /// one ever appears in the other's context — including at accessibility sizes, where the shipped
 /// build grew the card's square into a full-width capsule and so drew one verb three ways.
 ///
-/// Both placements are 44 pt of target, both keep the same footprint whether the show is in the
-/// library or not, and both are live in both states — added is not a dead end, it is "tap to take
-/// it back out".
-struct AddControl: View {
-    enum Placement {
-        /// Inset into the corner of a poster.
-        case overArt
-        /// The trailing column of a row or card, on a surface rather than on art.
-        case row
-    }
-
+/// **Owned does not remove on tap.** A tick that unsubscribed on contact was the only destructive
+/// one-tap in the app, 44 pt from the add it replaced — and it never said which shelf the show was
+/// on. Owned now opens a menu: the same status options and the same Undo-carrying Remove the
+/// Library row's long-press offers (`ownedMenu`). Unowned still adds on tap; its long-press shows
+/// the one verb it performs, so the two states are one control with one gesture grammar.
+///
+/// Both placements are 44 pt of target and both keep the same footprint whether the show is in
+/// the library or not.
+struct AddControl<OwnedMenu: View>: View {
     let title: String
     let owned: Bool
-    var placement: Placement = .row
+    var placement: AddControlPlacement = .row
     let add: () -> Void
-    let remove: () -> Void
+    /// The menu behind an OWNED control: `FranchiseContextMenu` once the franchise is loaded, or
+    /// the single Remove while the add is still pending.
+    @ViewBuilder var ownedMenu: () -> OwnedMenu
+
+    var body: some View {
+        control
+            .menuStyle(.button)
+            .buttonStyle(placement == .overArt
+                         ? AnyButtonStyle(MarkPressStyle())
+                         : AnyButtonStyle(CompactSquareStyle(owned: owned)))
+            // Not `.isSelected`: the amber tick is ownership, not a selection state. The value
+            // names which it is, and the hint says what the tap does in that state.
+            .accessibilityLabel(title)
+            .accessibilityValue(owned ? Copy.Search.inLibrary : Copy.Search.notInLibrary)
+            .accessibilityHint(owned ? Copy.Search.ownedHint : Copy.Search.addHint)
+    }
+
+    /// ONE `Menu` in both states — a ternary over one concrete type, not a `ViewBuilder` branch,
+    /// so the control keeps its identity when `owned` flips and the glyph's symbol replacement
+    /// animates instead of the whole button being torn down and rebuilt around a new one. Unowned
+    /// carries `primaryAction` (tap adds, long-press shows the same verb); owned drops it, so the
+    /// tap opens the menu.
+    private var control: Menu<AddGlyph, AddMenuContent<OwnedMenu>> {
+        let glyph = AddGlyph(owned: owned, placement: placement)
+        let content = AddMenuContent(owned: owned, add: add, ownedMenu: ownedMenu)
+        return owned
+            ? Menu(content: { content }, label: { glyph })
+            : Menu(content: { content }, label: { glyph }, primaryAction: add)
+    }
+}
+
+/// What the menu holds: the owner's status options, or the one verb an unowned control performs.
+private struct AddMenuContent<OwnedMenu: View>: View {
+    let owned: Bool
+    let add: () -> Void
+    let ownedMenu: () -> OwnedMenu
+
+    var body: some View {
+        if owned {
+            ownedMenu()
+        } else {
+            Button(action: add) { Label(Copy.Search.addToLibrary, systemImage: "plus") }
+        }
+    }
+}
+
+/// `plus` and `checkmark` at the same size, in the same shape, so the state change is a symbol
+/// replacement rather than a crossfade between two differently-shaped objects.
+///
+/// Added is drawn in `accent`; unadded in `textPrimary`. The two states were previously
+/// separated by the glyph's *colour alone* inside identical grey chrome, so "in your library"
+/// and "not in your library" both read as live grey buttons.
+private struct AddGlyph: View {
+    let owned: Bool
+    let placement: AddControlPlacement
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Button {
-            owned ? remove() : add()
-        } label: {
-            glyph
-        }
-        .buttonStyle(placement == .overArt
-                     ? AnyButtonStyle(MarkPressStyle())
-                     : AnyButtonStyle(CompactSquareStyle(owned: owned)))
-        // Three icon-only controls on this screen had no spoken name at all, and the amber tick was
-        // the worst of them: unlabelled, it reads as a selection state rather than as ownership.
-        .accessibilityLabel(owned ? "\(title), in your library. Remove" : "\(Copy.Action.add) \(title)")
-        .accessibilityAddTraits(owned ? .isSelected : [])
-    }
-
-    /// `plus` and `checkmark` at the same size, in the same shape, so the state change is a symbol
-    /// replacement rather than a crossfade between two differently-shaped objects.
-    ///
-    /// Added is drawn in `accent`; unadded in `textPrimary`. The two states were previously
-    /// separated by the glyph's *colour alone* inside identical grey chrome, so "in your library"
-    /// and "not in your library" both read as live grey buttons.
-    private var glyph: some View {
         Image(systemName: owned ? "checkmark" : "plus")
-            .font(.system(size: placement == .overArt ? 12 : 15, weight: .bold))
+            // Text styles, not point sizes: caption (12) in the disc, subheadline (15) in the
+            // square, so the glyph tracks Dynamic Type with the row it sits in.
+            .font(.system(placement == .overArt ? .caption : .subheadline, weight: .bold))
             .foregroundStyle(owned ? ThemeColor.accent : ThemeColor.textPrimary)
             .contentTransition(.symbolEffect(.replace.downUp))
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: owned)
@@ -79,7 +133,7 @@ struct AddControl: View {
 
 /// The disc / square the glyph sits in. Split out so the two placements cannot drift apart.
 private struct AddControlShape: ViewModifier {
-    let placement: AddControl.Placement
+    let placement: AddControlPlacement
     let owned: Bool
 
     func body(content: Content) -> some View {
@@ -90,18 +144,19 @@ private struct AddControlShape: ViewModifier {
             // measured 7.0:1 / 16.6:1 / 14.8:1 against the brightest posters in the chart. The
             // added state warms the fill so the two states differ in more than the glyph's colour.
             content
-                .frame(width: 26, height: 26)
+                .frame(width: Metrics.overArtDisc, height: Metrics.overArtDisc)
                 .background(ThemeColor.scrimStrong, in: Circle())
                 .background(owned ? ThemeColor.accentSoft : .clear, in: Circle())
-                .overlay(Circle().strokeBorder(owned ? ThemeColor.accent.opacity(0.45) : ThemeColor.posterEdge,
+                .overlay(Circle().strokeBorder(owned ? ThemeColor.accent.opacity(Metrics.ownedRingOverArt)
+                                                     : ThemeColor.posterEdge,
                                                lineWidth: 1))
-                .frame(width: 44, height: 44)
+                .frame(width: Metrics.hitTarget, height: Metrics.hitTarget)
                 .contentShape(Circle())
         case .row:
             // Square, not a text capsule: "Add" and "✓" are different widths, and a trailing
             // column that changes width between rows is why the list's right edge was ragged.
             content
-                .frame(width: 44, height: 44)
+                .frame(width: Metrics.hitTarget, height: Metrics.hitTarget)
                 .contentShape(Rectangle())
         }
     }
@@ -131,7 +186,8 @@ private struct CompactSquareStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(fill(pressed: configuration.isPressed), in: shape)
-            .overlay(shape.strokeBorder(owned ? ThemeColor.accent.opacity(0.35) : ThemeColor.stroke,
+            .overlay(shape.strokeBorder(owned ? ThemeColor.accent.opacity(Metrics.ownedRingOnSurface)
+                                              : ThemeColor.stroke,
                                         lineWidth: 1))
             .opacity(reduceMotion && configuration.isPressed ? 0.72 : 1)
             .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.985 : 1))
@@ -172,7 +228,9 @@ struct FactLine: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    private static let separator = " \u{00B7} "
+    /// The one separator every joined fact line on this screen uses — `MediaRow`'s `meta` and the
+    /// shelf caption are joined with it too, so a row and a card never punctuate differently.
+    static let separator = " \u{00B7} "
 
     private func greyText(_ n: Int) -> String {
         facts.prefix(n).joined(separator: FactLine.separator)
@@ -224,41 +282,8 @@ struct FactLine: View {
 
 // MARK: - The rank numeral
 
-/// A chart position, drawn INSIDE the artwork it belongs to, over the legibility ramp `ArtScrim`
-/// supplies. In the shipped build ranks 01–04 were 28-pt white numerals over the posters and ranks
-/// 05+ were 13-pt `textDisabled` numerals in a separate 50-pt gutter — one ranking rendered as two
-/// species, changing position, size and contrast halfway down the screen.
-///
-/// Used only where the artwork is big enough to carry a numeral without competing with it: the
-/// 124×186 shelf card. A 60×90 row thumbnail is not — see `RankGutter`.
-struct RankNumeral: View {
-    let rank: Int
-    let slot: PosterSize
-
-    var body: some View {
-        Text(String(format: "%02d", rank))
-            .type(ThemeType.displayL)
-            .monospacedDigit()
-            .foregroundStyle(ThemeColor.textPrimary)
-            .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 6)
-            .frame(maxWidth: slot.size.width, alignment: .leading)
-            .background(alignment: .bottom) {
-                ArtScrim(top: 0, bottom: 0.72)
-                    .frame(height: slot.size.height * 0.45)
-                    .clipShape(UnevenRoundedRectangle(
-                        bottomLeadingRadius: slot.radius, bottomTrailingRadius: slot.radius,
-                        style: .continuous))
-            }
-            .accessibilityHidden(true)
-    }
-}
-
-/// The same chart position at row altitude: in the row's own leading gutter, beside the poster
-/// rather than burned into it.
+/// A chart position at row altitude: in the row's own leading gutter, beside the poster rather
+/// than burned into it.
 ///
 /// At 60 pt wide a numeral covers roughly a quarter of the thumbnail, and "06" landed on a bright
 /// character with nothing protecting it — the rank competing with the identity art it is supposed
@@ -275,7 +300,7 @@ struct RankGutter: View {
     @ScaledMetric(relativeTo: .caption2) private var lane: CGFloat = RankGutter.width
 
     var body: some View {
-        Text(String(format: "%02d", rank))
+        Text(Copy.Search.rank(rank))
             .type(ThemeType.sectionLabel)
             .monospacedDigit()
             .foregroundStyle(ThemeColor.textDisabled)

@@ -40,6 +40,10 @@ enum ThemeColor {
     static let accent = Color(hex: 0xF0A24E)
     static let accentPressed = Color(hex: 0xD88D3B)
     static let accentSoft = Color(hex: 0xF0A24E).opacity(0.14)
+    /// Immediate ground for an artwork wash before a remote image or its palette is available.
+    /// It must be visibly warmer than `canvas`: a near-black fallback made a cold device launch
+    /// look as though the gradient had not rendered, while a cache-warm simulator showed the art.
+    static let ambientBackdropFallback = Color(hex: 0x432D21)
     static let onAccent = Color(hex: 0x0B0B0D)
     // Semantic
     static let success = Color(hex: 0x30D158)
@@ -279,11 +283,23 @@ enum ThemeMetrics {
     /// the `TabView` above its children, so this passes underneath it and gives its glass an
     /// opaque ground to refract.
     static let bottomUnderfill: CGFloat = 180
+
+    /// The ambient art wash under a TAB ROOT's inline navigation bar — Schedule, Library, Search.
+    /// One height and one strength: the three roots shipped with 300/0.3, 380–520/0.5–0.68 and
+    /// 400/0.68, so the same atmosphere was a whisper on one tab and a stain on the next. Today
+    /// carries its own hero and is not a list root.
+    static let rootWashHeight: CGFloat = 320
+    static let rootWashIntensity: Double = 0.4
 }
 
-/// Artwork slots, named by CONTEXT rather than by number, so no screen has to remember that a
-/// library row is 48×72 and a search row is 60×90. Art is this product's only real material —
-/// every one of these is at or above the size the shipped build used, never below.
+/// Artwork slots, named by CONTEXT rather than by number, so no screen has to remember a size.
+/// Art is this product's only real material — every one of these is at or above the size the
+/// shipped build used, never below.
+///
+/// **One row slot.** Library rows were 48×72, Search rows 60×90 and Schedule built its own 56×84
+/// by hand — three poster sizes for the one object the app renders most. `.row` is now the
+/// single list-row slot for Library, Search and Schedule; `.queue` stays for Today's compact
+/// queue, which is a different, denser object under the hero.
 enum PosterSize {
     /// Detail hero. The largest identity object in the app.
     case hero
@@ -293,12 +309,20 @@ enum PosterSize {
     case shelfLarge
     /// Today "Watching" shelf.
     case shelfMedium
-    /// A search result row.
-    case searchRow
-    /// The standard library / schedule row.
+    /// Today's denser resting shelf. The hero already owns the first visual beat, so this shelf
+    /// must read as supporting context rather than a second wall of key art.
+    case todayShelf
+    /// THE list row — Library, Search and Schedule. 60×90.
     case row
-    /// Today's queue rows and Schedule's compact rows.
+    /// Today's actionable queue: recognisable at a glance without inheriting a catalogue row's
+    /// full 100-pt height.
+    case todayQueue
+    /// Today's compact queue rows under the hero.
     case queue
+
+    /// Retired alias for `.row`. Search's rows and Library's AX rows named this slot; the two
+    /// sizes are one now. (Kept so a screen mid-migration still compiles; prefer `.row`.)
+    static var searchRow: PosterSize { .row }
     /// A recap beat — the smallest slot that still reads as a show.
     case beat
 
@@ -312,8 +336,9 @@ enum PosterSize {
         // while Library's rows render the same title whole.
         case .shelfLarge: return CGSize(width: 124, height: 186)
         case .shelfMedium: return CGSize(width: 112, height: 168)
-        case .searchRow: return CGSize(width: 60, height: 90)
-        case .row: return CGSize(width: 48, height: 72)
+        case .todayShelf: return CGSize(width: 100, height: 150)
+        case .row: return CGSize(width: 60, height: 90)
+        case .todayQueue: return CGSize(width: 52, height: 78)
         case .queue: return CGSize(width: 44, height: 66)
         case .beat: return CGSize(width: 34, height: 51)
         }
@@ -323,8 +348,10 @@ enum PosterSize {
     var radius: CGFloat {
         switch self {
         case .hero, .shelfLarge, .shelfMedium: return 12
-        case .focus, .searchRow: return 10
-        case .row, .queue: return 8
+        case .todayShelf: return 11
+        case .focus, .row: return 10
+        case .todayQueue: return 9
+        case .queue: return 8
         case .beat: return 6
         }
     }
@@ -333,8 +360,8 @@ enum PosterSize {
     var shadow: ShadowToken {
         switch self {
         case .hero: return .artHero
-        case .focus, .shelfLarge, .shelfMedium: return .art
-        case .searchRow, .row, .queue, .beat: return .none
+        case .focus, .shelfLarge, .shelfMedium, .todayShelf: return .art
+        case .row, .todayQueue, .queue, .beat: return .none
         }
     }
 }
@@ -412,7 +439,7 @@ extension ThemeType {
     /// A row's forward-looking fact — "Returns Oct 2", "Episode 19 next". Rendered in accent.
     static let rowMetaLead = TypeToken(font: .system(.footnote, weight: .semibold), tracking: 0)
     /// Shelf caption under a poster.
-    static let shelfTitle = TypeToken(font: .custom("Outfit-Medium", size: 15, relativeTo: .subheadline), tracking: -0.10)
+    static let shelfTitle = TypeToken(font: .custom("Outfit-Medium", size: 14, relativeTo: .subheadline), tracking: -0.10)
     static let shelfCaption = TypeToken(font: .system(.caption, weight: .medium), tracking: 0)
     /// An inline text action in a section header ("See all", "Clear"). Deliberately smaller than
     /// `button`: a 16-pt semibold amber word beside an 11-pt grey label wins a fight it should lose.

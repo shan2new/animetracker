@@ -61,3 +61,17 @@ struct RemoveFromLibraryButton: View {
         }
     }
 }
+
+extension View {
+    /// Long-press quick actions on any franchise surface — one line per host, so a card or row on
+    /// Today, Schedule, Library and Search carries the same menu. Pass `nil` for a title that is
+    /// not in the library (an unowned search result) and the surface gets no menu at all.
+    @ViewBuilder
+    func franchiseQuickActions(_ f: Franchise?, appModel: AppModel) -> some View {
+        if let f {
+            contextMenu { FranchiseContextMenu(f: f, appModel: appModel) }
+        } else {
+            self
+        }
+    }
+}

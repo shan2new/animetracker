@@ -22,19 +22,26 @@ final class PaletteCache {
 
     /// Resolves the tint for `url`, using the already-decoded poster when the image cache has it.
     func resolve(url: String?, maxPixel: CGFloat) async -> Color {
-        guard let url, !url.isEmpty else { return PaletteCache.fallback }
+        await resolveIfAvailable(url: url, maxPixel: maxPixel) ?? PaletteCache.fallback
+    }
+
+    /// The optional form is for surfaces that own a meaningful branded fallback. Returning nil
+    /// keeps that fallback on stage when a device is offline or the artwork decode is still busy,
+    /// instead of replacing it with a neutral colour that is indistinguishable from the canvas.
+    func resolveIfAvailable(url: String?, maxPixel: CGFloat) async -> Color? {
+        guard let url, !url.isEmpty else { return nil }
         if let hit = cache[url] { return hit }
-        guard !inFlight.contains(url) else { return cache[url] ?? PaletteCache.fallback }
+        guard !inFlight.contains(url) else { return cache[url] }
         inFlight.insert(url)
         defer { inFlight.remove(url) }
-        guard let u = URL(string: url) else { return PaletteCache.fallback }
+        guard let u = URL(string: url) else { return nil }
         let image: UIImage?
         if let cached = ImageCache.shared.image(for: u, atLeast: maxPixel) {
             image = cached
         } else {
             image = try? await ImageLoader.shared.image(for: u, maxPixel: maxPixel)
         }
-        guard let image else { return PaletteCache.fallback }
+        guard let image else { return nil }
         let color = await Task.detached(priority: .utility) { PaletteCache.dominantTint(of: image) }.value
         cache[url] = color
         return color
@@ -171,7 +178,12 @@ struct ArtBackdrop: View {
     /// 1 for a Detail hero. Lower it on a list screen, where the wash is atmosphere, not identity.
     var intensity: Double = 1
 
-    private var base: Color { tint ?? PaletteCache.fallback }
+    @State private var resolvedTint: Color?
+
+    /// Never let the presence of a URL remove the gradient. A cache-warm simulator could draw the
+    /// blurred art on frame one, while a physical device briefly had neither art nor a perceptible
+    /// fallback. The branded ember renders immediately; the artwork palette replaces it later.
+    private var base: Color { tint ?? resolvedTint ?? ThemeColor.ambientBackdropFallback }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -180,7 +192,8 @@ struct ArtBackdrop: View {
                 // fill its frame samples whatever corner the image happened to land in — which is
                 // why Profile drew no image at all — and it is why the wash lost its warmth even
                 // where an image was present.
-                RemoteImageView(url: url, contentMode: .fill, maxPixel: 320)
+                RemoteImageView(url: url, contentMode: .fill, maxPixel: 320,
+                                placeholderHidden: true)
                     .frame(maxWidth: .infinity)
                     .frame(height: height)
                     .clipped()
@@ -209,5 +222,11 @@ struct ArtBackdrop: View {
         .clipped()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .task(id: url) {
+            resolvedTint = nil
+            let color = await PaletteCache.shared.resolveIfAvailable(url: url, maxPixel: 320)
+            guard !Task.isCancelled else { return }
+            resolvedTint = color
+        }
     }
 }

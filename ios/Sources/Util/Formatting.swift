@@ -50,11 +50,45 @@ enum Formatting {
 
     // MARK: - Calendar / parts
 
+    /// Two calendars, built ONCE per (time zone, locale) and reused.
+    ///
+    /// `localParts` used to construct a `Calendar` on every call — 2.2 µs each on a Mac, and the
+    /// Schedule feed called it 22 days × 2 passes × every airing show × ~30 times per render. A
+    /// cached calendar is 0.65 µs, and the cache re-keys itself when the device's zone or locale
+    /// changes so a travelling user never keeps yesterday's calendar.
+    private final class CalendarStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var local: Calendar?
+        private var utc: Calendar?
+        private var stamp = ""
+
+        func calendar(_ anchor: TimeAnchor) -> Calendar {
+            lock.lock()
+            defer { lock.unlock() }
+            let current = "\(TimeZone.current.identifier)|\(Locale.current.identifier)"
+            if current != stamp { local = nil; utc = nil; stamp = current }
+            switch anchor {
+            case .local:
+                if let local { return local }
+                let cal = Self.make(anchor); local = cal; return cal
+            case .utcDate:
+                if let utc { return utc }
+                let cal = Self.make(anchor); utc = cal; return cal
+            }
+        }
+
+        private static func make(_ anchor: TimeAnchor) -> Calendar {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = anchor.timeZone
+            cal.locale = Locale.current
+            return cal
+        }
+    }
+
+    private static let calendars = CalendarStore()
+
     private static func calendar(_ anchor: TimeAnchor) -> Calendar {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = anchor.timeZone
-        cal.locale = Locale.current
-        return cal
+        calendars.calendar(anchor)
     }
 
     private static func date(_ ts: Int64) -> Date {
@@ -99,9 +133,7 @@ enum Formatting {
     private static func utcTimestamp(y: Int, mo: Int, d: Int) -> Int64? {
         var c = DateComponents()
         c.year = y; c.month = mo; c.day = d
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(secondsFromGMT: 0) ?? TimeZone.current
-        guard let date = utc.date(from: c) else { return nil }
+        guard let date = calendar(.utcDate).date(from: c) else { return nil }
         return Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 
@@ -302,6 +334,11 @@ enum Formatting {
     /// "Jun 24, 2026" — a year-qualified date, used for premieres that can be far in the future.
     static func fmtFullDate(_ ts: Int64, anchor: TimeAnchor = .local) -> String {
         string(ts, "MMMdyyyy", anchor)
+    }
+
+    /// "Oct 2026" — a month-precision date: Library's Returning captions and its month headers.
+    static func fmtMonthYear(_ ts: Int64, anchor: TimeAnchor = .local) -> String {
+        string(ts, "MMMyyyy", anchor)
     }
 
     /// Prettify a curated release string from FranchiseUpcoming. A bare ISO date or year-month

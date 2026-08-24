@@ -22,7 +22,9 @@ struct SignInView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showClerkAuth = false
-    @State private var devId = "demo-user"
+    /// `-devSignInId <clerkId>` launch argument (DEBUG, like `-recapDemo`): pre-fills the field so
+    /// a scripted simulator run can sign in without typing into the device.
+    @State private var devId = UserDefaults.standard.string(forKey: "devSignInId") ?? "demo-user"
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
@@ -138,6 +140,11 @@ private struct DevSignInCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
+            // `-devSignInAuto 1`: a scripted simulator run signs in on appear with the seeded id.
+            Color.clear.frame(height: 0)
+                .onAppear {
+                    if UserDefaults.standard.bool(forKey: "devSignInAuto"), !devId.isEmpty { onContinue() }
+                }
             SectionLabel(text: "Developer sign-in")
             Text("No Clerk key configured. Sign in with a dev user id (the backend must allow DEV_AUTH_BYPASS outside production).")
                 .type(ThemeType.metadata)

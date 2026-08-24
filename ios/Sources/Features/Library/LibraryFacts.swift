@@ -37,15 +37,15 @@ enum LibrarySection: Int, Hashable, Identifiable, CaseIterable {
 
     var id: Int { rawValue }
 
-    /// Board 05's word for the anticipation shelf is **Returning**, which is also the word its
-    /// captions use ("Returns Oct 2026"); `LibShelf.label` still says "Coming back".
+    /// The status shelves are named by `Copy.Status`, so a shelf heading, the detail picker and
+    /// a catalogue row cannot spell one state three ways. The two future-facts have their own words.
     var label: String {
         switch self {
-        case .returning: return "Returning"
-        case .announced: return "Announced"
-        case .watching:  return "Watching"
-        case .planned:   return "Planned"
-        case .finished:  return "Watched"
+        case .returning: return Copy.Library.returning
+        case .announced: return Copy.Library.announced
+        case .watching:  return Copy.Status(.watching)
+        case .planned:   return Copy.Status(.planned)
+        case .finished:  return Copy.Status(.completed)
         }
     }
 
@@ -81,8 +81,7 @@ enum LibraryShelving {
 
 // MARK: - "When does it come back"
 
-/// "Returns Oct 2" · "Returns Oct 2026" · "Returns in 2027" · "Returns in late 2027" ·
-/// "No date announced".
+/// "Returns Oct 2" · "Returns Oct 2026" · "Returns 2027" · "Returns late 2027" · "No date announced".
 ///
 /// A dated premiere among the parts is the best fact there is, so it wins. Otherwise the curated
 /// release window is read at whatever precision it actually has — and re-emitted at the SHORTEST
@@ -90,6 +89,10 @@ enum LibraryShelving {
 /// `October 2026`, and `Returns October 2026` is 20 characters in a 124-pt caption, which is how
 /// the shelf ended up printing `Returns October…`. Board 09's rule is to drop a fact, never to
 /// truncate one.
+///
+/// ONE grammar: `TemporalCopy.returns`'s verb followed by the date word at its own precision.
+/// "Returns in 2027" beside "Returns Jan 2027" was two forms of one fact six rows apart, and the
+/// preposition was the only difference a reader could see.
 ///
 /// `dated` is false only for "No date announced" — the one caption that must never be amber, and
 /// now also the thing that keeps a show out of a section headed RETURNING.
@@ -121,8 +124,15 @@ struct ReturnFact {
         ReturnFact(text: text, dated: true, soon: at.map { $0 - now <= soonHorizon } ?? false)
     }
 
+    /// `TemporalCopy.returns`'s verb over a window it has no instant for — a month, a year, "late
+    /// 2027". One prefix, so the shelf cannot phrase the same fact two ways.
+    /// SHARED-FILE REQUEST: `TemporalCopy.returns(window:)`, so the verb has exactly one home.
+    private static func returns(window: String) -> String { "Returns \(window)" }
+
+    /// Minute precision is all a return date needs; reading `nowMinute` keeps the Library from
+    /// re-deriving every caption on the 20-second tick.
     static func of(_ f: Franchise, appModel: AppModel) -> ReturnFact {
-        let now = appModel.now
+        let now = appModel.nowMinute
         func unknown() -> ReturnFact {
             ReturnFact(text: TemporalCopy.returns(at: nil, now: now, source: f.source),
                        dated: false, soon: false)
@@ -140,33 +150,37 @@ struct ReturnFact {
             return known(TemporalCopy.returns(at: at, now: now, source: .tmdb), at: at, now: now)
         }
         // Everything else settles at month-and-year: "Returns Oct 2026" fits, "Oct 2, 2027" does
-        // not, and a day nine months out is not a fact anybody acts on.
+        // not, and a day nine months out is not a fact anybody acts on. A curated window is a
+        // calendar date, so it is read as one (`.utcDate`) whatever the franchise's source.
         if key.precision >= 2, let date = utcDay(y: y, month: month, day: 1) {
-            return known("Returns \(monthYear.string(from: date))", at: ms(date), now: now)
+            let at = ms(date)
+            return known(returns(window: LibraryDates.monthYear(at, anchor: .utcDate)), at: at, now: now)
         }
         // `releaseSortKey` only reads ISO, but the curated windows arrive as prose — "October 2026"
         // resolves to year precision there and would throw away a month we actually know.
         let window = upcoming.displayRelease.trimmingCharacters(in: .whitespacesAndNewlines)
         if let date = parseWindow(window) {
-            return known("Returns \(monthYear.string(from: date))", at: ms(date), now: now)
+            let at = ms(date)
+            return known(returns(window: LibraryDates.monthYear(at, anchor: .utcDate)), at: at, now: now)
         }
-        // Anything that is not a month is a WINDOW, and a window takes the preposition: "Returns in
-        // 2027", "Returns in late 2027" — never "Returns 2027", and never the server's capital
-        // dropped into the middle of a sentence. One rule, so six rows cannot phrase it four ways.
-        // A window is never `soon`: "in late 2027" is not a step anybody takes this week.
+        // Anything that is not a month is a WINDOW, stated in the same grammar as a date: "Returns
+        // 2027", "Returns late 2027" — never the server's capital dropped into the middle of a
+        // sentence. A window is never `soon`: "late 2027" is not a step anybody takes this week,
+        // and with no instant behind it the colour rule has nothing to measure.
         if window.count == 4, Int(window) != nil {
-            return known("Returns in \(window)", at: nil, now: now)
+            return known(returns(window: window), at: nil, now: now)
         }
         if !window.isEmpty, window.count <= 20 {
-            return known("Returns in \(ReturnFact.lowerFirst(window))", at: nil, now: now)
+            return known(returns(window: ReturnFact.lowerFirst(window)), at: nil, now: now)
         }
         // A window too long to state whole is reduced to its year rather than ellipsed.
-        if y > 1900 { return known("Returns in \(y)", at: nil, now: now) }
+        if y > 1900 { return known(returns(window: String(y)), at: nil, now: now) }
         return unknown()
     }
 
-    /// `String.lowercasedFirst()` lives `fileprivate` in `Copy.swift`; this is the same rule.
-    /// SHARED-FILE REQUEST: raise that helper's visibility rather than keeping two of it.
+    /// `String.lowercasedFirst()` lives `private` in `Copy.swift` and `fileprivate` again in
+    /// `FranchiseDetailView.swift`; this is the same rule a third time.
+    /// SHARED-FILE REQUEST: raise that helper's visibility rather than keeping three of it.
     nonisolated static func lowerFirst(_ s: String) -> String {
         guard let first = s.first else { return s }
         return first.lowercased() + s.dropFirst()
@@ -197,14 +211,20 @@ struct ReturnFact {
         calendar.timeZone = TimeZone(identifier: "UTC") ?? .gmt
         return calendar.date(from: parts)
     }
+}
 
-    /// "Oct 2026" — locale-ordered, so a device set to a different region still reads correctly.
-    private static let monthYear: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.setLocalizedDateFormatFromTemplate("MMMyyyy")
-        return formatter
-    }()
+/// The Library's one month-and-year date, for a Returning caption and a month header alike.
+enum LibraryDates {
+    /// "Oct 2026" — locale-ordered, read in `anchor`'s calendar so a TMDB date-only instant and
+    /// an AniList instant each land in the month they actually belong to.
+    ///
+    /// Goes through `Formatting` rather than a private `DateFormatter`: two of those lived in this
+    /// feature (one per surface) and neither honoured the time anchor. `prettyReleaseString` is
+    /// the one `Formatting` path that already emits the "MMMyyyy" skeleton, so the parts are read
+    /// in the right calendar here and formatted there.
+    static func monthYear(_ ts: Int64, anchor: Formatting.TimeAnchor) -> String {
+        Formatting.fmtMonthYear(ts, anchor: anchor)
+    }
 }
 
 // MARK: - Row facts
@@ -240,8 +260,13 @@ struct LibraryRowFacts {
             // The shipped rows fell through to "TV · 2024" whenever a Watching show's current part
             // had not aired yet, so four consecutive Watching rows read "Caught up", "TV · 2024",
             // "Anime · 2019" and "Season 7 · Episode 5 next" with no visible reason for the change.
-            if let step = progress(f, now: appModel.now) {
-                return LibraryRowFacts(lead: step, meta: nil)
+            //
+            // A rewatch in flight is the one lead this shelf keeps: it is a step the user chose.
+            if let re = rewatch(f) { return LibraryRowFacts(lead: re, meta: nil) }
+            // The step itself rides the GREY line. Behind-counts and amber belong to Today — the
+            // urgency pact — so the Library says where you stand and never how far behind you are.
+            if let step = nextStep(f, now: appModel.nowMinute) {
+                return LibraryRowFacts(lead: nil, meta: step)
             }
             // The return date only replaces "Caught up" when there is genuinely nothing airing:
             // a show you are mid-season on says where you stand, not when its next season lands.
@@ -261,7 +286,7 @@ struct LibraryRowFacts {
         case .planned, .finished:
             // A rewatch in flight outranks every settled word: it is forward-looking, so it leads.
             if let re = rewatch(f) { return LibraryRowFacts(lead: re, meta: nil) }
-            return LibraryRowFacts(lead: nil, meta: settled(f, now: appModel.now) ?? identity(f))
+            return LibraryRowFacts(lead: nil, meta: settled(f, now: appModel.nowMinute) ?? identity(f))
         }
     }
 
@@ -290,9 +315,9 @@ struct LibraryRowFacts {
             return compact ? state : "\(state) \u{00B7} \(extra)"
         }
         func lead(_ full: String) -> String {
-            compact ? (shortStep(f, now: appModel.now) ?? full) : full
+            compact ? (shortStep(f, now: appModel.nowMinute) ?? full) : full
         }
-        if let step = progress(f, now: appModel.now) {
+        if let step = progress(f, now: appModel.nowMinute) {
             return LibraryRowFacts(lead: lead(step), meta: compact ? nil : state)
         }
         // A rewatch of a WATCHED show never reached `progress()` (it guards on `.watching`), so the
@@ -315,7 +340,7 @@ struct LibraryRowFacts {
             if fact.soon { return LibraryRowFacts(lead: fact.text, meta: compact ? nil : state) }
             return LibraryRowFacts(lead: nil, meta: joined(fact.text))
         }
-        if let settled = settled(f, now: appModel.now) {
+        if let settled = settled(f, now: appModel.nowMinute) {
             return LibraryRowFacts(lead: nil, meta: joined(settled))
         }
         if let standing = standing(f) {
@@ -354,14 +379,21 @@ struct LibraryRowFacts {
         return "\(active.title) \u{00B7} \(Copy.Progress.episodeNext(p.progress + 1))"
     }
 
-    /// The forward-looking step, in amber, and only when there genuinely is one. A settled state
-    /// ("Caught up", "Watched twice") is never a lead.
+    /// The catalogue's forward-looking step, in amber, and only when there genuinely is one. A
+    /// settled state ("Caught up", "Watched twice") is never a lead.
     static func progress(_ f: Franchise, now: Int64) -> String? {
         guard f.effectiveStatus == .watching, let p = f.currentPart, !p.isUpcoming else { return nil }
         if let re = rewatch(f) { return re }
         if p.isReleasing { return p.episodesBehind > 0 ? Copy.Progress.behind(p.episodesBehind) : nil }
-        let left = max(0, p.markTarget(now: now) - p.progress)
-        return left > 0 ? "\(p.watchContext(episode: p.progress + 1)) next" : nil
+        return nextStep(f, now: now)
+    }
+
+    /// "Season 7 · Episode 5 next" / "Episode 5 next" — the next episode that exists and has aired,
+    /// or nil when there is nothing to watch. `Franchise.watchContext(part:episode:)` is THE
+    /// context rule (season only on a multi-part show) and `Copy.Progress.next` the only postfix.
+    static func nextStep(_ f: Franchise, now: Int64) -> String? {
+        guard let p = f.currentPart, !p.isUpcoming, p.markTarget(now: now) > p.progress else { return nil }
+        return Copy.Progress.next(context: f.watchContext(part: p, episode: p.progress + 1))
     }
 
     /// The same step with its context dropped — "Episode 5 next" where the row says "Season 7 ·

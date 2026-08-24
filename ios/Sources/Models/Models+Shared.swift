@@ -141,7 +141,16 @@ extension Franchise {
 
     /// "Anime" | "TV" — the word for what this is, in the user's vocabulary. Board 09 never says
     /// "AniList" or "TMDB" to a viewer.
-    var kindWord: String { source == .tmdb ? "TV" : "Anime" }
+    var kindWord: String { source.kindWord }
+
+    /// THE watch-context rule: "Season 7 · Episode 5" on a multi-part franchise, "Episode 5" on a
+    /// single one. Today owned this rule privately while Library and Schedule always printed the
+    /// season and Detail's Next up card never did — one fact, three grammars. Every screen calls
+    /// this now.
+    func watchContext(part: FranchisePart, episode n: Int) -> String {
+        if part.kind == .movie { return part.canonicalLabel }
+        return parts.count > 1 ? Copy.watchContext(part: part.canonicalLabel, episode: n) : Copy.episode(n)
+    }
 
     /// The value `UndoState.removedFranchise` carries. `Franchise` is a value type, so this is the
     /// whole show — parts, progress and status — frozen at the instant of the removal. That is what
@@ -156,4 +165,11 @@ extension WatchStatus {
     /// user's word is "Watched" (SYS-4 — "Finished" is out of the vocabulary; it was carrying both
     /// the user's list state and the series' production state).
     var displayName: String { Copy.Status(self) }
+}
+
+extension MediaSource {
+    /// "Anime" | "TV" — the word for what a title is, in the user's vocabulary. Board 09 never says
+    /// "AniList" or "TMDB" to a viewer. Lives on the source so `FranchiseSummary` (Search) and
+    /// `Franchise` (Library, Detail) cannot spell it differently.
+    var kindWord: String { self == .tmdb ? "TV" : "Anime" }
 }

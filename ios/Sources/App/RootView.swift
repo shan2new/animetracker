@@ -69,7 +69,10 @@ enum AppTab: Int, CaseIterable, Hashable {
         case .today:    "Today"
         case .schedule: "Schedule"
         case .library:  "Library"
-        case .discover: "Add"
+        // "Search", the same word the screen's title and the field's prompt use, and the word
+        // VoiceOver already speaks for a search-role tab. It said "Add" — a tab named for one of
+        // the things you can do on it, under a magnifier glyph.
+        case .discover: "Search"
         }
     }
 
@@ -79,7 +82,7 @@ enum AppTab: Int, CaseIterable, Hashable {
         case .today:    "Today"
         case .schedule: "Schedule"
         case .library:  "Library"
-        case .discover: "Add"
+        case .discover: "Search"
         }
     }
 
@@ -99,7 +102,7 @@ enum AppTab: Int, CaseIterable, Hashable {
 // separated search island for a search-role tab.
 struct MainTabView: View {
     @Environment(AppModel.self) private var appModel
-    @State private var selectedTab: AppTab = .today
+    @State private var selectedTab: AppTab = MainTabView.launchTab
     /// One navigation path per tab; Detail and its episode list push onto the active tab's path.
     @State private var paths: [AppTab: NavigationPath] = [:]
     /// An All-titles route requested from another tab, consumed by LibraryView on arrival.
@@ -117,6 +120,22 @@ struct MainTabView: View {
         Binding(get: { paths[tab] ?? NavigationPath() }, set: { paths[tab] = $0 })
     }
 
+    /// `-openTab today|schedule|library|discover` (DEBUG, like `-recapDemo`): open a scripted
+    /// simulator run on a given tab for captures. `-openAllTitles 1` lives on `LibraryView`.
+    private static var launchTab: AppTab {
+        #if DEBUG
+        switch UserDefaults.standard.string(forKey: "openTab") {
+        case "schedule": return .schedule
+        case "library": return .library
+        case "discover", "search": return .discover
+        default: return .today
+        }
+        #else
+        return .today
+        #endif
+    }
+
+
     /// Re-selecting the active tab pops it to its root (system behaviour, made explicit).
     private var selection: Binding<AppTab> {
         Binding(get: { selectedTab }, set: { tab in
@@ -124,29 +143,39 @@ struct MainTabView: View {
         })
     }
 
+
     var body: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: selection) {
                 Tab(AppTab.today.titleKey, image: AppTab.today.icon, value: AppTab.today) {
                     NavigationStack(path: path(.today)) {
                         TodayView(onOpenDetail: openDetail,
-                                  onSeeAllWatching: { selectedTab = .library },
+                                  // The same route Library's own "See all" takes — a filtered
+                                  // All titles — not a bare tab switch to the root, which left
+                                  // "See all" meaning three things across two screens.
+                                  onSeeAllWatching: {
+                                      libraryRequest = .init(status: .watching)
+                                      selectedTab = .library
+                                  },
+                                  // No status: Today's "N updates" counts `outNow`, which is any
+                                  // status. Pinning Watching here made the count and the list
+                                  // disagree the moment a Paused show aired.
                                   onViewAllUpdates: {
-                                      libraryRequest = .init(status: .watching, unwatchedOnly: true)
+                                      libraryRequest = .init(status: nil, unwatchedOnly: true)
                                       selectedTab = .library
                                   },
                                   onOpenLibrary: { status in
                                       libraryRequest = .init(status: status)
                                       selectedTab = .library
                                   },
-                                  onAddShow: { selectedTab = .discover })
+                                  onAddShow: { appModel.searchFieldRequested = true; selectedTab = .discover })
                             .detailDestinations(zoom: zoom, push: { push(.today, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .today)
                 }
                 Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
                     NavigationStack(path: path(.schedule)) {
-                        ScheduleView(onOpenDetail: openEpisode, onAddShow: { selectedTab = .discover })
+                        ScheduleView(onOpenDetail: openEpisode, onAddShow: { appModel.searchFieldRequested = true; selectedTab = .discover })
                             .detailDestinations(zoom: zoom, push: { push(.schedule, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .schedule)
@@ -154,13 +183,16 @@ struct MainTabView: View {
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
                     NavigationStack(path: path(.library)) {
                         LibraryView(onOpenDetail: openDetail,
-                                    onAddShow: { selectedTab = .discover },
+                                    onAddShow: { appModel.searchFieldRequested = true; selectedTab = .discover },
                                     requestedAll: $libraryRequest)
                             .detailDestinations(zoom: zoom, push: { push(.library, $0) })
                     }
                     .pageInTransition(isActive: selectedTab == .library)
                 }
-                Tab(value: AppTab.discover, role: .search) {
+                // An ORDINARY tab in the one tab pill, not the separated search island: the
+                // field lives under the title on the screen itself (Apple Music's Search — user
+                // reference, 24 Aug), which the search role's tab-bar morph did not allow.
+                Tab(AppTab.discover.titleKey, systemImage: "magnifyingglass", value: AppTab.discover) {
                     NavigationStack(path: path(.discover)) {
                         DiscoverView(onOpenDetail: openDetail)
                             .detailDestinations(zoom: zoom, push: { push(.discover, $0) })

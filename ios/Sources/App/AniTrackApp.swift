@@ -9,6 +9,7 @@ struct AniTrackApp: App {
 
     init() {
         Self.applyBrandFont()
+        AppAppearance.install()
         // Configure Clerk synchronously so Clerk.shared is valid before the view hierarchy builds.
         if AppConfig.isClerkConfigured {
             Clerk.configure(publishableKey: AppConfig.clerkPublishableKey)

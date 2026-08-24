@@ -111,6 +111,15 @@ struct Episode: Codable, Identifiable, Sendable {
     }
 }
 
+// MARK: - Airing
+
+/// One dated episode of a part inside Schedule's window (`airings` on the contract): the number
+/// and the instant. TMDB's instant is date-only (17:00 UTC) — read it in the source's calendar.
+struct Airing: Codable, Hashable, Sendable {
+    let episode: Int
+    let at: Int64
+}
+
 // MARK: - Release precision
 
 /// How precisely the next release instant is known — **stated by the server, never inferred from
@@ -174,6 +183,9 @@ struct FranchisePart: Codable, Identifiable, Sendable {
     let episodes: [Episode]    // detail response only; [] on list/library payloads
     /// The honest shape of `nextAiringAt`. `nil` from a server that predates the field.
     let release: ReleasePrecision?
+    /// Dated episodes 8 days back … 15 days ahead, oldest first, on EVERY payload — the calendar's
+    /// per-episode facts. `[]` from a server that predates the field; see `scheduleAirings`.
+    let airings: [Airing]
 
     var id: Int { mediaId }
 
@@ -182,7 +194,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         case mediaId, kind, sequence, label, title, cover, banner, format, status
         case isReleasing, totalEpisodes, airedEpisodes, nextEpisodeNumber, nextAiringAt
         case lastAiredAt, synopsis, genres, progress
-        case year, studios, nextAiringCount, episodes, release
+        case year, studios, nextAiringCount, episodes, release, airings
     }
 
     init(from decoder: Decoder) throws {
@@ -211,6 +223,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         // `Episode.id` is its number, so a malformed/duplicate 0 would collide inside a ForEach.
         episodes = ((try? c.decode([Episode].self, forKey: .episodes)) ?? []).filter { $0.number > 0 }
         release = try? c.decodeIfPresent(ReleasePrecision.self, forKey: .release)
+        airings = ((try? c.decode([Airing].self, forKey: .airings)) ?? []).filter { $0.episode > 0 && $0.at > 0 }
     }
 
     // Memberwise init for previews/tests. New fields default so existing call sites keep working.
@@ -220,7 +233,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
          nextEpisodeNumber: Int?, nextAiringAt: Int64?, lastAiredAt: Int64?,
          synopsis: String?, genres: [String], progress: Int,
          year: Int? = nil, studios: [String] = [], nextAiringCount: Int = 0, episodes: [Episode] = [],
-         release: ReleasePrecision? = nil) {
+         release: ReleasePrecision? = nil, airings: [Airing] = []) {
         self.mediaId = mediaId; self.kind = kind; self.sequence = sequence
         self.label = label; self.title = title; self.cover = cover; self.banner = banner
         self.format = format; self.status = status; self.isReleasing = isReleasing
@@ -231,6 +244,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         self.year = year; self.studios = studios
         self.nextAiringCount = nextAiringCount; self.episodes = episodes
         self.release = release
+        self.airings = airings
     }
 
     /// A copy with the episode list replaced — grafts detail-fetched episodes onto the live
@@ -242,7 +256,23 @@ struct FranchisePart: Codable, Identifiable, Sendable {
                       nextEpisodeNumber: nextEpisodeNumber, nextAiringAt: nextAiringAt, lastAiredAt: lastAiredAt,
                       synopsis: synopsis, genres: genres, progress: progress,
                       year: year, studios: studios, nextAiringCount: nextAiringCount, episodes: eps,
-                      release: release)
+                      release: release, airings: airings)
+    }
+
+    /// The calendar facts for this part. `airings` when the server sent them; otherwise the two
+    /// slots every server has always published — the next episode and the latest aired one — so a
+    /// weekly show still lands on its next date and its last one. Ascending by instant.
+    var scheduleAirings: [Airing] {
+        if !airings.isEmpty { return airings }
+        var out: [Airing] = []
+        if let last = lastAiredAt, last > 0, airedEpisodes > 0 {
+            out.append(Airing(episode: airedEpisodes, at: last))
+        }
+        if let next = nextAiringAt, next > 0 {
+            let ep = nextEpisodeNumber ?? airedEpisodes + 1
+            if !out.contains(where: { $0.episode == ep }) { out.append(Airing(episode: ep, at: next)) }
+        }
+        return out.sorted { $0.at < $1.at }
     }
 
     /// Unwatched episodes that have already aired (0 unless currently releasing).
@@ -710,6 +740,20 @@ extension Franchise {
     var effectiveStatus: WatchStatus {
         status ?? subscription?.status ?? .planned
     }
+
+    /// Does this show belong on the CALENDAR surfaces — Schedule, and Today's "Out now" /
+    /// "Airing soon" / Now Bar?
+    ///
+    /// A `planned` show is in your library but not in your week. You are not behind on it and you
+    /// are not waiting on its next episode; it is something you might start. Without this test a
+    /// mid-broadcast show you had only shelved arrived on Today as "20 episodes behind" and on
+    /// Schedule with a mark ring whose action was "Mark 20 episodes as watched" — an obligation
+    /// invented out of a bookmark, which is exactly what the urgency pact forbids.
+    ///
+    /// Every other status keeps its airings, deliberately: a `completed` show that starts a new
+    /// season is news, and a `paused` one still has a calendar. `EpisodeNotifications` and
+    /// `AiringLiveActivityManager` gate harder still (`watching` only) — they interrupt you.
+    var tracksAirings: Bool { effectiveStatus != .planned }
 
     /// Parts grouped into ordered sections for the detail screen. Seasons are listed newest-first
     /// (reverse sequence) so the latest season is at the top; other kinds stay chronological.

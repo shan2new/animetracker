@@ -260,7 +260,7 @@ enum Skeleton {
 
             // Captioned, and leading-inset only: the real shelf runs off the trailing edge, so a
             // skeleton that stops short of it hands off to a wider list than it drew.
-            SkeletonShelf(size: PosterSize.shelfMedium.size, caption: true)
+            SkeletonShelf(size: PosterSize.todayShelf.size, caption: true)
                 .padding(.leading, ThemeSpace.x4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

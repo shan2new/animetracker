@@ -605,6 +605,12 @@ struct MediaRow<Trailing: View>: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.listTrailingInset) private var trailingInset
     private var isAX: Bool { typeSize.isAccessibilitySize }
+    private var minimumRowHeight: CGFloat {
+        switch slot {
+        case .queue, .todayQueue: ThemeMetrics.rowStandard
+        default: ThemeMetrics.rowMedia
+        }
+    }
 
     var body: some View {
         Button(action: action) {
@@ -646,8 +652,9 @@ struct MediaRow<Trailing: View>: View {
             }
             .padding(.trailing, trailingInset)
             .padding(.vertical, ThemeSpace.x2)
-            .frame(minHeight: slot == .row ? ThemeMetrics.rowStandard : ThemeMetrics.rowMedia,
-                   alignment: .leading)
+            // Catalogue rows keep the heavier height. Purpose-built compact slots preserve the
+            // same 44-pt controls inside a denser reading rhythm.
+            .frame(minHeight: minimumRowHeight, alignment: .leading)
             .contentShape(Rectangle())
             // Past / already-handled rows recede as a GROUP rather than each element being given
             // its own grey — one opacity keeps the artwork's colour relationship intact.
@@ -720,12 +727,11 @@ struct ShelfCard: View {
                     Text(title.shelfShortened)
                         .type(ThemeType.shelfTitle)
                         .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(3, reservesSpace: !typeSize.isAccessibilitySize)
-                        // DIRECTION §3: never truncate an identity title. Two lines were correctly
-                        // reserved, but nothing caught the titles that overflow them — so the app
-                        // cut "That Time I Got / Reincarn…" on a shelf while Library's row rendered
-                        // the same title whole. Tightening plus a 0.82 floor buys ~3 characters a
-                        // line before anything is lost.
+                        // NOTHING reserved: the caption sits directly under the title, one line
+                        // or two. Reserving a second line put an empty band between every
+                        // one-line name and its date (user, 24 Aug); a two-line name simply
+                        // carries its caption one line lower. Never truncated (DIRECTION §3).
+                        .lineLimit(typeSize.isAccessibilitySize ? 1...6 : 1...2)
                         .minimumScaleFactor(0.82)
                         .allowsTightening(true)
                         .multilineTextAlignment(.leading)
@@ -922,6 +928,10 @@ struct ScrollEdgeChrome: View {
     let side: Side
     /// Top only: total height, safe area included.
     var height: CGFloat = ThemeMetrics.topChromeHeight
+    /// Top only: NO solid hold over the status bar — the art runs to the top edge of the screen
+    /// under a gradient that only softens it (Apple Music's Search, the user's reference). The
+    /// default keeps the opaque status-bar band for screens whose rows pass under the clock.
+    var soft = false
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -932,6 +942,12 @@ struct ScrollEdgeChrome: View {
     /// glass and glass with nothing behind it is a grey pill.
     private var veil: LinearGradient {
         switch side {
+        case .top where soft:
+            return LinearGradient(stops: [
+                .init(color: ThemeColor.chromeVeil.opacity(0.55), location: 0),
+                .init(color: ThemeColor.chromeVeil.opacity(0.30), location: 0.5),
+                .init(color: ThemeColor.chromeVeil.opacity(0), location: 1),
+            ], startPoint: .top, endPoint: .bottom)
         case .top:
             return LinearGradient(stops: [
                 .init(color: ThemeColor.chromeVeil, location: 0),
@@ -968,6 +984,12 @@ struct ScrollEdgeChrome: View {
     /// straight across the screen — which is precisely what a hand-rolled scroll edge looks like.
     private var blurMask: LinearGradient {
         switch side {
+        case .top where soft:
+            return LinearGradient(stops: [
+                .init(color: .black.opacity(0.6), location: 0),
+                .init(color: .black.opacity(0.3), location: 0.5),
+                .init(color: .clear, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
         case .top:
             return LinearGradient(stops: [
                 .init(color: .black, location: 0),
@@ -1022,11 +1044,14 @@ private struct ScrollEdgeChromeModifier: ViewModifier {
     let top: Bool
     let bottom: Bool
     let topHeight: CGFloat
+    var softTop = false
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) { if bottom { ScrollEdgeChrome(side: .bottom) } }
-            .overlay(alignment: .top) { if top { ScrollEdgeChrome(side: .top, height: topHeight) } }
+            .overlay(alignment: .top) {
+                if top { ScrollEdgeChrome(side: .top, height: topHeight, soft: softTop) }
+            }
     }
 }
 
@@ -1060,8 +1085,9 @@ extension View {
     }
 
     func scrollEdgeChromeBody(top: Bool = true, bottom: Bool = true,
-                          topHeight: CGFloat = ThemeMetrics.topChromeHeight) -> some View {
-        modifier(ScrollEdgeChromeModifier(top: top, bottom: bottom, topHeight: topHeight))
+                          topHeight: CGFloat = ThemeMetrics.topChromeHeight,
+                          softTop: Bool = false) -> some View {
+        modifier(ScrollEdgeChromeModifier(top: top, bottom: bottom, topHeight: topHeight, softTop: softTop))
     }
 
     /// Bottom clearance for a tab root's scroll view, as a scroll-content MARGIN.
@@ -1217,6 +1243,40 @@ struct OverArtLabel: View {
 
 /// A selectable chip — search scope, a recent query, a filter value.
 ///
+/// An ACTIVE filter chip: `accentSoft` ground, `accent` label, removable. Distinct from
+/// `ChipButtonStyle`, whose selected state is a solid accent capsule meant for a primary choice (a
+/// search scope) — four solid amber capsules above a list is louder than anything on the screen
+/// they are filtering. Library and Schedule each carried a private copy of this (Schedule's without
+/// the pressed ground); this is the one.
+struct FilterChipStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .type(ThemeType.metadataEmphasis)
+            .foregroundStyle(ThemeColor.accent)
+            .padding(.horizontal, ThemeSpace.x3)
+            .frame(minHeight: 32)
+            .background {
+                Capsule().fill(configuration.isPressed ? ThemeColor.surfacePressed : ThemeColor.accentSoft)
+            }
+            .contentShape(Capsule())
+            .frame(minHeight: 44)
+            .pressFeedback(configuration.isPressed, reduceMotion: reduceMotion)
+    }
+}
+
+/// The label of a removable filter chip: the criterion and an ×. Pair with `FilterChipStyle`.
+struct FilterChipLabel: View {
+    let text: String
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(text)
+            Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+        }
+    }
+}
+
 /// Unselected chips carry NO stroke. The shipped Search screen draws a grey-outlined pill for
 /// every scope and every recent query, so eight outlined objects compete with the three posters
 /// underneath them. Tone alone separates an unselected chip from the canvas; the selected one is

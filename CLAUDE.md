@@ -112,7 +112,27 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
 - Navigation: Detail is a push on the active tab's `NavigationPath` (`DetailRoute`, `RootView`);
   re-selecting the active tab pops to root. Watch sessions live in `RewatchStore` (device-local JSON).
 - `API_BASE_URL` is a build setting in `project.yml` → `Info.plist` → `AppConfig.apiBaseURL`.
-- Debug-only launch arg `-recapDemo 1` forces the full Previously Recap on Today (captures/reviews).
+- **Schedule is an agenda** (reworked 2026-08-24): a plain sectioned `LazyVStack`, one section per
+  day that carries something, empty days omitted, aired days folded into one "Earlier" row above
+  today. **Today is the exception — its section is always drawn, empty or not** (it prints
+  "Nothing scheduled"), and "today" in this screen always means day 0, never "the first day that
+  carries something". Both halves of that are load-bearing: with the empty section skipped the feed
+  opened on a future day, the "Today" button hid itself (`selectedDay == landing` — by its own test
+  you were already there), and a row's bare clock read as tonight. Rows are `MediaRow`; there is no
+  timeline rail, no pinned header and no hand-rolled scroll tracking
+  (`onScrollTargetVisibilityChange` reports the top day, `ScrollViewProxy` does the two programmatic
+  scrolls). Section headers must NOT paint a ground — an opaque plate cuts a hard step across the
+  root wash. The feed walks `FranchisePart.airings` (every dated episode in the window) via
+  `AppModel.scheduleDays`; `scheduleAirings` falls back to the next/last slots against a server that
+  predates the field, which shows each weekly show once.
+- **`planned` shows are not on the calendar.** `Franchise.tracksAirings` gates both Schedule
+  (`buildScheduleDays`) and Today (`airingFranchises` → Out now / Airing soon / Now Bar); episode
+  notifications and the Live Activity gate harder (`watching` only). A shelved mid-broadcast show
+  otherwise arrived as "20 episodes behind" with a "Mark 20 episodes as watched" ring — an
+  obligation invented out of a bookmark. Every other status keeps its airings.
+- Debug-only launch args: `-recapDemo 1` forces the full Previously Recap on Today;
+  `-scheduleEarlier 1`, `-scheduleFilter anime|tv` and `-scheduleHideWatched 1` open Schedule in
+  those states (toolbar/menu taps do not land reliably on the iOS 27 simulator).
 
 ## Don't commit
 
