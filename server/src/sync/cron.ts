@@ -3,7 +3,14 @@ import { env } from '../env.js'
 import { refreshSubscribedNews } from '../news/service.js'
 import { refreshSubscribedAniListEnrichment } from '../services/catalogEnrichment.js'
 import { tmdbEnabled } from '../tmdb/client.js'
-import { attachNewSeasons, refreshAiring, refreshAiringTv, seedTrending, seedTrendingTv } from './sync.js'
+import {
+  attachNewSeasons,
+  refreshAiring,
+  refreshAiringTv,
+  seedTrending,
+  seedTrendingTv,
+  sweepAniListTrailers,
+} from './sync.js'
 
 let started = false
 
@@ -27,6 +34,18 @@ export function startCron(): void {
       } catch (err) {
         console.error('[cron] refreshAiringTv failed:', (err as Error).message)
       }
+    }
+    try {
+      const result = await sweepAniListTrailers()
+      if (result.providerReachable === false) {
+        console.warn('[cron] AniList trailer sweep deferred: provider unavailable')
+      } else if (result.scanned > 0) {
+        console.log(
+          `[cron] AniList trailer sweep: scanned ${result.scanned}, upserted ${result.upserted}, complete=${result.complete}`,
+        )
+      }
+    } catch (err) {
+      console.error('[cron] AniList trailer sweep failed:', (err as Error).message)
     }
   })
 
