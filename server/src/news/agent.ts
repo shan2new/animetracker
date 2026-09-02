@@ -2,7 +2,7 @@ import os from 'node:os'
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { env } from '../env.js'
-import type { FranchiseUpcoming } from '../types/api.js'
+import type { FranchiseUpcoming, MediaSource } from '../types/api.js'
 
 export const UPCOMING_STATUSES = [
   'airing',
@@ -41,6 +41,8 @@ const NEWS_JSON_SCHEMA = {
 
 export interface NewsResearchInput {
   title: string
+  /** Selects source-appropriate language and authorities for anime versus general television. */
+  catalogueSource: MediaSource
   /** Short descriptions of the parts we already track, e.g. "Season 2 (TV, FINISHED, 2024)". */
   knownParts: string[]
   /** What we currently believe (last run's result), if anything. */
@@ -49,7 +51,7 @@ export interface NewsResearchInput {
   knownAnnouncements: string[]
 }
 
-function buildPrompt(input: NewsResearchInput): string {
+export function buildNewsPrompt(input: NewsResearchInput): string {
   const parts = input.knownParts.length
     ? input.knownParts.map((p) => `- ${p}`).join('\n')
     : '- (none tracked yet)'
@@ -60,7 +62,13 @@ function buildPrompt(input: NewsResearchInput): string {
     ? `\nUpcoming installments we already recorded:\n${input.knownAnnouncements.map((a) => `- ${a}`).join('\n')}\nIf your finding refers to one of these, reuse EXACTLY the same name in \`next\` — do not reword it.`
     : ''
 
-  return `You are researching official news about the anime franchise "${input.title}".
+  const subject = input.catalogueSource === 'tmdb' ? 'television series' : 'anime franchise'
+  const task =
+    input.catalogueSource === 'tmdb'
+      ? 'Search the web for the latest news about the NEXT installment of this series (new season, continuation, reunion/special, or direct follow-up). Cover official announcements with dates, official renewals without dates, and credible production reports or rumors. Prefer the official streamer/network or production company, then reputable trade publications such as Deadline, Variety, and The Hollywood Reporter. For Netflix titles, prefer Netflix Tudum or About Netflix. Ignore fan speculation and unsourced renewal predictions.'
+      : 'Search the web for the latest news about the NEXT installment of this franchise (new season, sequel film, next part/cour, or direct continuation). Cover official announcements with dates, official announcements without dates, and credible production reports or rumors. Prefer the official site or official X/Twitter account, Anime News Network, Crunchyroll News, Natalie, or Oricon. Ignore fan speculation with no sourcing.'
+
+  return `You are researching official news about the ${subject} "${input.title}".
 
 Installments we already track:
 ${parts}
@@ -69,7 +77,13 @@ ${current}${known}
 
 Today's date: ${new Date().toISOString().slice(0, 10)}.
 
-Task: search the web for the latest news about the NEXT installment of this franchise (new season, sequel film, next part/cour, direct continuation). Cover the full range: official announcements with dates, official announcements without dates, and credible rumors or production reports. Prefer authoritative sources: the official site or official X/Twitter account, Anime News Network, Crunchyroll News, Natalie, Oricon. Ignore fan speculation with no sourcing.
+Task: ${task}
+
+Important: "next" means the earliest installment the viewer has not received yet, not an
+installment after every row in our catalogue. If Installments we already track contains a
+RELEASING or NOT_YET_RELEASED season/film, report and verify that installment first. Do not call a
+series concluded merely because that already-catalogued future installment is its announced final
+season.
 
 Classify the situation into exactly one status:
 - airing: the next installment is currently airing
@@ -106,7 +120,7 @@ function subprocessEnv(): Record<string, string> {
  */
 export async function researchFranchiseNews(input: NewsResearchInput): Promise<NewsResult | null> {
   const q = query({
-    prompt: buildPrompt(input),
+    prompt: buildNewsPrompt(input),
     options: {
       allowedTools: ['WebSearch', 'WebFetch'],
       permissionMode: 'dontAsk',

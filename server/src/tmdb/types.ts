@@ -12,6 +12,7 @@ export type TmdbShowStatus =
 export interface TmdbSearchResult {
   id: number
   name: string
+  original_name?: string | null
   genre_ids: number[]
   origin_country: string[]
   poster_path: string | null
@@ -20,10 +21,60 @@ export interface TmdbSearchResult {
   overview: string | null
 }
 
+export interface TmdbMovieSearchResult {
+  id: number
+  title: string
+  original_title?: string | null
+  genre_ids: number[]
+  origin_country?: string[]
+  original_language?: string | null
+  poster_path: string | null
+  release_date: string | null
+  popularity: number
+  overview: string | null
+}
+
+export interface TmdbWatchProvider {
+  provider_id: number
+  provider_name: string
+  logo_path: string | null
+  display_priority: number
+}
+
+export interface TmdbWatchProviderMarket {
+  link?: string | null
+  flatrate?: TmdbWatchProvider[]
+  free?: TmdbWatchProvider[]
+  ads?: TmdbWatchProvider[]
+  rent?: TmdbWatchProvider[]
+  buy?: TmdbWatchProvider[]
+}
+
+export interface TmdbWatchProviderResponse {
+  id: number
+  results?: Record<string, TmdbWatchProviderMarket>
+}
+
 export interface TmdbEpisodeStub {
   air_date: string | null
   episode_number: number
   season_number: number
+}
+
+export interface TmdbVideo {
+  id: string
+  key: string
+  site: string
+  type: string
+  name: string | null
+  official: boolean
+  iso_639_1: string | null
+  iso_3166_1: string | null
+  published_at: string | null
+}
+
+export interface TmdbVideoResponse {
+  results?: TmdbVideo[]
 }
 
 // Full episode from the season-detail endpoint (/tv/{id}/season/{n}).
@@ -40,6 +91,7 @@ export interface TmdbSeasonDetail {
   id: number
   season_number: number
   episodes: TmdbEpisode[]
+  videos?: TmdbVideoResponse
 }
 
 export interface TmdbSeason {
@@ -62,9 +114,45 @@ export interface TmdbShow {
   last_episode_to_air: TmdbEpisodeStub | null
   genres: { id: number; name: string }[]
   networks?: { id: number; name: string }[]
+  created_by?: { id: number; name: string; profile_path: string | null }[]
+  adult?: boolean
   overview: string | null
   backdrop_path: string | null
   poster_path: string | null
   popularity: number
   origin_country: string[]
+  videos?: TmdbVideoResponse
+  content_ratings?: {
+    results?: { iso_3166_1: string; rating: string; descriptors?: string[] }[]
+  }
+  aggregate_credits?: {
+    cast?: {
+      id: number
+      name: string
+      profile_path: string | null
+      order?: number
+      total_episode_count?: number
+      roles?: { character: string; episode_count?: number }[]
+    }[]
+    crew?: {
+      id: number
+      name: string
+      profile_path: string | null
+      department?: string
+      total_episode_count?: number
+      jobs?: { job: string; episode_count?: number }[]
+    }[]
+  }
+  keywords?: { results?: { id: number; name: string }[] }
+  recommendations?: {
+    results?: {
+      id: number
+      name: string
+      poster_path: string | null
+      backdrop_path: string | null
+      first_air_date: string | null
+      adult?: boolean
+      media_type?: string
+    }[]
+  }
 }

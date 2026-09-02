@@ -12,7 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
-import type { EpisodeMeta, FranchiseUpcoming } from '../types/api.js'
+import type { CatalogVideo, EpisodeMeta, FranchiseEnrichment, FranchiseUpcoming } from '../types/api.js'
 
 // ---------- Cached AniList catalogue ----------
 
@@ -39,6 +39,8 @@ export const media = pgTable(
     // Per-episode metadata. TMDB: full (title/overview/air_date/still/runtime) from the season
     // endpoint. AniList: best-effort titles/thumbnails from streamingEpisodes (no per-ep overview).
     episodesList: jsonb('episodes_list').$type<EpisodeMeta[]>().default([]),
+    // Catalogue-curated trailers/teasers for this exact part. Video bytes are never hosted here.
+    videos: jsonb('videos').$type<CatalogVideo[]>().default([]),
     // nextAiringEpisode snapshot: { episode, airingAt(seconds) } | null
     nextAiringEpisode: jsonb('next_airing_episode').$type<{ episode: number; airingAt: number } | null>(),
     seasonYear: integer('season_year'),
@@ -95,6 +97,8 @@ export const franchise = pgTable(
     confidence: real('confidence'),
     // Web-sourced "what's next" news (announced/airing seasons & films). See FranchiseUpcoming.
     upcoming: jsonb('upcoming').$type<FranchiseUpcoming>(),
+    // Deep catalogue metadata kept off the interactive provider search path.
+    enrichment: jsonb('enrichment').$type<FranchiseEnrichment>(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },

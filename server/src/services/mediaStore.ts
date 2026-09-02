@@ -3,7 +3,7 @@ import { fetchByIds, type AniListRequestOptions } from '../anilist/client.js'
 import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
 import { media, mediaRelations } from '../db/schema.js'
-import type { EpisodeMeta } from '../types/api.js'
+import type { CatalogVideo, EpisodeMeta } from '../types/api.js'
 
 export type MediaRow = typeof media.$inferInsert
 
@@ -52,6 +52,32 @@ function aniListStudios(m: AniListMedia): string[] {
   return names.slice(0, 3)
 }
 
+/** AniList supplies a provider id and thumbnail but no title/publish date/official flag. */
+export function aniListVideos(m: AniListMedia): CatalogVideo[] {
+  const trailer = m.trailer
+  const id = trailer?.id?.trim()
+  const site = trailer?.site?.trim().toLowerCase()
+  if (!id || !site) return []
+  const url =
+    site === 'youtube'
+      ? `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`
+      : site === 'dailymotion'
+        ? `https://www.dailymotion.com/video/${encodeURIComponent(id)}`
+        : null
+  return [{
+    id,
+    site,
+    kind: 'trailer',
+    title: null,
+    url,
+    thumbnail: trailer?.thumbnail ?? null,
+    official: null,
+    language: null,
+    country: null,
+    publishedAt: null,
+  }]
+}
+
 export function toMediaRow(m: AniListMedia): MediaRow {
   return {
     id: m.id,
@@ -63,11 +89,13 @@ export function toMediaRow(m: AniListMedia): MediaRow {
     status: m.status,
     episodes: m.episodes,
     cover: m.coverImage.extraLarge ?? m.coverImage.large ?? null,
-    banner: m.bannerImage ?? m.coverImage.extraLarge ?? null,
+    // Never put portrait art in the landscape slot; an honest null lets clients choose layout.
+    banner: m.bannerImage ?? null,
     description: m.description,
     genres: m.genres ?? [],
     studios: aniListStudios(m),
     episodesList: aniListEpisodes(m),
+    videos: aniListVideos(m),
     nextAiringEpisode: m.nextAiringEpisode,
     seasonYear: m.seasonYear,
     season: m.season,
@@ -84,9 +112,16 @@ export function toMediaRow(m: AniListMedia): MediaRow {
  */
 export async function upsertMediaRows(rows: MediaRow[], opts: { setLastAired?: boolean } = {}): Promise<void> {
   if (rows.length === 0) return
+  // Postgres refuses an ON CONFLICT DO UPDATE that would touch the same row twice in one
+  // statement ("cannot affect row a second time"), so each id may appear only once per batch.
+  // Duplicates are ordinary input here, not a caller bug: fetchTrending paginates, and AniList's
+  // TRENDING_DESC ordering can shift between page requests, so one media can land on two pages.
+  // Last occurrence wins — a later page/BFS frontier carries the fresher payload.
+  const byId = new Map<MediaRow['id'], MediaRow>()
+  for (const r of rows) byId.set(r.id, r)
   await db
     .insert(media)
-    .values(rows)
+    .values([...byId.values()])
     .onConflictDoUpdate({
       target: media.id,
       set: {
@@ -103,6 +138,7 @@ export async function upsertMediaRows(rows: MediaRow[], opts: { setLastAired?: b
         genres: sqlExcluded('genres'),
         studios: sqlExcluded('studios'),
         episodesList: sqlExcluded('episodes_list'),
+        videos: sqlExcluded('videos'),
         nextAiringEpisode: sqlExcluded('next_airing_episode'),
         seasonYear: sqlExcluded('season_year'),
         season: sqlExcluded('season'),

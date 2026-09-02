@@ -1,6 +1,12 @@
 import { env } from '../env.js'
 import { abortReason, abortableSleep, isAbortError, withTimeout } from '../util/abort.js'
-import type { TmdbSeasonDetail, TmdbSearchResult, TmdbShow } from './types.js'
+import type {
+  TmdbMovieSearchResult,
+  TmdbSeasonDetail,
+  TmdbSearchResult,
+  TmdbShow,
+  TmdbWatchProviderResponse,
+} from './types.js'
 
 const BASE = 'https://api.themoviedb.org/3'
 
@@ -17,6 +23,8 @@ export interface TmdbRequestOptions {
   maxRetries?: number
   timeoutMs?: number
 }
+
+export type TmdbShowRequestOptions = TmdbRequestOptions & { enrichment?: boolean }
 
 /**
  * GET a TMDB v3 path with bounded retry — same contract as the AniList `gql()` client:
@@ -69,10 +77,36 @@ export async function searchTv(
   return (json.results ?? []).slice(0, Math.max(1, Math.min(options.limit ?? 20, 20)))
 }
 
+/** Search movies by name (used to resolve anime franchises whose primary work is a film). */
+export async function searchMovies(
+  query: string,
+  options: TmdbRequestOptions & { limit?: number } = {},
+): Promise<TmdbMovieSearchResult[]> {
+  const json = await tmdbGet<{ results?: TmdbMovieSearchResult[] }>('/search/movie', {
+    query,
+    include_adult: 'false',
+    page: '1',
+  }, options)
+  return (json.results ?? []).slice(0, Math.max(1, Math.min(options.limit ?? 20, 20)))
+}
+
 /** Full show detail (status, seasons, next/last episode). Null on 404 (deleted/merged show). */
-export async function getShow(showId: number, options: TmdbRequestOptions = {}): Promise<TmdbShow | null> {
+export async function getShow(showId: number, options: TmdbShowRequestOptions = {}): Promise<TmdbShow | null> {
+  const { enrichment = false, ...request } = options
   try {
-    return await tmdbGet<TmdbShow>(`/tv/${showId}`, {}, options)
+    return await tmdbGet<TmdbShow>(
+      `/tv/${showId}`,
+      {
+        language: 'en-US',
+        include_video_language: 'en,null',
+        // Videos are cheap and useful on the very first materialization. Credits/ratings/
+        // recommendations are appended only by background/full refreshes.
+        append_to_response: enrichment
+          ? 'videos,content_ratings,aggregate_credits,keywords,recommendations'
+          : 'videos',
+      },
+      request,
+    )
   } catch (err) {
     if ((err as Error).message === 'TMDB 404') return null
     throw err
@@ -86,11 +120,31 @@ export async function getSeason(
   options: TmdbRequestOptions = {},
 ): Promise<TmdbSeasonDetail | null> {
   try {
-    return await tmdbGet<TmdbSeasonDetail>(`/tv/${showId}/season/${seasonNumber}`, {}, options)
+    return await tmdbGet<TmdbSeasonDetail>(
+      `/tv/${showId}/season/${seasonNumber}`,
+      { language: 'en-US', include_video_language: 'en,null', append_to_response: 'videos' },
+      options,
+    )
   } catch (err) {
     if ((err as Error).message === 'TMDB 404') return null
     throw err
   }
+}
+
+/** Country-keyed JustWatch availability for one TMDB TV series. */
+export async function getTvWatchProviders(
+  showId: number,
+  options: TmdbRequestOptions = {},
+): Promise<TmdbWatchProviderResponse> {
+  return tmdbGet<TmdbWatchProviderResponse>(`/tv/${showId}/watch/providers`, {}, options)
+}
+
+/** Country-keyed JustWatch availability for one TMDB movie. */
+export async function getMovieWatchProviders(
+  movieId: number,
+  options: TmdbRequestOptions = {},
+): Promise<TmdbWatchProviderResponse> {
+  return tmdbGet<TmdbWatchProviderResponse>(`/movie/${movieId}/watch/providers`, {}, options)
 }
 
 /** Daily-trending TV, paged (20/page) up to `limit`. */

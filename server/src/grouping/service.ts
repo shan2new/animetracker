@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { franchise, franchiseMember, media } from '../db/schema.js'
 import { env } from '../env.js'
 import { makeAniListFetcher, upsertMedia } from '../services/mediaStore.js'
+import { basicAniListEnrichment, enqueueFranchiseEnrichment } from '../services/catalogEnrichment.js'
 import { stripHtml } from '../util/text.js'
 import { expandComponent, type MediaFetcher } from './graph.js'
 import {
@@ -16,6 +17,7 @@ import {
   type LlmGrouper,
 } from './llm.js'
 import { partKindForFormat } from './partKind.js'
+import type { FranchiseEnrichment, FranchiseUpcoming } from '../types/api.js'
 
 export interface GroupOptions {
   grouper?: LlmGrouper
@@ -79,29 +81,33 @@ export async function groupKnownComponent(
     result = await new DeterministicGrouper().group(input)
   }
 
-  return persistFranchises({
+  const outcome = await persistFranchises({
     result,
     seedId,
     allIds: ids,
     metaFor: (f) => {
       const memberIds = f.parts.map((p) => p.id)
       const primary = pickPrimary(memberIds, component)
+      const genres = dedupeGenres(memberIds, component)
       return {
         title: f.canonicalName,
         primaryMediaId: primary?.id ?? null,
         cover: primary?.coverImage.extraLarge ?? primary?.coverImage.large ?? null,
-        banner: primary?.bannerImage ?? primary?.coverImage.extraLarge ?? null,
+        banner: primary?.bannerImage ?? null,
         description: stripHtml(primary?.description ?? null),
-        genres: dedupeGenres(memberIds, component),
+        genres,
         groupingSource: result.model ? 'llm' : 'relations',
         groupingModel: result.model,
         confidence: result.confidence,
         source: 'anilist',
         externalId: null,
+        enrichment: basicAniListEnrichment(primary, genres),
       }
     },
     onRaced: (raced, tx) => attachToExisting(raced, component, seedId, tx),
   })
+  enqueueFranchiseEnrichment(outcome.franchiseId)
+  return outcome
 }
 
 /** Per-franchise row values supplied by the caller of persistFranchises. */
@@ -117,6 +123,8 @@ export interface FranchisePersistMeta {
   confidence: number | null
   source: 'anilist' | 'tmdb'
   externalId: number | null
+  upcoming?: FranchiseUpcoming | null
+  enrichment?: FranchiseEnrichment | null
 }
 
 /**

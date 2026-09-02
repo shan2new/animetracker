@@ -78,6 +78,12 @@ export async function refreshAiringTv(): Promise<number> {
  */
 export async function seedTrending(count = env.TRENDING_SEED_COUNT): Promise<{ fetched: number; grouped: number }> {
   const trending = await fetchTrending(count)
+  // An empty page is a degraded AniList response (HTTP 200, `media: []`), not a real state — the
+  // catalogue is never empty. Left silent it logged "fetched 0 trending" and read as a success;
+  // raising makes the run visibly fail instead of quietly doing nothing.
+  if (count > 0 && trending.length === 0) {
+    throw new Error(`AniList returned no trending media (requested ${count})`)
+  }
   await upsertMedia(trending)
 
   const ids = trending.map((m) => m.id)

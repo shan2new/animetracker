@@ -26,6 +26,48 @@ keep decoding):
 
 ## Core JSON shapes
 
+### ArtworkSet
+
+Artwork orientation is explicit everywhere it is useful: franchise, summary, part and related
+title. A missing landscape asset is `null`; the backend never puts a portrait poster into the
+landscape slot. The legacy `cover`/`banner` strings remain for older clients.
+
+```jsonc
+{
+  "portrait": "https://…" | null,
+  "landscape": "https://…" | null
+}
+```
+
+### FranchiseVideo
+
+Catalogue-curated external video metadata. AniTrack does not proxy or host video bytes. `url` may
+be opened directly when the provider is supported; `site` + `id` are the durable fallback. A video
+can belong to the whole franchise or one exact season/movie. `featuredVideo` is selected by the
+backend, preferring an upcoming/current part before video type, then official status and recency.
+
+```jsonc
+{
+  "id": "ldfEtPf3CfQ",
+  "site": "youtube",
+  "kind": "announcement", // trailer | teaser | announcement | featurette | clip | other
+  "title": "Season 6 Announcement" | null,
+  "url": "https://www.youtube.com/watch?v=ldfEtPf3CfQ" | null,
+  "thumbnail": "https://…" | null,
+  "official": true | false | null,
+  "language": "en" | null,
+  "country": "US" | null,
+  "publishedAt": "2026-01-05T00:00:00.000Z" | null,
+  "scope": { "type": "franchise" }
+           | { "type": "part", "mediaId": 1000123456, "label": "Season 6" }
+}
+```
+
+AniList currently supplies at most one trailer id/thumbnail and does not state its official flag
+or publish date. TMDB supplies show- and season-level trailers, teasers, clips and featurettes; an
+official renewal/return announcement is normalized to `kind: "announcement"`. Empty means the
+catalogue has no usable external video, not that playback failed.
+
 ### EpisodeMeta
 Per-episode metadata. Richness is **source-dependent**: TMDB gives title/overview/still/runtime/date
 from the season endpoint; AniList gives best-effort titles/thumbnails from `streamingEpisodes`
@@ -53,6 +95,7 @@ authenticated user's progress.
   "title": "Attack on Titan",
   "cover": "https://…",
   "banner": "https://…",
+  "images": { "portrait": "https://…", "landscape": "https://…" },
   "format": "TV",            // raw AniList format
   "status": "FINISHED",      // raw AniList status
   "isReleasing": false,
@@ -79,7 +122,8 @@ authenticated user's progress.
   "studios": ["Wit Studio"],  // studios (anime) or networks (TV) — names only
   "nextAiringCount": 1,       // episodes sharing the next airing date; >1 ⇒ a full-season "drop"
   "episodes": [ EpisodeMeta, … ], // FULL list on GET /franchises/:id ONLY; [] on list/library payloads
-  "airings": [ Airing, … ]     // dated episodes inside Schedule's window, oldest first — on EVERY payload
+  "airings": [ Airing, … ],    // dated episodes inside Schedule's window, oldest first — on EVERY payload
+  "videos": [ FranchiseVideo, … ] // trailers/teasers scoped to this exact part
 }
 ```
 
@@ -106,14 +150,35 @@ next. Empty when nothing in the window is dated.
   "title": "Attack on Titan",
   "cover": "https://…",
   "banner": "https://…",
+  "images": { "portrait": "https://…", "landscape": "https://…" },
   "synopsis": "…",
   "genres": ["Action","Drama"],
   "isReleasing": true,             // any part currently releasing
   "partCounts": { "season": 4, "movie": 2, "ova": 3, "special": 1 },
   "parts": [ FranchisePart, … ],   // ordered by kind then sequence; each part carries its `episodes`
   "subscription": { "status": "watching", "addedAt": 1700000000000 } | null,  // addedAt = ms epoch the user subscribed
+  "upcoming": FranchiseUpcoming | null,  // confirmed/rumored "what's next" — see below
   "year": 2013,                    // premiere year (earliest dated part), or null
-  "studios": ["Wit Studio"]        // primary installment's studios (anime) / networks (TV)
+  "studios": ["Wit Studio"],       // primary installment's studios (anime) / networks (TV)
+  "themes": ["Survival", "Military"], // spoiler-screened; see Catalogue enrichment below
+  "featuredVideo": FranchiseVideo | null,
+  "videos": [ FranchiseVideo, … ],
+  "audience": {
+    "isAdult": false | null,
+    "contentRating": { "country": "IN", "rating": "U/A 16+" } | null,
+    "availableRatings": [{ "country": "US", "rating": "TV-MA" }, …]
+  },
+  "people": {
+    "creators": [ CatalogPerson, … ],
+    "directors": [ CatalogPerson, … ],
+    "cast": [ CatalogPerson, … ]
+  },
+  "related": [ RelatedTitle, … ],
+  "continueWatching": {
+    "mediaId": 16498,
+    "partLabel": "Season 1",
+    "episode": EpisodeMeta
+  } | null
 }
 ```
 
@@ -125,14 +190,134 @@ next. Empty when nothing in the window is dated.
   "title": "Attack on Titan",
   "cover": "https://…",
   "banner": "https://…",
+  "images": { "portrait": "https://…", "landscape": "https://…" },
   "isReleasing": true,
   "partCount": 10,
   "nextAiringAt": 1700000000000,   // soonest upcoming across parts, or null
+  "upcoming": FranchiseUpcoming | null,  // confirmed/rumored "what's next" — see below
   "year": 2013,                    // premiere year (for "Anime · 2023" / "TV · 2024"), or null
+  "themes": ["Survival", "Military"],
+  "featuredVideo": FranchiseVideo | null,
   // present only in /me/library:
   "status": "watching",            // watching | completed | planned | paused | dropped
   "behind": 2,                      // unwatched aired eps across releasing parts
   "newParts": 1                     // parts added since user last opened (badge)
+}
+```
+
+### Catalogue enrichment
+
+The detail/library payload includes spoiler-safe themes, audience metadata, people, related titles,
+videos and the next already-aired episode the authenticated user has not watched. Search/trending
+stay compact but include the fields needed for rich cards: both image orientations, themes and the
+single backend-selected `featuredVideo`. Detail/Search use stale-while-revalidate; a slow daily
+pass also repairs followed anime at AniList's degraded 30-requests/minute ceiling.
+
+```jsonc
+// CatalogPerson
+{
+  "source": "anilist" | "tmdb",
+  "externalId": 123,
+  "name": "Lily Collins",
+  "role": "Emily Cooper" | "Creator" | "Director" | null,
+  "image": "https://…" | null
+}
+
+// RelatedTitle
+{
+  "source": "anilist" | "tmdb",
+  "externalId": 456,
+  "franchiseId": "uuid" | null, // filled only when already materialized locally
+  "title": "The Bold Type",
+  "year": 2017 | null,
+  "images": { "portrait": "https://…" | null, "landscape": "https://…" | null }
+}
+```
+
+- AniList tags marked as general spoilers, media spoilers, or adult are excluded. TMDB has no
+  spoiler bit, so only genres and a conservative allow-list of broad keywords become themes.
+- `audience.contentRating` is the exact match for the optional `country` query on Detail. No market
+  match is `null`; the backend does not substitute a US rating. TMDB provides regional ratings;
+  AniList currently provides `isAdult` only.
+- Anime cast entries are Japanese voice actors with the character name in `role`. General-TV cast
+  entries are top-billed aggregate cast; creators and directors are separate.
+- `continueWatching` prefers a part the user already started, then the first unfinished part. It
+  never points to an unaired episode. Missing episode metadata produces an honest Episode-N shell
+  with nullable context rather than suppressing the next episode.
+
+### FranchiseUpcoming
+"What's next" for a franchise (announced/airing seasons, films). A future part already present in
+AniList/TMDB is returned immediately as a confirmed fallback; web research adds richer context,
+the primary announcement URL, and credible rumors. Detail reads enqueue missing or stale research
+without delaying the response, while the daily job proactively refreshes subscribed franchises.
+`release` is prose because that is what gets announced — a window as often as a date.
+
+Search is a first-class consumer of this field. A newly materialized TMDB title persists the
+immediate catalogue fact in the same write as the franchise, while AniList future parts derive the
+same field on read. An exact search hit whose TMDB fact or catalogue-video record is still missing
+gets one bounded show-summary refresh before the response returns. The summary is rebuilt after
+that write, so an available trailer appears in that same Search response. Richer web research is
+then queued from Search itself; opening Detail is not required to start it.
+```jsonc
+{
+  "status": "announced",       // airing | upcoming_dated | announced | announced_no_date | rumored | recently_aired | concluded
+  "next": "Season 2",          // shortest stable name for the installment
+  "release": "October 2026",   // human-readable date OR window ("2026-11-20", "Summer 2027", "TBA")
+  "note": "Announced at AnimeJapan.",
+  "source": "https://…",       // primary announcement or provider-catalogue URL, or null
+  "checked": "2026-08-24T…",   // ISO date the info was last verified
+  "releaseWindow": {           // `release` resolved into something orderable — DERIVED on read
+    "date": "2026-10",         // "YYYY-MM-DD" | "YYYY-MM" | "YYYY", at the precision actually known, or null
+    "precision": "month",      // day | month | quarter | year | unknown
+    "sortKey": 20261001        // yyyymmdd of the EARLIEST instant the window can mean, or null
+  }
+}
+```
+
+**`release` is the only field a client prints; `sortKey` is the only field it sorts by.** Clients
+must not parse `release` themselves — an ISO-only reading of a corpus full of `October 2026` and
+`Summer 2027` silently files every one of them under January of its year, which is how a "returning
+soonest first" list ended up putting October 2026 ahead of an August 2026 date.
+
+- `precision: "quarter"` means a broadcast season or `Qn`, and `date` is that quarter's **first**
+  month — safe to order by, never to print as a month (`Summer 2027` is not "July 2027").
+- `precision: "year"` may print only the year: `Late 2026` keeps `date: "2026"` while `sortKey`
+  places it in September, so it lands after spring and before the next January.
+- `sortKey: null` (TBA, prose with no date, **and every rumor** — an unconfirmed report is not a
+  schedule) sorts **last**. Never treat it as 0.
+
+### WatchAvailability
+Country-specific **streaming** availability for a franchise. The caller supplies an ISO 3166-1
+alpha-2 region; purchase and rental stores are intentionally excluded. Subscription
+services come first, followed by free and ad-supported services.
+
+For TMDB-owned TV franchises the lookup uses the stored TMDB show id. AniList does not expose a
+regional catalogue or TMDB id, so anime is conservatively matched to a Japanese-animation TMDB
+title by normalized title and premiere year. No safe match is represented by an empty list, never
+by a guessed provider.
+
+Consumers must branch on `status`, not on `providers.isEmpty`: `not_available` means a title was
+matched but has no subscription/free/ad-supported option in that country; `unmatched` means the
+AniList→TMDB bridge could not establish identity safely; and `disabled` means this deployment has
+no TMDB token. An upstream failure is an HTTP error rather than any of those catalogue states.
+
+This data comes from TMDB's JustWatch partnership. TMDB returns a regional watch-page link rather
+than reliable provider deep links, so the client opens `link` for the actual options and must show
+the supplied JustWatch attribution.
+```jsonc
+{
+  "country": "IN",
+  "status": "available",  // available | not_available | unmatched | disabled
+  "providers": [
+    {
+      "id": 8,
+      "name": "Netflix",
+      "logo": "https://image.tmdb.org/t/p/w92/…" | null,
+      "access": "subscription"  // subscription | free | ads
+    }
+  ],
+  "link": "https://www.themoviedb.org/tv/30984-bleach/watch?locale=IN" | null,
+  "attribution": "JustWatch"
 }
 ```
 
@@ -142,8 +327,9 @@ next. Empty when nothing in the window is dated.
 |--------|------|------|---------|
 | GET | `/health` | — | `{ ok: true }` |
 | GET | `/franchises/trending?limit=30` | — | `FranchiseListResponse` |
-| GET | `/search?q=&exact=1` | — | `FranchiseListResponse` — empty `q` = trending. Non-empty queries search the indexed local catalogue first; one- or two-character typeahead is always local-only. A genuine miss gets one short AniList + TMDB `/search/tv` attempt, returns known matches immediately, and warms unknown matches through a bounded background queue. Provider failures are reported in `sources` instead of failing the whole request. TMDB results that are Japanese animation are suppressed (AniList owns those). `exact=1` opts out of the spell-correction below |
-| GET | `/franchises/:id` | — | `Franchise` |
+| GET | `/search?q=&exact=1` | — | `FranchiseListResponse` — empty `q` = trending. Non-empty queries search the indexed local catalogue first; one- or two-character typeahead is always local-only. A genuine miss gets one short AniList + TMDB `/search/tv` attempt, returns known matches immediately, and warms unknown matches through a bounded background queue. Exact-title hits ship any immediate catalogue-backed `upcoming` fact and queue richer announcement research on this surface. Provider failures are reported in `sources` instead of failing the whole request. TMDB results that are Japanese animation are suppressed (AniList owns those). `exact=1` opts out of the spell-correction below |
+| GET | `/franchises/:id?country=IN` | — | `Franchise`; `country` is optional/case-insensitive and selects `audience.contentRating` without guessing a fallback market |
+| GET | `/franchises/:id/watch-providers?country=IN` | — | `WatchAvailability`; `country` is required and case-insensitive. Loaded separately so a cold provider lookup never delays `Franchise` detail |
 | GET | `/me/library` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }` where `LibraryFranchise` = full `Franchise` + `status` + `behind` + `newParts` |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |
 | PATCH | `/me/subscriptions/:franchiseId` | `{ status }` | `{ ok: true }` |

@@ -25,6 +25,8 @@ export interface AniListMedia {
   title: { romaji: string | null; english: string | null }
   coverImage: { extraLarge: string | null; large: string | null }
   bannerImage: string | null
+  trailer?: { id: string | null; site: string | null; thumbnail: string | null } | null
+  isAdult?: boolean | null
   description: string | null
   genres: string[]
   episodes: number | null
@@ -41,4 +43,51 @@ export interface AniListMedia {
   /** Per-episode air instants (seconds), when AniList has a schedule for the run. */
   airingSchedule?: { nodes: { episode: number; airingAt: number }[] } | null
   relations?: { edges: AniListRelationEdge[] } | null
+}
+
+export interface AniListTag {
+  name: string
+  rank: number
+  isGeneralSpoiler: boolean
+  isMediaSpoiler: boolean
+  isAdult: boolean
+}
+
+export interface AniListPerson {
+  id: number
+  name: { full: string | null }
+  image: { large: string | null }
+}
+
+export interface AniListStaffEdge {
+  role: string | null
+  node: AniListPerson
+}
+
+export interface AniListCharacterEdge {
+  role: string | null
+  node: AniListPerson
+  voiceActors: AniListPerson[]
+}
+
+export interface AniListRecommendation {
+  rating: number | null
+  mediaRecommendation: {
+    id: number
+    type: 'ANIME' | 'MANGA'
+    title: { romaji: string | null; english: string | null }
+    coverImage: { extraLarge: string | null; large: string | null }
+    bannerImage: string | null
+    seasonYear: number | null
+  } | null
+}
+
+/** Expensive fields fetched only by background/detail enrichment, never provider typeahead. */
+export interface AniListMediaEnrichment {
+  id: number
+  isAdult: boolean | null
+  tags: AniListTag[]
+  staff: { edges: AniListStaffEdge[] } | null
+  characters: { edges: AniListCharacterEdge[] } | null
+  recommendations: { nodes: AniListRecommendation[] } | null
 }

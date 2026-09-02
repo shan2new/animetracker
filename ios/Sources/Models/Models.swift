@@ -376,9 +376,60 @@ struct Subscription: Codable, Sendable {
     }
 }
 
+/// `FranchiseUpcoming.release` resolved into something orderable — **stated by the server**
+/// (docs/api-contract.md), because `release` is prose: the catalogue announces "October 2026" and
+/// "Summer 2027" far more often than it announces a date. The app's own ISO-only reading of that
+/// prose filed every window under January of its year, so a shelf sorted "soonest first" put
+/// October 2026 ahead of an August 2026 premiere while its own caption read "Returns Oct 2026".
+/// Nothing here re-parses `release`; `sortKey` is the one order and `date` is the one date.
+struct ReleaseWindow: Codable, Sendable {
+    enum Precision: String, Codable, Sendable {
+        /// `date` is exactly what was announced, to the day / to the month.
+        case day, month
+        /// A broadcast season or quarter. `date` is that quarter's FIRST month — order by it,
+        /// never print it as a month ("Summer 2027" is not "July 2027").
+        case quarter
+        /// Only the year may be printed. `sortKey` may still place the window inside that year
+        /// ("Late 2026" sorts in September) — that placement is an order, not a fact to render.
+        case year
+        /// TBA, a rumor, or prose with no date in it.
+        case unknown
+    }
+
+    /// "YYYY-MM-DD" | "YYYY-MM" | "YYYY", at the precision actually known.
+    let date: String?
+    let precision: Precision
+    /// `yyyymmdd` of the earliest instant the window can mean. Ascending = soonest first;
+    /// `nil` sorts LAST (never as 0, never as January of a year nobody stated).
+    let sortKey: Int?
+
+    /// Calendar parts of `date`, for the surfaces that print a month. Month/day are 1 when the
+    /// window doesn't state them, so a caller must check `precision` before printing either.
+    var parts: (year: Int, month: Int, day: Int)? {
+        guard let date else { return nil }
+        let segs = date.split(separator: "-").compactMap { Int($0) }
+        guard let y = segs.first else { return nil }
+        return (y, segs.count > 1 ? segs[1] : 1, segs.count > 2 ? segs[2] : 1)
+    }
+
+    enum CodingKeys: String, CodingKey { case date, precision, sortKey }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = try? c.decodeIfPresent(String.self, forKey: .date)
+        precision = (try? c.decodeIfPresent(Precision.self, forKey: .precision)) ?? .unknown
+        sortKey = try? c.decodeIfPresent(Int.self, forKey: .sortKey)
+    }
+
+    init(date: String?, precision: Precision, sortKey: Int?) {
+        self.date = date; self.precision = precision; self.sortKey = sortKey
+    }
+}
+
 // Web-sourced "what's next" news for a franchise (announced/airing seasons & films). `release`
 // is a human-readable date or window ("October 2026", "January 2027", "TBA") because announced
 // seasons often have only a window, which AniList doesn't expose as a per-episode airing time.
+// `releaseWindow` is that same window resolved by the server — the only thing to sort by.
 struct FranchiseUpcoming: Codable, Sendable {
     let status: String?
     let next: String?
@@ -386,8 +437,11 @@ struct FranchiseUpcoming: Codable, Sendable {
     let note: String?
     let source: String?
     let checked: String?
+    /// Absent from a server older than this field. Nothing here falls back to parsing `release`:
+    /// that fallback IS the bug this replaced, and an unknown window sorts last rather than wrong.
+    let releaseWindow: ReleaseWindow?
 
-    enum CodingKeys: String, CodingKey { case status, next, release, note, source, checked }
+    enum CodingKeys: String, CodingKey { case status, next, release, note, source, checked, releaseWindow }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -397,11 +451,14 @@ struct FranchiseUpcoming: Codable, Sendable {
         note = try? c.decodeIfPresent(String.self, forKey: .note)
         source = try? c.decodeIfPresent(String.self, forKey: .source)
         checked = try? c.decodeIfPresent(String.self, forKey: .checked)
+        releaseWindow = try? c.decodeIfPresent(ReleaseWindow.self, forKey: .releaseWindow)
     }
 
-    init(status: String?, next: String?, release: String?, note: String?, source: String?, checked: String?) {
+    init(status: String?, next: String?, release: String?, note: String?, source: String?,
+         checked: String?, releaseWindow: ReleaseWindow? = nil) {
         self.status = status; self.next = next; self.release = release
         self.note = note; self.source = source; self.checked = checked
+        self.releaseWindow = releaseWindow
     }
 
     /// Short uppercase tag for the badge, derived from `status`.
@@ -426,26 +483,22 @@ struct FranchiseUpcoming: Codable, Sendable {
         return Formatting.prettyReleaseString(r)
     }
 
-    /// Chronological sort key for ordering the Upcoming bucket nearest-first. `value` is yyyymmdd
-    /// (month/day default to 1 when only a year/month is known); `precision` (3=day, 2=month,
-    /// 1=year) breaks ties so a concrete month sorts ahead of a bare year. Returns nil when the
-    /// date is genuinely unknown — TBA *and* rumored — so those sort to the very end.
+    /// Chronological sort key for ordering the Upcoming bucket nearest-first — **the server's**
+    /// (`releaseWindow.sortKey`), not a reading of `release`. `value` is yyyymmdd; `precision`
+    /// (3=day, 2=month or quarter, 1=year) breaks ties so a concrete month sorts ahead of a bare
+    /// year. Nil when the window is genuinely unknown — TBA, prose with no date, *and* every
+    /// rumor, all of which the server already resolves to `unknown` — so those sort to the end.
+    ///
+    /// This used to parse `release` here, and only its ISO forms, which filed "October 2026" and
+    /// "Summer 2027" under January of their year. The prose lives in one grammar on the server now.
     var releaseSortKey: (value: Int, precision: Int)? {
-        guard status != "rumored",
-              let r = release?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return nil }
-        let segs = r.split(separator: "-").map { Int($0) }
-        if segs.count >= 2, let y = segs[0], let m = segs[1], (1...12).contains(m), (1900...2100).contains(y) {
-            if segs.count >= 3, let d = segs[2], (1...31).contains(d) { return (y * 10000 + m * 100 + d, 3) }
-            return (y * 10000 + m * 100 + 1, 2)
+        guard let window = releaseWindow, let value = window.sortKey else { return nil }
+        switch window.precision {
+        case .day: return (value, 3)
+        case .month, .quarter: return (value, 2)
+        case .year: return (value, 1)
+        case .unknown: return nil
         }
-        if let y = FranchiseUpcoming.firstYear(in: r) { return (y * 10000 + 101, 1) }
-        return nil
-    }
-
-    /// First standalone 4-digit 20xx year in a string (e.g. "2027" in "2027-2028" or "approx 2027").
-    private static func firstYear(in s: String) -> Int? {
-        guard let range = s.range(of: "(?<![0-9])20[0-9]{2}(?![0-9])", options: .regularExpression) else { return nil }
-        return Int(s[range])
     }
 
     /// True for statuses that represent a *future* installment worth flagging on a card —

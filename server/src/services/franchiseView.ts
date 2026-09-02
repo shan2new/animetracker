@@ -6,19 +6,105 @@ import { franchise, franchiseMember, media, progress, subscriptions } from '../d
 import type { PartKind } from '../grouping/partKind.js'
 import type {
   Airing,
+  ArtworkSet,
+  AudienceInfo,
+  CatalogVideo,
+  ContinueWatching,
   EpisodeMeta,
   Franchise,
   FranchisePart,
   FranchiseSummary,
+  FranchiseVideo,
   LibraryFranchise,
   MediaSource,
   ReleasePrecision,
   WatchStatus,
 } from '../types/api.js'
+import {
+  deriveCatalogUpcoming,
+  resolveUpcomingWithCatalog,
+  type CatalogUpcomingPart,
+} from './catalogUpcoming.js'
+import { withReleaseWindow } from './releaseWindow.js'
+import { resolveRelatedFranchiseIds } from './catalogEnrichment.js'
 import { stripHtml } from '../util/text.js'
 
 const D = 86_400_000
 const KIND_ORDER: PartKind[] = ['season', 'movie', 'ova', 'ona', 'special', 'music']
+
+const EMPTY_PEOPLE = { creators: [], directors: [], cast: [] }
+
+function artwork(portrait: string | null | undefined, landscape: string | null | undefined): ArtworkSet {
+  return { portrait: portrait || null, landscape: landscape || null }
+}
+
+function scopedPartVideos(m: MediaRow, member: MemberRow): FranchiseVideo[] {
+  return (m.videos ?? []).map((video) => ({
+    ...video,
+    scope: { type: 'part', mediaId: m.id, label: member.label ?? m.titleEnglish ?? m.titleRomaji ?? `Part ${member.sequence}` },
+  }))
+}
+
+function franchiseVideos(
+  stored: CatalogVideo[] | null | undefined,
+  parts: FranchisePart[],
+): FranchiseVideo[] {
+  // Part scope is more precise than a duplicate show-level record, so it enters the map first.
+  const candidates: FranchiseVideo[] = [
+    ...parts.flatMap((part) => part.videos),
+    ...(stored ?? []).map((video): FranchiseVideo => ({ ...video, scope: { type: 'franchise' } })),
+  ]
+  const seen = new Set<string>()
+  return candidates.filter((video) => {
+    const key = `${video.site.toLowerCase()}:${video.id}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+const VIDEO_KIND_WEIGHT: Record<FranchiseVideo['kind'], number> = {
+  trailer: 5,
+  teaser: 4,
+  announcement: 3,
+  featurette: 2,
+  clip: 1,
+  other: 0,
+}
+
+/** Prefer the exact upcoming/current part before video type, then official and newest. */
+export function pickFeaturedVideo(parts: FranchisePart[], videos: FranchiseVideo[]): FranchiseVideo | null {
+  if (videos.length === 0) return null
+  const partPriority = new Map<number, number>()
+  for (const part of parts) {
+    const state = part.status === 'NOT_YET_RELEASED' ? 3 : part.isReleasing ? 2 : 1
+    partPriority.set(part.mediaId, state * 10_000 + part.sequence)
+  }
+  return videos.slice().sort((a, b) => {
+    const scope = (video: FranchiseVideo) => video.scope.type === 'part' ? (partPriority.get(video.scope.mediaId) ?? 0) : -1
+    return scope(b) - scope(a) ||
+      Number(b.official === true) - Number(a.official === true) ||
+      VIDEO_KIND_WEIGHT[b.kind] - VIDEO_KIND_WEIGHT[a.kind] ||
+      (b.publishedAt ?? '').localeCompare(a.publishedAt ?? '')
+  })[0] ?? null
+}
+
+/** First already-aired episode the user has not watched, with best-effort episode context. */
+export function deriveContinueWatching(
+  parts: FranchisePart[],
+  episodesByMediaId: ReadonlyMap<number, EpisodeMeta[]>,
+): ContinueWatching | null {
+  const candidates = parts.filter((part) => part.progress < part.airedEpisodes)
+  const part = candidates.find((candidate) => candidate.progress > 0) ?? candidates[0]
+  if (!part) return null
+  const number = part.progress + 1
+  const metadata = episodesByMediaId.get(part.mediaId)?.find((episode) => episode.number === number)
+  return {
+    mediaId: part.mediaId,
+    partLabel: part.label,
+    episode: metadata ?? { number, title: null, airDate: null, overview: null, still: null, runtime: null },
+  }
+}
 
 /** Latest aired episode number from a dated episode list, or null when the list carries no dates
  *  at all (AniList `streamingEpisodes` have titles/thumbnails but never air dates). */
@@ -160,6 +246,7 @@ function toPart(
     // Keep artwork semantics honest. A portrait cover is not a landscape banner; clients need
     // the distinction to choose a composition that does not crop the subject into a wide slot.
     banner: m.banner ?? '',
+    images: artwork(m.cover, m.banner),
     format: m.format,
     status: m.status,
     isReleasing,
@@ -177,6 +264,7 @@ function toPart(
     nextAiringCount,
     episodes: opts?.episodes ? eps : [],
     airings,
+    videos: scopedPartVideos(m, member),
   }
 }
 
@@ -201,6 +289,24 @@ async function loadProgressMap(userId: string | undefined, mediaIds: number[]): 
     .where(and(eq(progress.userId, userId), inArray(progress.mediaId, mediaIds)))
   for (const r of rows) map.set(r.mediaId, r.episodesWatched)
   return map
+}
+
+function catalogUpcomingParts(mems: MemberRow[], mediaById: Map<number, MediaRow>): CatalogUpcomingPart[] {
+  return mems.flatMap((mem) => {
+    const m = mediaById.get(mem.mediaId)
+    if (!m) return []
+    const nextAiringAt =
+      m.nextAiringEpisode && m.nextAiringEpisode.airingAt > 0 ? m.nextAiringEpisode.airingAt * 1000 : null
+    return [{
+      mediaId: m.id,
+      kind: mem.partKind as PartKind,
+      sequence: mem.sequence,
+      label: mem.label || m.titleEnglish || m.titleRomaji || `Part ${mem.sequence}`,
+      status: m.status,
+      nextAiringAt,
+      fetchedAt: m.fetchedAt,
+    }]
+  })
 }
 
 /** Assemble a Franchise from already-loaded rows (no DB access). Shared by detail + library. */
@@ -234,6 +340,25 @@ function buildFranchise(
   const years = (episodic.length ? episodic : parts).map((p) => p.year).filter((y): y is number => y != null)
   const year = years.length ? Math.min(...years) : (primary?.seasonYear ?? null)
   const studios = (primary?.studios?.length ? primary.studios : parts.find((p) => p.studios.length > 0)?.studios) ?? []
+  const catalogUpcoming = deriveCatalogUpcoming({
+    source,
+    franchiseExternalId: f.externalId,
+    parts: catalogUpcomingParts(mems, mediaById),
+  })
+  const upcoming = resolveUpcomingWithCatalog(f.upcoming, catalogUpcoming)
+  const videos = franchiseVideos(f.enrichment?.videos, parts)
+  const images = artwork(
+    f.cover || parts.find((part) => part.images.portrait)?.images.portrait,
+    f.banner || parts.find((part) => part.images.landscape)?.images.landscape,
+  )
+  const audience: AudienceInfo = {
+    isAdult: f.enrichment?.isAdult ?? null,
+    contentRating: null,
+    availableRatings: f.enrichment?.contentRatings ?? [],
+  }
+  const episodesByMediaId = new Map(
+    [...mediaById.entries()].map(([id, value]) => [id, value.episodesList ?? []] as const),
+  )
 
   return {
     id: f.id,
@@ -241,20 +366,28 @@ function buildFranchise(
     title: f.title,
     cover: f.cover ?? '',
     banner: f.banner ?? '',
+    images,
     synopsis: f.description ?? '',
     genres: f.genres ?? [],
     isReleasing: parts.some((p) => p.isReleasing),
     partCounts,
     parts,
     subscription: sub,
-    upcoming: f.upcoming ?? null,
+    upcoming: withReleaseWindow(upcoming),
     year,
     studios,
+    themes: f.enrichment?.themes?.length ? f.enrichment.themes : (f.genres ?? []).slice(0, 10),
+    featuredVideo: pickFeaturedVideo(parts, videos),
+    videos,
+    audience,
+    people: f.enrichment?.people ?? EMPTY_PEOPLE,
+    related: f.enrichment?.related ?? [],
+    continueWatching: deriveContinueWatching(parts, episodesByMediaId),
   }
 }
 
 /** Full franchise detail with parts + (optional) the user's progress and subscription. */
-export async function getFranchise(franchiseId: string, userId?: string): Promise<Franchise | null> {
+export async function getFranchise(franchiseId: string, userId?: string, country?: string): Promise<Franchise | null> {
   const [f] = await db.select().from(franchise).where(eq(franchise.id, franchiseId)).limit(1)
   if (!f) return null
 
@@ -275,7 +408,13 @@ export async function getFranchise(franchiseId: string, userId?: string): Promis
   }
 
   // Detail is the only response that ships the full per-episode list.
-  return buildFranchise(f, members, mediaById, watchedById, sub, { episodes: true })
+  const built = buildFranchise(f, members, mediaById, watchedById, sub, { episodes: true })
+  built.related = await resolveRelatedFranchiseIds(built.related)
+  const normalizedCountry = country?.toUpperCase()
+  built.audience.contentRating = normalizedCountry
+    ? built.audience.availableRatings.find((rating) => rating.country === normalizedCountry) ?? null
+    : null
+  return built
 }
 
 /** Build a list of FranchiseSummary for the given franchise ids (trending/search). */
@@ -298,6 +437,7 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
   return fr
     .map((f): FranchiseSummary => {
       const mems = byFranchise.get(f.id) ?? []
+      const source: MediaSource = (f.source as MediaSource) ?? 'anilist'
       let nextAiringAt: number | null = null
       let releasing = false
       let minYear: number | null = null
@@ -310,12 +450,19 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
         if (m.seasonYear != null && (minYear == null || m.seasonYear < minYear)) minYear = m.seasonYear
       }
       const primary = f.primaryMediaId != null ? mediaById.get(f.primaryMediaId) : undefined
+      const portrait = f.cover || primary?.cover || mems
+        .map((member) => mediaById.get(member.mediaId)?.cover)
+        .find((value): value is string => !!value)
+      const landscape = f.banner || primary?.banner || mems
+        .map((member) => mediaById.get(member.mediaId)?.banner)
+        .find((value): value is string => !!value)
       return {
         id: f.id,
-        source: (f.source as MediaSource) ?? 'anilist',
+        source,
         title: f.title,
         cover: f.cover ?? '',
         banner: f.banner ?? '',
+        images: artwork(portrait, landscape),
         isReleasing: releasing,
         // The count Detail prints under "Seasons & movies": episodic members only, never OVAs,
         // specials or music videos — Search and Detail must agree.
@@ -326,8 +473,28 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
           return kind === 'season' || kind === 'movie'
         }).length,
         nextAiringAt,
-        upcoming: f.upcoming ?? null,
+        upcoming: withReleaseWindow(
+          resolveUpcomingWithCatalog(
+            f.upcoming,
+            deriveCatalogUpcoming({
+              source,
+              franchiseExternalId: f.externalId,
+              parts: catalogUpcomingParts(mems, mediaById),
+            }),
+          ),
+        ),
         year: primary?.seasonYear ?? minYear,
+        themes: f.enrichment?.themes?.length ? f.enrichment.themes : (f.genres ?? []).slice(0, 10),
+        featuredVideo: (() => {
+          const summaryParts = sortParts(
+            mems.flatMap((member) => {
+              const row = mediaById.get(member.mediaId)
+              return row ? [toPart(row, member, 0, source)] : []
+            }),
+          )
+          const videos = franchiseVideos(f.enrichment?.videos, summaryParts)
+          return pickFeaturedVideo(summaryParts, videos)
+        })(),
       }
     })
     .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
@@ -393,6 +560,11 @@ export async function getLibrary(userId: string, lastOpenedAt: number): Promise<
     // newParts: members added since the user last opened the app.
     const newParts = mems.filter((m) => m.addedAt.getTime() > lastOpenedAt).length
     out.push({ ...fr, status, behind, newParts })
+  }
+  const resolvedRelated = await resolveRelatedFranchiseIds(out.flatMap((item) => item.related))
+  const relatedByKey = new Map(resolvedRelated.map((item) => [`${item.source}:${item.externalId}`, item]))
+  for (const item of out) {
+    item.related = item.related.map((related) => relatedByKey.get(`${related.source}:${related.externalId}`) ?? related)
   }
   return out
 }

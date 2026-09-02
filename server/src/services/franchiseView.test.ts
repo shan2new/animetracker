@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { EpisodeMeta } from '../types/api.js'
-import { airingsWindow, deriveAiredEpisodes } from './franchiseView.js'
+import type { EpisodeMeta, FranchisePart, FranchiseVideo } from '../types/api.js'
+import { airingsWindow, deriveAiredEpisodes, deriveContinueWatching, pickFeaturedVideo } from './franchiseView.js'
 
 // Fixed "now": 2026-07-01T00:00Z.
 const NOW = Date.UTC(2026, 6, 1)
@@ -123,5 +123,93 @@ describe('airingsWindow', () => {
       nowMs: NOW,
     })
     expect(out).toEqual([])
+  })
+})
+
+function part(overrides: Partial<FranchisePart> = {}): FranchisePart {
+  return {
+    mediaId: 1,
+    kind: 'season',
+    sequence: 1,
+    label: 'Season 1',
+    title: 'Show',
+    cover: '',
+    banner: '',
+    images: { portrait: null, landscape: null },
+    format: 'TV',
+    status: 'FINISHED',
+    isReleasing: false,
+    totalEpisodes: 10,
+    airedEpisodes: 10,
+    nextEpisodeNumber: null,
+    nextAiringAt: null,
+    release: { precision: 'unknown', at: null, date: null },
+    lastAiredAt: null,
+    synopsis: '',
+    genres: [],
+    progress: 0,
+    year: 2020,
+    studios: [],
+    nextAiringCount: 0,
+    episodes: [],
+    airings: [],
+    videos: [],
+    ...overrides,
+  }
+}
+
+function video(scope: FranchiseVideo['scope'], overrides: Partial<FranchiseVideo> = {}): FranchiseVideo {
+  return {
+    id: 'video',
+    site: 'youtube',
+    kind: 'trailer',
+    title: null,
+    url: null,
+    thumbnail: null,
+    official: true,
+    language: 'en',
+    country: null,
+    publishedAt: null,
+    scope,
+    ...overrides,
+  }
+}
+
+describe('deriveContinueWatching', () => {
+  it('returns the next already-aired episode with its available context', () => {
+    const parts = [part({ progress: 3, airedEpisodes: 7 })]
+    const metadata = eps(10, NOW - 70 * D)
+    const next = deriveContinueWatching(parts, new Map([[1, metadata]]))
+
+    expect(next).toEqual({ mediaId: 1, partLabel: 'Season 1', episode: metadata[3] })
+  })
+
+  it('prefers a started part over an earlier untouched part and never offers a future episode', () => {
+    const parts = [
+      part({ mediaId: 1, progress: 0, airedEpisodes: 10 }),
+      part({ mediaId: 2, sequence: 2, label: 'Season 2', progress: 4, airedEpisodes: 6 }),
+      part({ mediaId: 3, sequence: 3, status: 'NOT_YET_RELEASED', progress: 0, airedEpisodes: 0 }),
+    ]
+    expect(deriveContinueWatching(parts, new Map())).toMatchObject({
+      mediaId: 2,
+      partLabel: 'Season 2',
+      episode: { number: 5 },
+    })
+    expect(deriveContinueWatching([parts[2]!], new Map())).toBeNull()
+  })
+})
+
+describe('pickFeaturedVideo', () => {
+  it('prefers a future part announcement over an older franchise-level trailer', () => {
+    const future = part({ mediaId: 6, sequence: 6, label: 'Season 6', status: 'NOT_YET_RELEASED' })
+    const announcement = video(
+      { type: 'part', mediaId: 6, label: 'Season 6' },
+      { id: 'renewal', kind: 'announcement', publishedAt: '2026-01-05T00:00:00Z' },
+    )
+    const oldTrailer = video(
+      { type: 'franchise' },
+      { id: 'old', kind: 'trailer', publishedAt: '2020-01-01T00:00:00Z' },
+    )
+    expect(pickFeaturedVideo([future], [oldTrailer, announcement])).toEqual(announcement)
   })
 })

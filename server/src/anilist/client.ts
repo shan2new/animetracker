@@ -1,4 +1,4 @@
-import type { AniListMedia } from './types.js'
+import type { AniListMedia, AniListMediaEnrichment } from './types.js'
 import { abortReason, abortableSleep, isAbortError, withTimeout } from '../util/abort.js'
 
 const ENDPOINT = 'https://graphql.anilist.co'
@@ -11,6 +11,8 @@ const MEDIA_FIELDS = `
   title { romaji english }
   coverImage { extraLarge large }
   bannerImage
+  trailer { id site thumbnail }
+  isAdult
   description(asHtml: false)
   genres
   episodes
@@ -26,6 +28,35 @@ const MEDIA_FIELDS = `
   nextAiringEpisode { episode airingAt }
   airingSchedule(perPage: 50) { nodes { episode airingAt } }
   relations { edges { relationType node { id type format } } }
+`
+
+const ENRICHMENT_FIELDS = `
+  id
+  isAdult
+  tags { name rank isGeneralSpoiler isMediaSpoiler isAdult }
+  staff(perPage: 8, sort: [RELEVANCE]) {
+    edges { role node { id name { full } image { large } } }
+  }
+  characters(perPage: 8, sort: [ROLE, RELEVANCE]) {
+    edges {
+      role
+      node { id name { full } image { large } }
+      voiceActors(language: JAPANESE, sort: [RELEVANCE]) { id name { full } image { large } }
+    }
+  }
+  recommendations(perPage: 10, sort: [RATING_DESC]) {
+    nodes {
+      rating
+      mediaRecommendation {
+        id
+        type
+        title { romaji english }
+        coverImage { extraLarge large }
+        bannerImage
+        seasonYear
+      }
+    }
+  }
 `
 
 function chunked<T>(arr: T[], size: number): T[][] {
@@ -47,8 +78,30 @@ export interface AniListRequestOptions {
 }
 
 /**
+ * Statuses worth another attempt. 403 belongs here with the obvious transients: AniList (behind
+ * Cloudflare) intermittently rejects an otherwise-valid request with 403 — the daily sync died on
+ * its *first* request this way on ~8% of runs, while the identical query succeeded minutes later.
+ * Retrying bounded clears the blip; a genuine block still surfaces once MAX_RETRIES is spent.
+ */
+const RETRYABLE = (status: number) => status === 429 || status === 403 || status >= 500
+
+/**
+ * A bounded, single-line slice of the response body, for diagnosis. `gql` used to throw the bare
+ * status, which left no way to tell a Cloudflare bot-mitigation 403 from an AniList one. Never
+ * throws — a body that cannot be read just yields no detail.
+ */
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const text = (await res.text()).replace(/\s+/g, ' ').trim()
+    return text ? `: ${text.slice(0, 200)}` : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
  * POST a GraphQL query with bounded retry: honors AniList's 429 `Retry-After`, and backs
- * off on transient 5xx / network errors. Throws after retries are spent. Ported from the
+ * off on transient 403 / 5xx / network errors. Throws after retries are spent. Ported from the
  * legacy web client (legacy-web/src/anilist.ts).
  */
 export async function gql<T>(
@@ -73,14 +126,14 @@ async function gqlAttempt<T>(
       body: JSON.stringify({ query, variables }),
       signal: withTimeout(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     })
-    if (res.status === 429 || res.status >= 500) {
-      if (attempt >= maxRetries) throw new Error(`AniList ${res.status}`)
+    if (RETRYABLE(res.status)) {
+      if (attempt >= maxRetries) throw new Error(`AniList ${res.status}${await errorDetail(res)}`)
       const retryAfter = Number(res.headers.get('Retry-After'))
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2 ** attempt * 1000
       await abortableSleep(waitMs, options.signal)
       return gqlAttempt<T>(query, variables, options, attempt + 1)
     }
-    if (!res.ok) throw new Error(`AniList ${res.status}`)
+    if (!res.ok) throw new Error(`AniList ${res.status}${await errorDetail(res)}`)
     const json = (await res.json()) as { data?: T; errors?: { message: string }[] }
     if (json.errors) throw new Error(json.errors.map((e) => e.message).join('; '))
     return json.data as T
@@ -116,6 +169,28 @@ export async function fetchByIds(ids: number[], options: AniListRequestOptions =
   return batches.flatMap((d) => d.Page.media)
 }
 
+/**
+ * Fetch people, spoiler-labelled tags and recommendations for a small set of representative
+ * installments. This deliberately does not share MEDIA_FIELDS: putting these graph-heavy fields
+ * on provider search would regress the latency-sensitive typeahead path.
+ */
+export async function fetchEnrichmentByIds(
+  ids: number[],
+  options: AniListRequestOptions = {},
+): Promise<AniListMediaEnrichment[]> {
+  if (ids.length === 0) return []
+  const batches = await settle(
+    chunked(ids, 20).map((chunk) =>
+      gql<{ Page: { media: AniListMediaEnrichment[] } }>(
+        `query ($ids: [Int]) { Page(perPage: 20) { media(id_in: $ids, type: ANIME) { ${ENRICHMENT_FIELDS} } } }`,
+        { ids: chunk },
+        options,
+      ),
+    ),
+  )
+  return batches.flatMap((data) => data.Page.media)
+}
+
 /** Fetch a single media with relations (used while expanding the franchise graph). */
 export async function fetchOne(id: number, options: AniListRequestOptions = {}): Promise<AniListMedia | null> {
   try {
@@ -127,8 +202,9 @@ export async function fetchOne(id: number, options: AniListRequestOptions = {}):
     return data.Media
   } catch (err) {
     // AniList returns 404 for a non-existent / non-anime id. During graph expansion a dead
-    // edge shouldn't crash the whole grouping — treat it as "not found".
-    if (err instanceof Error && /\b404\b/.test(err.message)) return null
+    // edge shouldn't crash the whole grouping — treat it as "not found". Anchored on the status
+    // `gql` formats: the message now also carries a body slice, which may contain any digits.
+    if (err instanceof Error && /^AniList 404\b/.test(err.message)) return null
     throw err
   }
 }

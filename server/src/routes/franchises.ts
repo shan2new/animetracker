@@ -1,7 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { getFranchise, getTrendingFranchises } from '../services/franchiseView.js'
+import { enqueueFranchiseNewsRefresh } from '../news/service.js'
+import { getFranchise, getSummaries, getTrendingFranchises } from '../services/franchiseView.js'
+import { withReleaseWindow } from '../services/releaseWindow.js'
 import { searchFranchises, type SearchProfile } from '../services/search.js'
+import { getWatchAvailability } from '../services/watchAvailability.js'
+import { enqueueFranchiseEnrichment } from '../services/catalogEnrichment.js'
+import { refreshTvUpcomingFact } from '../tmdb/service.js'
 import type { FranchiseListResponse } from '../types/api.js'
 
 const trendingQuery = z.object({ limit: z.coerce.number().min(1).max(100).default(30) })
@@ -11,6 +16,15 @@ const searchQuery = z.object({
   limit: z.coerce.number().min(1).max(100).default(30),
   exact: z.string().optional(),
 })
+const watchProviderQuery = z.object({
+  country: z.string().regex(/^[a-z]{2}$/i).transform((value) => value.toUpperCase()),
+})
+const detailQuery = z.object({
+  country: z.string().regex(/^[a-z]{2}$/i).transform((value) => value.toUpperCase()).optional(),
+})
+
+const normalizedTitle = (value: string): string =>
+  value.normalize('NFKC').toLocaleLowerCase('en-US').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
 
 export const franchiseRoutes: FastifyPluginAsync = async (app) => {
   // All franchise routes require a valid user (so detail can include subscription/progress).
@@ -40,6 +54,33 @@ export const franchiseRoutes: FastifyPluginAsync = async (app) => {
           profile = value
         },
       })
+      // Search is a product surface, not merely a path to Detail. An exact result must begin
+      // enriching its catalogue fallback here; the request still returns immediately.
+      const intendedTitle = normalizedTitle(response.correctedQuery ?? q)
+      const exactFranchise = intendedTitle
+        ? response.franchises.find((item) => normalizedTitle(item.title) === intendedTitle)
+        : undefined
+      if (exactFranchise?.source === 'tmdb' && (!exactFranchise.upcoming || !exactFranchise.featuredVideo)) {
+        try {
+          const immediate = await refreshTvUpcomingFact(exactFranchise.id, { maxRetries: 0, timeoutMs: 1_050 })
+          // refreshTvUpcomingFact also persists the show-level video from the same TMDB response.
+          // Rebuild this one summary so a first exact Search can return that trailer immediately.
+          const [refreshed] = await getSummaries([exactFranchise.id])
+          if (refreshed) Object.assign(exactFranchise, refreshed)
+          exactFranchise.upcoming = withReleaseWindow(immediate)
+        } catch (error) {
+          // Provider news is enrichment: a short TMDB failure must not turn a useful search result
+          // into an error. The background researcher below can still fill it later.
+          req.log.warn(
+            { event: 'search.upcoming_refresh_failed', franchiseId: exactFranchise.id, error },
+            'exact-search upcoming refresh failed',
+          )
+        }
+      }
+      if (exactFranchise) {
+        enqueueFranchiseNewsRefresh(exactFranchise.id, exactFranchise.upcoming)
+        enqueueFranchiseEnrichment(exactFranchise.id)
+      }
       req.log.info({ event: 'search.profile', search: profile, sources: response.sources }, 'search profile')
       return response
     } finally {
@@ -48,10 +89,26 @@ export const franchiseRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
+  app.get('/franchises/:id/watch-providers', async (req, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(req.params)
+    const query = watchProviderQuery.safeParse(req.query)
+    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid request' })
+    const { id } = params.data
+    const { country } = query.data
+    const availability = await getWatchAvailability(id, country)
+    if (!availability) return reply.code(404).send({ error: 'franchise not found' })
+    return availability
+  })
+
   app.get('/franchises/:id', async (req, reply) => {
-    const { id } = z.object({ id: z.string().uuid() }).parse(req.params)
-    const f = await getFranchise(id, req.user!.id)
+    const params = z.object({ id: z.string().uuid() }).safeParse(req.params)
+    const query = detailQuery.safeParse(req.query)
+    if (!params.success || !query.success) return reply.code(400).send({ error: 'invalid request' })
+    const { id } = params.data
+    const f = await getFranchise(id, req.user!.id, query.data.country)
     if (!f) return reply.code(404).send({ error: 'franchise not found' })
+    enqueueFranchiseNewsRefresh(id, f.upcoming)
+    enqueueFranchiseEnrichment(id)
     return f
   })
 }

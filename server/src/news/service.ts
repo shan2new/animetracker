@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { announcements, franchise, franchiseMember, media, notifications, subscriptions } from '../db/schema.js'
 import { env } from '../env.js'
 import type { FranchiseUpcoming } from '../types/api.js'
+import { BoundedTaskQueue } from '../util/taskQueue.js'
 import { researchFranchiseNews, type NewsResult } from './agent.js'
 
 // Only forward progress through this ladder produces a notification; the agent re-reporting
@@ -15,6 +16,57 @@ const STATUS_RANK: Record<string, number> = {
 }
 
 const isNoteworthy = (status: string): boolean => status in STATUS_RANK
+
+// Detail reads may opportunistically warm missing/stale news, but web-research agents are slow and
+// expensive work. One worker plus a hard queue cap keeps ordinary API traffic from multiplying it.
+const onDemandNews = new BoundedTaskQueue(1, 8, (key, error) => {
+  console.warn(`[news] on-demand refresh failed (${key}):`, error instanceof Error ? error.message : error)
+})
+const onDemandAttemptedAt = new Map<string, number>()
+
+export function newsNeedsRefresh(
+  current: Partial<Pick<FranchiseUpcoming, 'checked' | 'source'>> | null | undefined,
+  nowMs = Date.now(),
+  intervalHours = env.NEWS_CHECK_INTERVAL_HOURS,
+): boolean {
+  // AniList/TMDB catalogue pages prove the immediate fact, but they are intentionally only a
+  // fallback. Enrich them once with an actual announcement/report even when the catalogue row was
+  // fetched moments ago.
+  if (
+    current?.source?.startsWith('https://anilist.co/') ||
+    current?.source?.startsWith('https://www.themoviedb.org/')
+  ) {
+    return true
+  }
+  if (!current?.checked) return true
+  const checkedAt = Date.parse(current.checked)
+  return !Number.isFinite(checkedAt) || checkedAt < nowMs - intervalHours * 3_600_000
+}
+
+/**
+ * Schedule stale-while-revalidate news research without extending detail-request latency.
+ * Repeated views single-flight while queued and remain throttled for one normal check interval even
+ * if research fails, so a title with no discoverable news cannot spawn an agent on every request.
+ */
+export function enqueueFranchiseNewsRefresh(
+  franchiseId: string,
+  current: Partial<Pick<FranchiseUpcoming, 'checked' | 'source'>> | null | undefined,
+): boolean {
+  if (env.NEWS_AGENT_DISABLED || !newsNeedsRefresh(current)) return false
+  const now = Date.now()
+  const lastAttempt = onDemandAttemptedAt.get(franchiseId)
+  if (lastAttempt != null && lastAttempt >= now - env.NEWS_CHECK_INTERVAL_HOURS * 3_600_000) return false
+
+  const task = onDemandNews.enqueue(`franchise:${franchiseId}`, async () => {
+    await refreshFranchiseNews(franchiseId)
+  })
+  if (!task.accepted) return false
+  onDemandAttemptedAt.set(franchiseId, now)
+  // This is a bounded process-local throttle (the catalogue is currently small); shed oldest keys
+  // if it grows so a long-running server never accumulates an unbounded access history.
+  if (onDemandAttemptedAt.size > 500) onDemandAttemptedAt.delete(onDemandAttemptedAt.keys().next().value!)
+  return true
+}
 
 /** Stable per-installment key so "Season 4" / "season 4!" / "SEASON 4" collapse to one row. */
 const dedupeKey = (next: string): string => next.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
@@ -113,7 +165,13 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
   const priorRows = await db.select().from(announcements).where(eq(announcements.franchiseId, franchiseId))
   const knownAnnouncements = priorRows.map((a) => `${a.next} (${a.status})`)
 
-  const result = await researchFranchiseNews({ title: f.title, knownParts, current: f.upcoming ?? null, knownAnnouncements })
+  const result = await researchFranchiseNews({
+    title: f.title,
+    catalogueSource: f.source === 'tmdb' ? 'tmdb' : 'anilist',
+    knownParts,
+    current: f.upcoming ?? null,
+    knownAnnouncements,
+  })
   if (!result) return { checked: false, notified: 0 }
 
   const upcoming: FranchiseUpcoming = { ...result, checked: new Date().toISOString() }

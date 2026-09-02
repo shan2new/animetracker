@@ -140,42 +140,38 @@ struct ReturnFact {
         if let at = appModel.nextPremiere(of: f) {
             return known(TemporalCopy.returns(at: at, now: now, source: f.source), at: at, now: now)
         }
-        guard let upcoming = f.upcoming, let key = upcoming.releaseSortKey else { return unknown() }
-        let y = key.value / 10000, month = (key.value / 100) % 100, day = key.value % 100
+        guard let upcoming = f.upcoming, let window = upcoming.releaseWindow,
+              window.precision != .unknown, let parts = window.parts else { return unknown() }
         // Day precision inside the current year gets the friendly form — "Returns tomorrow",
         // "Returns Saturday", "Returns Oct 2" — which is also always the shortest.
-        if key.precision >= 3, y == Formatting.localParts(now, anchor: .utcDate).y,
-           let date = utcDay(y: y, month: month, day: day) {
+        if window.precision == .day, parts.year == Formatting.localParts(now, anchor: .utcDate).y,
+           let date = utcDay(y: parts.year, month: parts.month, day: parts.day) {
             let at = ms(date)
             return known(TemporalCopy.returns(at: at, now: now, source: .tmdb), at: at, now: now)
         }
-        // Everything else settles at month-and-year: "Returns Oct 2026" fits, "Oct 2, 2027" does
-        // not, and a day nine months out is not a fact anybody acts on. A curated window is a
-        // calendar date, so it is read as one (`.utcDate`) whatever the franchise's source.
-        if key.precision >= 2, let date = utcDay(y: y, month: month, day: 1) {
+        // Every other announced DATE settles at month-and-year: "Returns Oct 2026" fits, "Oct 2,
+        // 2027" does not, and a day nine months out is not a fact anybody acts on. A curated
+        // window is a calendar date, so it is read as one (`.utcDate`) whatever the source is.
+        if window.precision == .day || window.precision == .month,
+           let date = utcDay(y: parts.year, month: parts.month, day: 1) {
             let at = ms(date)
             return known(returns(window: LibraryDates.monthYear(at, anchor: .utcDate)), at: at, now: now)
         }
-        // `releaseSortKey` only reads ISO, but the curated windows arrive as prose — "October 2026"
-        // resolves to year precision there and would throw away a month we actually know.
-        let window = upcoming.displayRelease.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let date = parseWindow(window) {
-            let at = ms(date)
-            return known(returns(window: LibraryDates.monthYear(at, anchor: .utcDate)), at: at, now: now)
+        // A quarter or a year is a WINDOW, and only the server's prose states it honestly: the
+        // month inside `releaseWindow.date` is an ordering device ("Summer 2027" sorts as July),
+        // never a month to print. Said in the same grammar as a date — "Returns summer 2027",
+        // "Returns late 2026", "Returns 2027" — and never the server's capital dropped into the
+        // middle of a sentence. A window is never `soon`: with no instant behind it the colour
+        // rule has nothing to measure.
+        let prose = upcoming.displayRelease.trimmingCharacters(in: .whitespacesAndNewlines)
+        if prose.count == 4, Int(prose) != nil {
+            return known(returns(window: prose), at: nil, now: now)
         }
-        // Anything that is not a month is a WINDOW, stated in the same grammar as a date: "Returns
-        // 2027", "Returns late 2027" — never the server's capital dropped into the middle of a
-        // sentence. A window is never `soon`: "late 2027" is not a step anybody takes this week,
-        // and with no instant behind it the colour rule has nothing to measure.
-        if window.count == 4, Int(window) != nil {
-            return known(returns(window: window), at: nil, now: now)
-        }
-        if !window.isEmpty, window.count <= 20 {
-            return known(returns(window: ReturnFact.lowerFirst(window)), at: nil, now: now)
+        if !prose.isEmpty, prose.count <= 20 {
+            return known(returns(window: ReturnFact.lowerFirst(prose)), at: nil, now: now)
         }
         // A window too long to state whole is reduced to its year rather than ellipsed.
-        if y > 1900 { return known(returns(window: String(y)), at: nil, now: now) }
-        return unknown()
+        return known(returns(window: String(parts.year)), at: nil, now: now)
     }
 
     /// `String.lowercasedFirst()` lives `private` in `Copy.swift` and `fileprivate` again in
@@ -185,22 +181,6 @@ struct ReturnFact {
         guard let first = s.first else { return s }
         return first.lowercased() + s.dropFirst()
     }
-
-    /// The prose release windows the catalogue actually ships, read in English because that is what
-    /// the server writes them in. A failure here costs a month, never a wrong month.
-    private static func parseWindow(_ s: String) -> Date? {
-        guard !s.isEmpty else { return nil }
-        return windowParsers.lazy.compactMap { $0.date(from: s) }.first
-    }
-
-    private static let windowParsers: [DateFormatter] = ["MMMM yyyy", "MMMM d, yyyy", "MMM d, yyyy"]
-        .map { format in
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = TimeZone(identifier: "UTC")
-            formatter.dateFormat = format
-            return formatter
-        }
 
     /// A curated release window is a calendar date, not an instant: read it in UTC or a device in
     /// UTC+9 reads "October 2026" as September.

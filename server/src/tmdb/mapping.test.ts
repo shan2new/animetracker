@@ -8,12 +8,15 @@ import {
   isJapaneseAnimation,
   isJapaneseAnimationShow,
   tmdbEpisodes,
+  tmdbFranchiseEnrichment,
   tmdbNetworks,
   tmdbSeasonMediaId,
   tmdbSeasonToMediaRow,
+  tmdbShowUpcoming,
   tmdbShowToGroupingResult,
+  tmdbVideos,
 } from './mapping.js'
-import type { TmdbEpisode, TmdbSearchResult, TmdbSeason, TmdbShow } from './types.js'
+import type { TmdbEpisode, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
 
 // Fixed "now": 2026-07-01T00:00Z.
 const NOW = Date.UTC(2026, 6, 1)
@@ -72,6 +75,21 @@ function episode(n: number, opts: Partial<TmdbEpisode> = {}): TmdbEpisode {
     air_date: '2025-05-04',
     still_path: `/e${n}.jpg`,
     runtime: 42,
+    ...opts,
+  }
+}
+
+function video(opts: Partial<TmdbVideo> = {}): TmdbVideo {
+  return {
+    id: 'tmdb-video-row',
+    key: 'youtube-id',
+    site: 'YouTube',
+    type: 'Trailer',
+    name: 'Official Trailer',
+    official: true,
+    iso_639_1: 'en',
+    iso_3166_1: 'US',
+    published_at: '2026-01-05T00:00:00.000Z',
     ...opts,
   }
 }
@@ -264,6 +282,12 @@ describe('tmdbSeasonToMediaRow', () => {
     expect(row.episodesList).toEqual(eps)
   })
 
+  it('carries season-specific videos separately from episode metadata', () => {
+    const videos = tmdbVideos([video()])
+    const row = tmdbSeasonToMediaRow(show(), season(1), NOW, [], videos)
+    expect(row.videos).toEqual(videos)
+  })
+
   it('defaults to no episodes and no studios when omitted', () => {
     const row = tmdbSeasonToMediaRow(show(), season(1), NOW)
     expect(row.episodesList).toEqual([])
@@ -315,6 +339,152 @@ describe('tmdbNetworks', () => {
 
   it('is empty when the show has no networks', () => {
     expect(tmdbNetworks(show())).toEqual([])
+  })
+})
+
+describe('tmdbVideos', () => {
+  it('maps playable links and recognizes renewal featurettes as announcements', () => {
+    expect(tmdbVideos([
+      video({ key: 'renewal', type: 'Featurette', name: 'The series is returning for Season 6!' }),
+    ])).toEqual([{
+      id: 'renewal',
+      site: 'youtube',
+      kind: 'announcement',
+      title: 'The series is returning for Season 6!',
+      url: 'https://www.youtube.com/watch?v=renewal',
+      thumbnail: 'https://i.ytimg.com/vi/renewal/hqdefault.jpg',
+      official: true,
+      language: 'en',
+      country: 'US',
+      publishedAt: '2026-01-05T00:00:00.000Z',
+    }])
+  })
+
+  it('drops non-promotional miscellany and deduplicates provider ids', () => {
+    expect(tmdbVideos([
+      video({ type: 'Bloopers', key: 'out' }),
+      video({ key: 'same', official: false }),
+      video({ key: 'same', official: true }),
+    ])).toHaveLength(1)
+  })
+})
+
+describe('tmdbFranchiseEnrichment', () => {
+  it('maps ratings, people, conservative themes, related artwork, and show videos', () => {
+    const value = tmdbFranchiseEnrichment(show({
+      adult: false,
+      created_by: [{ id: 1, name: 'Creator', profile_path: '/creator.jpg' }],
+      videos: { results: [video()] },
+      content_ratings: { results: [
+        { iso_3166_1: 'US', rating: 'TV-MA' },
+        { iso_3166_1: 'AU', rating: 'M' },
+      ] },
+      keywords: { results: [
+        { id: 1, name: 'friendship' },
+        { id: 2, name: 'secret identity revealed' },
+      ] },
+      aggregate_credits: {
+        cast: [{
+          id: 2,
+          name: 'Lead',
+          profile_path: '/lead.jpg',
+          order: 0,
+          total_episode_count: 20,
+          roles: [{ character: 'Hero', episode_count: 20 }],
+        }],
+        crew: [{
+          id: 3,
+          name: 'Director',
+          profile_path: '/director.jpg',
+          jobs: [{ job: 'Director', episode_count: 8 }],
+        }],
+      },
+      recommendations: { results: [{
+        id: 99,
+        name: 'Related Show',
+        poster_path: '/related-poster.jpg',
+        backdrop_path: '/related-back.jpg',
+        first_air_date: '2024-02-01',
+        media_type: 'tv',
+        adult: false,
+      }] },
+    }), NOW)
+
+    expect(value.level).toBe('full')
+    expect(value.themes).toEqual(['Drama', 'Friendship'])
+    expect(value.contentRatings).toEqual([
+      { country: 'AU', rating: 'M' },
+      { country: 'US', rating: 'TV-MA' },
+    ])
+    expect(value.people.creators[0]).toMatchObject({ name: 'Creator', role: 'Creator' })
+    expect(value.people.directors[0]).toMatchObject({ name: 'Director', role: 'Director' })
+    expect(value.people.cast[0]).toMatchObject({ name: 'Lead', role: 'Hero' })
+    expect(value.related[0]).toEqual({
+      source: 'tmdb',
+      externalId: 99,
+      franchiseId: null,
+      title: 'Related Show',
+      year: 2024,
+      images: {
+        portrait: 'https://image.tmdb.org/t/p/w780/related-poster.jpg',
+        landscape: 'https://image.tmdb.org/t/p/w1280/related-back.jpg',
+      },
+    })
+    expect(value.videos[0]?.id).toBe('youtube-id')
+  })
+})
+
+describe('tmdbShowUpcoming', () => {
+  it('ships a dated future season immediately with the search materialization', () => {
+    const s = show({
+      id: 82_596,
+      seasons: [season(1), season(6, { air_date: '2026-12-24' })],
+      last_episode_to_air: { air_date: '2025-12-18', episode_number: 10, season_number: 5 },
+    })
+    expect(tmdbShowUpcoming(s, NOW)).toEqual({
+      status: 'upcoming_dated',
+      next: 'Season 6',
+      release: '2026-12-24',
+      note: null,
+      source: 'https://www.themoviedb.org/tv/82596',
+      checked: new Date(NOW).toISOString(),
+    })
+  })
+
+  it('uses the provider returning status when the next season has no catalogue row yet', () => {
+    const s = show({
+      id: 87_826,
+      status: 'Returning Series',
+      seasons: [season(8), season(9)],
+      last_episode_to_air: { air_date: '2025-10-29', episode_number: 11, season_number: 9 },
+    })
+    expect(tmdbShowUpcoming(s, NOW)).toMatchObject({
+      status: 'announced_no_date',
+      next: 'Season 10',
+      release: 'TBA',
+      source: 'https://www.themoviedb.org/tv/87826',
+    })
+  })
+
+  it('does not invent another season for an ended or currently releasing show', () => {
+    expect(tmdbShowUpcoming(show({ status: 'Ended' }), NOW)).toBeNull()
+    expect(
+      tmdbShowUpcoming(
+        show({
+          next_episode_to_air: { air_date: '2026-07-10', episode_number: 5, season_number: 2 },
+        }),
+        NOW,
+      ),
+    ).toBeNull()
+  })
+
+  it('does not mistake an old undated season for a new announcement', () => {
+    const s = show({
+      seasons: [season(1, { air_date: null }), season(2, { air_date: '2025-01-15' })],
+      last_episode_to_air: null,
+      status: 'Ended',
+    })
+    expect(tmdbShowUpcoming(s, NOW)).toBeNull()
   })
 })
 
