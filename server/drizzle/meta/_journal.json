@@ -36,6 +36,13 @@
       "when": 1784492188585,
       "tag": "0004_marvelous_mojo",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788349708158,
+      "tag": "0005_lazy_loki",
+      "breakpoints": true
     }
   ]
 }

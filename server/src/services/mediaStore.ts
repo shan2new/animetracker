@@ -1,5 +1,5 @@
 import { eq, inArray } from 'drizzle-orm'
-import { fetchByIds } from '../anilist/client.js'
+import { fetchByIds, type AniListRequestOptions } from '../anilist/client.js'
 import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
 import { media, mediaRelations } from '../db/schema.js'
@@ -149,12 +149,17 @@ export async function getMediaRow(id: number): Promise<MediaRow | undefined> {
  * instead of racing to fetch it twice. Ids AniList omits resolve to `undefined` and are
  * cached as such, so a dead id is never re-requested either.
  */
-export function makeAniListFetcher() {
+export function makeAniListFetcher(
+  options: { seed?: AniListMedia[]; request?: AniListRequestOptions } = {},
+) {
   const memo = new Map<number, Promise<AniListMedia | undefined>>()
+  // Search already paid for these complete Media payloads. Priming the BFS with them removes the
+  // old, redundant first graph request and lets overlapping seeds share the same objects.
+  for (const item of options.seed ?? []) memo.set(item.id, Promise.resolve(item))
   return async (ids: number[]): Promise<AniListMedia[]> => {
     const need = ids.filter((id) => !memo.has(id))
     if (need.length > 0) {
-      const batch = fetchByIds(need).then(async (fetched) => {
+      const batch = fetchByIds(need, options.request).then(async (fetched) => {
         if (fetched.length > 0) await upsertMedia(fetched) // one batched write per frontier
         return fetched
       })

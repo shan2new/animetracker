@@ -53,6 +53,12 @@ export const media = pgTable(
     uniqueIndex('media_source_external_uq')
       .on(t.source, t.externalId)
       .where(sql`${t.source} = 'tmdb'`),
+    // Search is a local indexed read in the steady state. `simple` keeps romanized titles and
+    // proper nouns intact; the query uses prefix lexemes so typeahead remains index-backed.
+    index('media_title_search_idx').using(
+      'gin',
+      sql`to_tsvector('simple', coalesce(${t.titleEnglish}, '') || ' ' || coalesce(${t.titleRomaji}, ''))`,
+    ),
   ],
 )
 
@@ -97,6 +103,10 @@ export const franchise = pgTable(
     uniqueIndex('franchise_source_external_uq')
       .on(t.source, t.externalId)
       .where(sql`${t.source} = 'tmdb'`),
+    index('franchise_title_search_idx').using(
+      'gin',
+      sql`to_tsvector('simple', coalesce(${t.title}, ''))`,
+    ),
   ],
 )
 

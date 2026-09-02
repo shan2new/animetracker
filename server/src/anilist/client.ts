@@ -1,4 +1,5 @@
 import type { AniListMedia } from './types.js'
+import { abortReason, abortableSleep, isAbortError, withTimeout } from '../util/abort.js'
 
 const ENDPOINT = 'https://graphql.anilist.co'
 
@@ -33,36 +34,63 @@ function chunked<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const DEFAULT_MAX_RETRIES = 4
+const DEFAULT_TIMEOUT_MS = 10_000
+
+export interface AniListRequestOptions {
+  /** Cancels the entire logical operation, including retry backoff. */
+  signal?: AbortSignal
+  /** Retries after the first attempt. Interactive search passes zero; sync jobs use the default. */
+  maxRetries?: number
+  /** Per-attempt socket deadline. Prevents a black-holed fetch from waiting forever. */
+  timeoutMs?: number
+}
 
 /**
  * POST a GraphQL query with bounded retry: honors AniList's 429 `Retry-After`, and backs
  * off on transient 5xx / network errors. Throws after retries are spent. Ported from the
  * legacy web client (legacy-web/src/anilist.ts).
  */
-export async function gql<T>(query: string, variables: Record<string, unknown>, attempt = 0): Promise<T> {
-  const MAX_RETRIES = 4
+export async function gql<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  options: AniListRequestOptions = {},
+): Promise<T> {
+  return gqlAttempt(query, variables, options, 0)
+}
+
+async function gqlAttempt<T>(
+  query: string,
+  variables: Record<string, unknown>,
+  options: AniListRequestOptions,
+  attempt: number,
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES
   try {
     const res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ query, variables }),
+      signal: withTimeout(options.signal, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     })
     if (res.status === 429 || res.status >= 500) {
-      if (attempt >= MAX_RETRIES) throw new Error(`AniList ${res.status}`)
+      if (attempt >= maxRetries) throw new Error(`AniList ${res.status}`)
       const retryAfter = Number(res.headers.get('Retry-After'))
       const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2 ** attempt * 1000
-      await sleep(waitMs)
-      return gql<T>(query, variables, attempt + 1)
+      await abortableSleep(waitMs, options.signal)
+      return gqlAttempt<T>(query, variables, options, attempt + 1)
     }
     if (!res.ok) throw new Error(`AniList ${res.status}`)
     const json = (await res.json()) as { data?: T; errors?: { message: string }[] }
     if (json.errors) throw new Error(json.errors.map((e) => e.message).join('; '))
     return json.data as T
   } catch (err) {
-    if (attempt < MAX_RETRIES && err instanceof TypeError) {
-      await sleep(2 ** attempt * 1000)
-      return gql<T>(query, variables, attempt + 1)
+    // A caller cancellation owns the result: never turn a superseded keystroke into another
+    // attempt. A per-attempt timeout, by contrast, is retryable for background sync work.
+    if (options.signal?.aborted) throw abortReason(options.signal)
+    if (attempt < maxRetries && (err instanceof TypeError || isAbortError(err))) {
+      await abortableSleep(2 ** attempt * 1000, options.signal)
+      return gqlAttempt<T>(query, variables, options, attempt + 1)
     }
     throw err
   }
@@ -74,13 +102,14 @@ async function settle<T>(promises: Promise<T>[]): Promise<T[]> {
 }
 
 /** Fetch full live metadata (incl. relations) for a set of AniList ids. */
-export async function fetchByIds(ids: number[]): Promise<AniListMedia[]> {
+export async function fetchByIds(ids: number[], options: AniListRequestOptions = {}): Promise<AniListMedia[]> {
   if (ids.length === 0) return []
   const batches = await settle(
     chunked(ids, 50).map((chunk) =>
       gql<{ Page: { media: AniListMedia[] } }>(
         `query ($ids: [Int]) { Page(perPage: 50) { media(id_in: $ids, type: ANIME) { ${MEDIA_FIELDS} } } }`,
         { ids: chunk },
+        options,
       ),
     ),
   )
@@ -88,11 +117,12 @@ export async function fetchByIds(ids: number[]): Promise<AniListMedia[]> {
 }
 
 /** Fetch a single media with relations (used while expanding the franchise graph). */
-export async function fetchOne(id: number): Promise<AniListMedia | null> {
+export async function fetchOne(id: number, options: AniListRequestOptions = {}): Promise<AniListMedia | null> {
   try {
     const data = await gql<{ Media: AniListMedia | null }>(
       `query ($id: Int) { Media(id: $id, type: ANIME) { ${MEDIA_FIELDS} } }`,
       { id },
+      options,
     )
     return data.Media
   } catch (err) {
@@ -107,7 +137,10 @@ export async function fetchOne(id: number): Promise<AniListMedia | null> {
  * Exact most-recent aired episode time for each id, from airingSchedules (TIME_DESC).
  * Returns a map of mediaId → airingAt (ms epoch). Ported from the legacy client.
  */
-export async function fetchLastAired(ids: number[]): Promise<Record<number, number>> {
+export async function fetchLastAired(
+  ids: number[],
+  options: AniListRequestOptions = {},
+): Promise<Record<number, number>> {
   const out: Record<number, number> = {}
   if (ids.length === 0) return out
   const batches = await settle(
@@ -121,6 +154,7 @@ export async function fetchLastAired(ids: number[]): Promise<Record<number, numb
       return gql<Record<string, { airingSchedules: { airingAt: number; mediaId: number }[] }>>(
         `query { ${aliases} }`,
         {},
+        options,
       )
     }),
   )
@@ -134,15 +168,20 @@ export async function fetchLastAired(ids: number[]): Promise<Record<number, numb
 }
 
 /** Search AniList. Empty query returns what's trending now. */
-export async function searchMedia(query: string): Promise<AniListMedia[]> {
+export async function searchMedia(
+  query: string,
+  options: AniListRequestOptions & { limit?: number } = {},
+): Promise<AniListMedia[]> {
   const trimmed = query.trim()
+  const perPage = Math.max(1, Math.min(options.limit ?? 30, 30))
   const data = await gql<{ Page: { media: AniListMedia[] } }>(
-    `query ($search: String, $sort: [MediaSort]) {
-      Page(perPage: 30) { media(search: $search, type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} } }
+    `query ($search: String, $sort: [MediaSort], $perPage: Int) {
+      Page(perPage: $perPage) { media(search: $search, type: ANIME, sort: $sort, isAdult: false) { ${MEDIA_FIELDS} } }
     }`,
     trimmed
-      ? { search: trimmed, sort: ['SEARCH_MATCH', 'POPULARITY_DESC'] }
-      : { search: null, sort: ['TRENDING_DESC', 'POPULARITY_DESC'] },
+      ? { search: trimmed, sort: ['SEARCH_MATCH', 'POPULARITY_DESC'], perPage }
+      : { search: null, sort: ['TRENDING_DESC', 'POPULARITY_DESC'], perPage },
+    options,
   )
   return data.Page.media
 }

@@ -1,4 +1,5 @@
 import { env } from '../env.js'
+import { withTimeout } from '../util/abort.js'
 import { cerebrasChat } from '../util/cerebras.js'
 
 // Strict JSON schema the model must conform to: a single corrected string.
@@ -41,13 +42,14 @@ const MIN_CORRECT_LENGTH = 4
  * model errored/timed out, or the result is empty or unchanged from the input. Never throws — a
  * failed correction simply means the original (empty) search result stands.
  */
-export async function correctSearchQuery(query: string): Promise<string | null> {
+export async function correctSearchQuery(
+  query: string,
+  opts: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<string | null> {
   const trimmed = query.trim()
   if (trimmed.length < MIN_CORRECT_LENGTH) return null
   if (env.SEARCH_CORRECT_DISABLED || !env.CEREBRAS_API_KEY) return null
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {
     const res = await cerebrasChat(
       env.CEREBRAS_API_KEY,
@@ -61,7 +63,7 @@ export async function correctSearchQuery(query: string): Promise<string | null> 
           { role: 'user', content: trimmed },
         ],
       },
-      controller.signal,
+      withTimeout(opts.signal, opts.timeoutMs ?? TIMEOUT_MS),
     )
     if (!res.ok) return null
     const json = (await res.json()) as { choices?: { message?: { content?: string } }[] }
@@ -74,7 +76,5 @@ export async function correctSearchQuery(query: string): Promise<string | null> 
     return corrected
   } catch {
     return null // disabled-by-failure: degrade to the original (empty) result
-  } finally {
-    clearTimeout(timer)
   }
 }

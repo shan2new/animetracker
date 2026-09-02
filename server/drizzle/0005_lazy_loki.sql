@@ -1,0 +1,2 @@
+CREATE INDEX "franchise_title_search_idx" ON "franchise" USING gin (to_tsvector('simple', coalesce("title", '')));--> statement-breakpoint
+CREATE INDEX "media_title_search_idx" ON "media" USING gin (to_tsvector('simple', coalesce("title_english", '') || ' ' || coalesce("title_romaji", '')));

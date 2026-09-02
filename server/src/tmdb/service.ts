@@ -5,7 +5,7 @@ import type { GroupedPart } from '../grouping/llm.js'
 import { persistFranchises, type GroupOutcome } from '../grouping/service.js'
 import { upsertMediaRows } from '../services/mediaStore.js'
 import type { EpisodeMeta } from '../types/api.js'
-import { getSeason, getShow } from './client.js'
+import { getSeason, getShow, type TmdbRequestOptions } from './client.js'
 import {
   imageUrl,
   includedSeasons,
@@ -20,11 +20,15 @@ import type { TmdbSeason } from './types.js'
  * Best-effort per-episode metadata for every included season, keyed by season_number. A failed
  * season fetch degrades to no episodes rather than failing the whole materialization.
  */
-async function fetchSeasonEpisodes(showId: number, seasons: TmdbSeason[]): Promise<Map<number, EpisodeMeta[]>> {
+async function fetchSeasonEpisodes(
+  showId: number,
+  seasons: TmdbSeason[],
+  request: TmdbRequestOptions = {},
+): Promise<Map<number, EpisodeMeta[]>> {
   const entries = await Promise.all(
     seasons.map(async (s): Promise<[number, EpisodeMeta[]]> => {
       try {
-        const detail = await getSeason(showId, s.season_number)
+        const detail = await getSeason(showId, s.season_number, request)
         return [s.season_number, detail ? tmdbEpisodes(detail.episodes) : []]
       } catch {
         return [s.season_number, []]
@@ -41,7 +45,10 @@ async function fetchSeasonEpisodes(showId: number, seasons: TmdbSeason[]): Promi
  * index on franchise (source, external_id) plus deterministic member ids make a lost create
  * race resolve to the winner inside persistFranchises.
  */
-export async function ensureTvFranchise(showId: number): Promise<GroupOutcome | null> {
+export async function ensureTvFranchise(
+  showId: number,
+  opts: { hydrateEpisodes?: boolean; request?: TmdbRequestOptions } = {},
+): Promise<GroupOutcome | null> {
   const [existing] = await db
     .select({ id: franchise.id })
     .from(franchise)
@@ -49,7 +56,7 @@ export async function ensureTvFranchise(showId: number): Promise<GroupOutcome | 
     .limit(1)
   if (existing) return { franchiseId: existing.id, created: false, attached: 0 }
 
-  const show = await getShow(showId)
+  const show = await getShow(showId, opts.request)
   if (!show || includedSeasons(show).length === 0) return null
   // Source boundary, enforced at the one place that CREATES a TMDB franchise rather than in each
   // caller. Checked against the full show payload (authoritative) and before the per-season
@@ -58,7 +65,11 @@ export async function ensureTvFranchise(showId: number): Promise<GroupOutcome | 
 
   const now = Date.now()
   const seasons = includedSeasons(show)
-  const episodesBySeason = await fetchSeasonEpisodes(showId, seasons)
+  // Search only needs a real franchise id + summary. Fetching every season's episode list here
+  // made one cold result fan out into dozens of provider calls. The hourly TV refresh hydrates
+  // those lists later; explicit scripts and sync retain the full default behavior.
+  const episodesBySeason =
+    opts.hydrateEpisodes === false ? new Map<number, EpisodeMeta[]>() : await fetchSeasonEpisodes(showId, seasons, opts.request)
   let rows
   try {
     rows = seasons.map((s) => tmdbSeasonToMediaRow(show, s, now, episodesBySeason.get(s.season_number) ?? []))

@@ -1,217 +1,433 @@
-import { inArray } from 'drizzle-orm'
-import type { AniListMedia } from '../anilist/types.js'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { searchMedia } from '../anilist/client.js'
+import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
-import { franchiseMember } from '../db/schema.js'
+import { franchise, franchiseMember, media } from '../db/schema.js'
 import { expandComponent } from '../grouping/graph.js'
+import { DeterministicGrouper } from '../grouping/llm.js'
 import { groupKnownComponent } from '../grouping/service.js'
 import { searchTv, tmdbEnabled } from '../tmdb/client.js'
 import { isJapaneseAnimation } from '../tmdb/mapping.js'
 import { ensureTvFranchise } from '../tmdb/service.js'
+import type { TmdbSearchResult } from '../tmdb/types.js'
 import type { FranchiseListResponse, SourceOutcome } from '../types/api.js'
-import { mapWithConcurrency } from '../util/concurrency.js'
+import { abortableSleep, withTimeout } from '../util/abort.js'
+import { BoundedTaskQueue, type EnqueuedTask } from '../util/taskQueue.js'
 import { getSummaries, getTrendingFranchises } from './franchiseView.js'
 import { makeAniListFetcher, upsertMedia } from './mediaStore.js'
 import { correctSearchQuery } from './queryCorrect.js'
 
-// Cap how many cache-miss components we group synchronously per search, to bound LLM cost/latency.
-const LAZY_GROUP_CAP = 8
-// How many components to expand / group in parallel. Bounded to respect AniList rate limits,
-// the OpenRouter budget, and the DB connection pool.
-const EXPAND_CONCURRENCY = 6
-const GROUP_CONCURRENCY = 4
-// Cap how many not-yet-known TMDB shows we materialize per search (each costs one /tv/{id}
-// call; known shows short-circuit on a DB lookup, so steady-state is ~1 TMDB call per search).
-const LAZY_TV_CAP = 5
-const TV_CONCURRENCY = 4
+// Search is interactive typeahead, not a catalogue-ingestion job. These are deliberately tighter
+// than the iOS client's 16.6 s logical-request budget: fail soft while the result is still useful.
+const SEARCH_BUDGET_MS = 2_400
+const SOURCE_TIMEOUT_MS = 1_050
+const CORRECTION_TIMEOUT_MS = 650
+const COLD_ENRICH_WAIT_MS = 600
+const ENRICHMENT_BUDGET_MS = 8_000
+const MIN_REMOTE_QUERY_LENGTH = 3
+const ANILIST_ENRICH_CAP = 3
+const TV_ENRICH_CAP = 2
+
+// Capacity includes active work. Excess typeahead cache warming is dropped, never accumulated.
+const enrichment = new BoundedTaskQueue(2, 24, (key, error) => {
+  console.warn(`search enrichment failed (${key}):`, error instanceof Error ? error.message : error)
+})
+
+export interface SearchProfile {
+  mode: 'trending' | 'local' | 'remote' | 'corrected-local'
+  queryLength: number
+  localMs: number
+  upstreamMs: number
+  enrichmentWaitMs: number
+  localResults: number
+  anilistHits: number
+  tmdbHits: number
+  queued: number
+  dropped: number
+  queueDepth: number
+  resultCount: number
+  totalMs: number
+}
+
+interface SearchOptions {
+  exact?: boolean
+  /** Aborted when the iOS client supersedes this query or disconnects. */
+  signal?: AbortSignal
+  /** Route-level structured logging hook; never receives the raw query. */
+  onProfile?: (profile: SearchProfile) => void
+}
 
 /**
- * Search franchises across both sources. Empty query → trending. AniList hits resolve to
- * franchises via lazy relation-graph grouping; TMDB TV hits (minus Japanese animation, which
- * AniList owns) are materialized deterministically via ensureTvFranchise. Results interleave
- * anime and TV in each source's relevance order.
- *
- * The response is honest about two things the caller cannot see otherwise: whether the query it
- * sent was silently spell-corrected (`correctedQuery`), and whether a catalogue failed or is
- * switched off rather than simply having no matches (`sources`). `opts.exact` opts out of the
- * correction, so a caller can insist on the literal query.
+ * Search the locally-materialized catalogue first. Only a genuine local miss reaches providers,
+ * and that lookup gets one short attempt—never the sync client's retry policy. Unknown hits are
+ * materialized by a bounded queue and cannot dominate request latency or multiply per keystroke.
  */
 export async function searchFranchises(
   query: string,
   limit = 30,
-  opts: { exact?: boolean } = {},
+  opts: SearchOptions = {},
 ): Promise<FranchiseListResponse> {
-  // A catalogue that threw is not a catalogue with no results — record which is which. TMDB's
-  // outcome is known before any request: with no TMDB_ACCESS_TOKEN the whole catalogue is off, and
-  // the empty-query (trending) branch below returns this object without touching either source.
+  const started = performance.now()
+  const trimmed = query.trim().replace(/\s+/g, ' ')
+  const requestSignal = withTimeout(opts.signal, SEARCH_BUDGET_MS)
   const sources: { anilist: SourceOutcome; tmdb: SourceOutcome } = {
     anilist: 'ok',
     tmdb: tmdbEnabled() ? 'ok' : 'disabled',
   }
-  if (!query.trim()) return { franchises: await getTrendingFranchises(limit), sources }
-
-  // The outcome is written per CALL, success included, so the LAST attempt wins. Latching only
-  // the failure would let a first call that threw mark the catalogue `failed` for good — and the
-  // spell-corrected retry below would then return live AniList hits under "AniList couldn't be
-  // reached", which is exactly the dishonesty `sources` exists to prevent.
-  const searchAniListSafe = (q: string) =>
-    searchMedia(q).then(
-      (r) => {
-        sources.anilist = 'ok'
-        return r
-      },
-      () => {
-        sources.anilist = 'failed'
-        return []
-      },
-    )
-  const searchTvSafe = (q: string) => {
-    if (!tmdbEnabled()) return Promise.resolve([])
-    return searchTv(q).then(
-      (r) => {
-        sources.tmdb = 'ok'
-        return r
-      },
-      () => {
-        sources.tmdb = 'failed'
-        return []
-      },
-    )
+  const profile: SearchProfile = {
+    mode: 'local',
+    queryLength: trimmed.length,
+    localMs: 0,
+    upstreamMs: 0,
+    enrichmentWaitMs: 0,
+    localResults: 0,
+    anilistHits: 0,
+    tmdbHits: 0,
+    queued: 0,
+    dropped: 0,
+    queueDepth: enrichment.pendingCount,
+    resultCount: 0,
+    totalMs: 0,
   }
 
-  let [hits, tvHitsRaw] = await Promise.all([searchAniListSafe(query), searchTvSafe(query)])
-  // AniList ANDs the query's whitespace tokens with no typo tolerance, so one misspelled word
-  // ("Mushuko" for "Mushoku") returns nothing at all. When both sources whiff, spell-correct the
-  // query via Cerebras and search once more with the fixed query before giving up.
+  const finish = (response: FranchiseListResponse, mode: SearchProfile['mode']): FranchiseListResponse => {
+    profile.mode = mode
+    profile.resultCount = response.franchises.length
+    profile.queueDepth = enrichment.pendingCount
+    profile.totalMs = roundMs(performance.now() - started)
+    opts.onProfile?.(profile)
+    return response
+  }
+
+  if (!trimmed) {
+    const franchises = await getTrendingFranchises(limit)
+    return finish({ franchises, sources }, 'trending')
+  }
+
+  // One- and two-character typeahead never triggers network, LLM, or catalogue writes. Indexed
+  // prefix search still returns known titles; an empty result simply waits for the next keystroke.
+  const localStarted = performance.now()
+  const localIds = await searchLocalFranchiseIds(trimmed, limit)
+  profile.localMs = roundMs(performance.now() - localStarted)
+  profile.localResults = localIds.length
+  if (localIds.length > 0 || trimmed.length < MIN_REMOTE_QUERY_LENGTH) {
+    return finish({ franchises: await getSummaries(localIds), sources }, 'local')
+  }
+
+  const upstreamStarted = performance.now()
+  let [animeHits, rawTvHits] = await searchProviders(trimmed, limit, requestSignal, sources)
   let correctedQuery: string | undefined
-  if (hits.length === 0 && tvHitsRaw.length === 0 && !opts.exact) {
-    const corrected = await correctSearchQuery(query)
-    if (corrected) {
-      ;[hits, tvHitsRaw] = await Promise.all([searchAniListSafe(corrected), searchTvSafe(corrected)])
-      // Only claim a correction that actually changed the outcome — otherwise the client would
-      // apologise for a rewrite that found nothing either.
-      if (hits.length > 0 || tvHitsRaw.length > 0) correctedQuery = corrected
+
+  // Correction is deliberately serial and only runs after at least one provider positively
+  // returned no hits. This avoids spending an LLM request on every cold local miss and avoids
+  // turning a total provider outage into another fan-out.
+  const providerResponded = sources.anilist === 'ok' || sources.tmdb === 'ok'
+  if (
+    animeHits.length === 0 &&
+    rawTvHits.length === 0 &&
+    providerResponded &&
+    !opts.exact &&
+    trimmed.length >= 4 &&
+    !requestSignal.aborted
+  ) {
+    const corrected = await correctSearchQuery(trimmed, {
+      signal: requestSignal,
+      timeoutMs: CORRECTION_TIMEOUT_MS,
+    })
+    if (corrected && !requestSignal.aborted) {
+      // Typo repair usually points at a known popular title. Re-check Postgres before paying for
+      // a second provider fan-out.
+      const correctedLocal = await searchLocalFranchiseIds(corrected, limit)
+      if (correctedLocal.length > 0) {
+        correctedQuery = corrected
+        profile.upstreamMs = roundMs(performance.now() - upstreamStarted)
+        return finish(
+          {
+            franchises: await getSummaries(correctedLocal),
+            correctedQuery,
+            originalQuery: query,
+            sources,
+          },
+          'corrected-local',
+        )
+      }
+
+      ;[animeHits, rawTvHits] = await searchProviders(corrected, limit, requestSignal, sources)
+      if (animeHits.length > 0 || rawTvHits.length > 0) correctedQuery = corrected
+    }
+  }
+  profile.upstreamMs = roundMs(performance.now() - upstreamStarted)
+  profile.anilistHits = animeHits.length
+
+  const tvHits = rawTvHits.filter((hit) => !isJapaneseAnimation(hit))
+  profile.tmdbHits = tvHits.length
+  let resolved = await resolveProviderHits(animeHits, tvHits)
+  let ids = interleave(resolved.animeIds, resolved.tvIds)
+
+  const tasks = requestSignal.aborted
+    ? []
+    : enqueueEnrichment(animeHits, tvHits, resolved.unknownAnime, resolved.unknownTv)
+  profile.queued = tasks.filter((task) => task.accepted && !task.shared).length
+  profile.dropped = tasks.filter((task) => !task.accepted).length
+
+  // Known results return immediately. A completely cold query waits only a small, fixed window
+  // for its first materialized franchise; useful warming continues in the bounded queue.
+  if (ids.length === 0 && tasks.some((task) => task.accepted) && !requestSignal.aborted) {
+    const remaining = Math.max(0, SEARCH_BUDGET_MS - (performance.now() - started) - 50)
+    const waitMs = Math.min(COLD_ENRICH_WAIT_MS, remaining)
+    if (waitMs > 0) {
+      const waitStarted = performance.now()
+      await Promise.race([
+        Promise.all(tasks.map((task) => task.done)),
+        abortableSleep(waitMs, requestSignal).catch(() => undefined),
+      ])
+      profile.enrichmentWaitMs = roundMs(performance.now() - waitStarted)
+      resolved = await resolveProviderHits(animeHits, tvHits)
+      ids = interleave(resolved.animeIds, resolved.tvIds)
     }
   }
 
-  // Materialize TV franchises concurrently with the anime grouping below. Japanese animation is
-  // suppressed — the AniList result is authoritative for that class (see docs/api-contract.md).
-  const tvOutcomesPromise = mapWithConcurrency(
-    tvHitsRaw.filter((r) => !isJapaneseAnimation(r)).slice(0, LAZY_TV_CAP),
-    TV_CONCURRENCY,
-    async (r) => {
-      try {
-        return await ensureTvFranchise(r.id)
-      } catch {
-        return null // a show that fails to materialize just doesn't contribute
-      }
+  return finish(
+    {
+      franchises: await getSummaries(ids.slice(0, limit)),
+      ...(correctedQuery ? { correctedQuery, originalQuery: query } : {}),
+      sources,
+    },
+    'remote',
+  )
+}
+
+async function searchProviders(
+  query: string,
+  limit: number,
+  signal: AbortSignal,
+  sources: { anilist: SourceOutcome; tmdb: SourceOutcome },
+): Promise<[AniListMedia[], TmdbSearchResult[]]> {
+  const providerLimit = Math.min(Math.max(limit, 10), 20)
+  const searchAniList = searchMedia(query, {
+    signal,
+    maxRetries: 0,
+    timeoutMs: SOURCE_TIMEOUT_MS,
+    limit: providerLimit,
+  }).then(
+    (hits) => {
+      sources.anilist = 'ok'
+      return hits
+    },
+    () => {
+      sources.anilist = 'failed'
+      return []
     },
   )
 
-  await upsertMedia(hits)
+  const searchTmdb = !tmdbEnabled()
+    ? Promise.resolve([])
+    : searchTv(query, {
+        signal,
+        maxRetries: 0,
+        timeoutMs: SOURCE_TIMEOUT_MS,
+        limit: providerLimit,
+      }).then(
+        (hits) => {
+          sources.tmdb = 'ok'
+          return hits
+        },
+        () => {
+          sources.tmdb = 'failed'
+          return []
+        },
+      )
 
-  const hitIds = hits.map((h) => h.id)
-  const existing = hitIds.length
-    ? await db.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, hitIds))
-    : []
-  const alreadyGrouped = new Set(existing.map((m) => m.mediaId))
+  return Promise.all([searchAniList, searchTmdb])
+}
 
-  // Seeds that still need grouping, in relevance order, capped to bound cost.
-  const seeds = hits.map((h) => h.id).filter((id) => !alreadyGrouped.has(id)).slice(0, LAZY_GROUP_CAP)
+interface ResolvedHits {
+  animeIds: string[]
+  tvIds: string[]
+  unknownAnime: Set<number>
+  unknownTv: Set<number>
+}
 
-  if (seeds.length > 0) {
-    // Phase 1: expand each seed's relation component (network-only, no LLM). A single
-    // memoised fetcher is shared across all seeds, so overlapping franchises (e.g. a query
-    // that returns many seasons of one show) never re-fetch the same node.
-    const fetcher = makeAniListFetcher()
-    const expanded = await mapWithConcurrency(seeds, EXPAND_CONCURRENCY, async (seedId) => {
-      try {
-        const component = await expandComponent(seedId, fetcher)
-        return component.size > 0 ? { seedId, component } : null
-      } catch {
-        return null // a seed that fails to expand just doesn't contribute; the rest still return
-      }
-    })
+/** Bulk-resolve provider-native ids without materializing anything on the request path. */
+async function resolveProviderHits(
+  animeHits: AniListMedia[],
+  tvHits: TmdbSearchResult[],
+): Promise<ResolvedHits> {
+  const animeNativeIds = dedupe(animeHits.map((hit) => hit.id))
+  const tvNativeIds = dedupe(tvHits.map((hit) => hit.id))
+  const [members, tvFranchises] = await Promise.all([
+    animeNativeIds.length
+      ? db
+          .select({ mediaId: franchiseMember.mediaId, franchiseId: franchiseMember.franchiseId })
+          .from(franchiseMember)
+          .where(inArray(franchiseMember.mediaId, animeNativeIds))
+      : Promise.resolve([]),
+    tvNativeIds.length
+      ? db
+          .select({ id: franchise.id, externalId: franchise.externalId })
+          .from(franchise)
+          .where(and(eq(franchise.source, 'tmdb'), inArray(franchise.externalId, tvNativeIds)))
+      : Promise.resolve([]),
+  ])
 
-    // Dedupe overlapping components so each franchise is grouped (and LLM-classified) once.
-    const unique = dedupeComponents(expanded.filter((e): e is ExpandedComponent => e !== null))
-
-    // Phase 2: group the distinct components concurrently.
-    await mapWithConcurrency(unique, GROUP_CONCURRENCY, async ({ seedId, component }) => {
-      try {
-        await groupKnownComponent(component, seedId)
-      } catch {
-        // skip a component that fails to group; the rest of the page still returns
-      }
-    })
-  }
-
-  // Re-resolve every hit to its (now-persisted) franchise and return them in relevance order.
-  const members = hitIds.length
-    ? await db.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, hitIds))
-    : []
-  const franchiseByMedia = new Map(members.map((m) => [m.mediaId, m.franchiseId]))
-
-  const animeIds: string[] = []
-  const seen = new Set<string>()
-  for (const hit of hits) {
-    const fid = franchiseByMedia.get(hit.id)
-    if (fid && !seen.has(fid)) {
-      seen.add(fid)
-      animeIds.push(fid)
-    }
-  }
-
-  const tvIds = (await tvOutcomesPromise)
-    .filter((o): o is NonNullable<typeof o> => o != null)
-    .map((o) => o.franchiseId)
-    .filter((fid) => !seen.has(fid))
-
-  // Interleave the two relevance-ordered lists (anime first) — deterministic, and keeps both
-  // sources visible on mixed-name queries without inventing a cross-source score.
-  const merged: string[] = []
-  for (let i = 0; i < Math.max(animeIds.length, tvIds.length); i++) {
-    if (animeIds[i]) merged.push(animeIds[i]!)
-    if (tvIds[i]) merged.push(tvIds[i]!)
-  }
+  const animeByNative = new Map(members.map((row) => [row.mediaId, row.franchiseId]))
+  const tvByNative = new Map(
+    tvFranchises
+      .filter((row): row is typeof row & { externalId: number } => row.externalId != null)
+      .map((row) => [row.externalId, row.id]),
+  )
 
   return {
-    franchises: await getSummaries(merged.slice(0, limit)),
-    ...(correctedQuery ? { correctedQuery, originalQuery: query } : {}),
-    sources,
+    animeIds: orderedDistinct(animeHits.map((hit) => animeByNative.get(hit.id))),
+    tvIds: orderedDistinct(tvHits.map((hit) => tvByNative.get(hit.id))),
+    unknownAnime: new Set(animeNativeIds.filter((id) => !animeByNative.has(id))),
+    unknownTv: new Set(tvNativeIds.filter((id) => !tvByNative.has(id))),
   }
 }
 
-interface ExpandedComponent {
-  seedId: number
-  component: Map<number, AniListMedia>
+function enqueueEnrichment(
+  animeHits: AniListMedia[],
+  tvHits: TmdbSearchResult[],
+  unknownAnime: Set<number>,
+  unknownTv: Set<number>,
+): EnqueuedTask[] {
+  const tasks: EnqueuedTask[] = []
+  const animeSeeds = animeHits.filter((hit) => unknownAnime.has(hit.id)).slice(0, ANILIST_ENRICH_CAP)
+  if (animeSeeds.length > 0) {
+    // The queue is bounded in width and depth; bound each batch in time as well so a degraded
+    // provider cannot occupy both workers indefinitely and starve later cache warming.
+    const enrichmentSignal = withTimeout(undefined, ENRICHMENT_BUDGET_MS)
+    const fetcher = makeAniListFetcher({
+      seed: animeHits,
+      request: { signal: enrichmentSignal, maxRetries: 1, timeoutMs: 2_500 },
+    })
+    let primed: Promise<void> | undefined
+    const prime = () => (primed ??= upsertMedia(animeHits))
+    for (const hit of animeSeeds) {
+      tasks.push(
+        enrichment.enqueue(`anilist:${hit.id}`, async () => {
+          await prime()
+          const component = await expandComponent(hit.id, fetcher)
+          if (component.size === 0) return
+          // Search warming must not depend on a third provider. The scheduled seed path retains
+          // LLM refinement; cold interactive search uses the deterministic relation graph.
+          await groupKnownComponent(component, hit.id, { grouper: new DeterministicGrouper() })
+        }),
+      )
+    }
+  }
+
+  for (const hit of tvHits.filter((item) => unknownTv.has(item.id)).slice(0, TV_ENRICH_CAP)) {
+    tasks.push(
+      enrichment.enqueue(`tmdb:${hit.id}`, async () => {
+        await ensureTvFranchise(hit.id, {
+          hydrateEpisodes: false,
+          request: {
+            signal: withTimeout(undefined, ENRICHMENT_BUDGET_MS),
+            maxRetries: 1,
+            timeoutMs: 2_500,
+          },
+        })
+      }),
+    )
+  }
+  return tasks
 }
 
 /**
- * Merge components that share any member into one. The relation BFS yields the same set from
- * any seed in a component, so overlapping expansions are effectively duplicates; collapsing
- * them avoids grouping the same franchise twice (and the duplicate LLM call / write race).
+ * Local typeahead over canonical names plus every installment alias. Both expressions have GIN
+ * indexes in schema.ts. Prefix tsquery lexemes keep typeahead index-backed as the catalogue grows.
  */
-function dedupeComponents(items: ExpandedComponent[]): ExpandedComponent[] {
-  const merged: ExpandedComponent[] = []
-  for (const item of items) {
-    const ids = [...item.component.keys()]
-    // Find every existing bucket this item touches — there can be more than one when the item
-    // bridges two previously-disjoint buckets (transitive merge). Fold them all together.
-    const overlapping = merged.filter((m) => ids.some((id) => m.component.has(id)))
-    if (overlapping.length === 0) {
-      merged.push({ seedId: item.seedId, component: new Map(item.component) })
-      continue
-    }
-    const target = overlapping[0]!
-    for (const [id, media] of item.component) target.component.set(id, media)
-    for (let i = 1; i < overlapping.length; i++) {
-      for (const [id, media] of overlapping[i]!.component) target.component.set(id, media)
-    }
-    if (overlapping.length > 1) {
-      const drop = new Set(overlapping.slice(1))
-      for (let i = merged.length - 1; i >= 0; i--) if (drop.has(merged[i]!)) merged.splice(i, 1)
+async function searchLocalFranchiseIds(query: string, limit: number): Promise<string[]> {
+  const lexemes = query.normalize('NFKC').toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu) ?? []
+  if (lexemes.length === 0) return []
+  const tsQueryText = lexemes.map((token) => `${token}:*`).join(' & ')
+  const phrase = lexemes.join(' ')
+  const prefix = `${phrase}%`
+  const tsQuery = sql`to_tsquery('simple', ${tsQueryText})`
+  const franchiseVector = sql`to_tsvector('simple', coalesce(${franchise.title}, ''))`
+  const mediaVector = sql`to_tsvector('simple', coalesce(${media.titleEnglish}, '') || ' ' || coalesce(${media.titleRomaji}, ''))`
+  const rowLimit = Math.min(Math.max(limit * 2, 20), 100)
+
+  const franchiseScore = sql<number>`(
+    case
+      when lower(${franchise.title}) = ${phrase} then 100
+      when lower(${franchise.title}) like ${prefix} then 50
+      else ts_rank_cd(${franchiseVector}, ${tsQuery}) * 10
+    end
+  )::float8`
+  const mediaScore = sql<number>`max(
+    case
+      when lower(coalesce(${media.titleEnglish}, '')) = ${phrase}
+        or lower(coalesce(${media.titleRomaji}, '')) = ${phrase} then 90
+      when lower(coalesce(${media.titleEnglish}, '')) like ${prefix}
+        or lower(coalesce(${media.titleRomaji}, '')) like ${prefix} then 45
+      else ts_rank_cd(${mediaVector}, ${tsQuery}) * 10
+    end
+  )::float8`
+  const popularity = sql<number>`coalesce(max(${media.popularity}), 0)`
+
+  const [canonicalRows, aliasRows] = await Promise.all([
+    db
+      .select({ id: franchise.id, score: franchiseScore })
+      .from(franchise)
+      .where(sql`${franchiseVector} @@ ${tsQuery}`)
+      .orderBy(desc(franchiseScore), desc(franchise.updatedAt))
+      .limit(rowLimit),
+    db
+      .select({ id: franchiseMember.franchiseId, score: mediaScore, popularity })
+      .from(media)
+      .innerJoin(franchiseMember, eq(franchiseMember.mediaId, media.id))
+      .where(sql`${mediaVector} @@ ${tsQuery}`)
+      .groupBy(franchiseMember.franchiseId)
+      .orderBy(desc(mediaScore), desc(popularity))
+      .limit(rowLimit),
+  ])
+
+  const scoreById = new Map<string, { score: number; popularity: number }>()
+  for (const row of canonicalRows) scoreById.set(row.id, { score: Number(row.score), popularity: 0 })
+  for (const row of aliasRows) {
+    const previous = scoreById.get(row.id)
+    const score = Math.max(previous?.score ?? 0, Number(row.score))
+    scoreById.set(row.id, { score, popularity: Math.max(previous?.popularity ?? 0, Number(row.popularity)) })
+  }
+
+  return [...scoreById.entries()]
+    .sort((a, b) => b[1].score - a[1].score || b[1].popularity - a[1].popularity)
+    .slice(0, limit)
+    .map(([id]) => id)
+}
+
+function interleave(anime: string[], tv: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (let i = 0; i < Math.max(anime.length, tv.length); i++) {
+    for (const id of [anime[i], tv[i]]) {
+      if (id && !seen.has(id)) {
+        seen.add(id)
+        out.push(id)
+      }
     }
   }
-  return merged
+  return out
+}
+
+function orderedDistinct(items: (string | undefined)[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of items) {
+    if (item && !seen.has(item)) {
+      seen.add(item)
+      out.push(item)
+    }
+  }
+  return out
+}
+
+function dedupe<T>(items: T[]): T[] {
+  return [...new Set(items)]
+}
+
+function roundMs(value: number): number {
+  return Math.round(value * 10) / 10
 }

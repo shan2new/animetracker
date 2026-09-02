@@ -142,7 +142,7 @@ next. Empty when nothing in the window is dated.
 |--------|------|------|---------|
 | GET | `/health` | — | `{ ok: true }` |
 | GET | `/franchises/trending?limit=30` | — | `FranchiseListResponse` |
-| GET | `/search?q=&exact=1` | — | `FranchiseListResponse` — empty `q` = trending; fans out to AniList + TMDB `/search/tv` in parallel, lazily groups/materializes ungrouped matches, suppresses TMDB results that are Japanese animation (AniList owns those), and interleaves the two relevance-ordered lists. `exact=1` opts out of the spell-correction below |
+| GET | `/search?q=&exact=1` | — | `FranchiseListResponse` — empty `q` = trending. Non-empty queries search the indexed local catalogue first; one- or two-character typeahead is always local-only. A genuine miss gets one short AniList + TMDB `/search/tv` attempt, returns known matches immediately, and warms unknown matches through a bounded background queue. Provider failures are reported in `sources` instead of failing the whole request. TMDB results that are Japanese animation are suppressed (AniList owns those). `exact=1` opts out of the spell-correction below |
 | GET | `/franchises/:id` | — | `Franchise` |
 | GET | `/me/library` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }` where `LibraryFranchise` = full `Franchise` + `status` + `behind` + `newParts` |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |
@@ -175,7 +175,7 @@ route in this API that cannot be undone, so its semantics are exact:
 
 ### FranchiseListResponse
 The envelope every franchise-list route returns. `franchises` is the only guaranteed field; the
-other three are **optional — present only on `/search`**, the one route that fans out across
+other three are **optional — present only on `/search`**, the one route that may fall back across
 catalogues. `/franchises/trending` returns `{ franchises }` alone. They exist so the client can be
 honest rather than silently plausible:
 ```jsonc

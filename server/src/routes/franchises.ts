@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { getFranchise, getTrendingFranchises } from '../services/franchiseView.js'
-import { searchFranchises } from '../services/search.js'
+import { searchFranchises, type SearchProfile } from '../services/search.js'
 import type { FranchiseListResponse } from '../types/api.js'
 
 const trendingQuery = z.object({ limit: z.coerce.number().min(1).max(100).default(30) })
@@ -21,9 +21,31 @@ export const franchiseRoutes: FastifyPluginAsync = async (app) => {
     return { franchises: await getTrendingFranchises(limit) }
   })
 
-  app.get('/search', async (req): Promise<FranchiseListResponse> => {
+  app.get('/search', async (req, reply): Promise<FranchiseListResponse> => {
     const { q, limit, exact } = searchQuery.parse(req.query)
-    return searchFranchises(q, limit, { exact: exact === '1' })
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const abortIfUnsent = () => {
+      if (!reply.raw.writableEnded) controller.abort()
+    }
+    req.raw.once('aborted', abort)
+    reply.raw.once('close', abortIfUnsent)
+
+    let profile: SearchProfile | undefined
+    try {
+      const response = await searchFranchises(q, limit, {
+        exact: exact === '1',
+        signal: controller.signal,
+        onProfile: (value) => {
+          profile = value
+        },
+      })
+      req.log.info({ event: 'search.profile', search: profile, sources: response.sources }, 'search profile')
+      return response
+    } finally {
+      req.raw.removeListener('aborted', abort)
+      reply.raw.removeListener('close', abortIfUnsent)
+    }
   })
 
   app.get('/franchises/:id', async (req, reply) => {
