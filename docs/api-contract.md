@@ -11,6 +11,8 @@ Franchises come from one of two catalogues, tagged by `source` on `Franchise`/`F
 keep decoding):
 
 - `"anilist"` — anime. Parts are AniList Media entries; grouping via the relation graph (+LLM).
+  A conservatively matched TMDB title may enrich videos and regional availability, but it never
+  changes this identity or creates a second TMDB franchise for the same anime.
 - `"tmdb"` — general TV. One TMDB **show** = one franchise; each TMDB **season** is a part
   (`kind: "season"`, `sequence` = TMDB season_number; season 0 → `kind: "special"`, label
   "Specials"). `mediaId` = `1_000_000_000 + TMDB season id`. Grouping is deterministic (no LLM).
@@ -67,6 +69,14 @@ AniList currently supplies at most one trailer id/thumbnail and does not state i
 or publish date. TMDB supplies show- and season-level trailers, teasers, clips and featurettes; an
 official renewal/return announcement is normalized to `kind: "announcement"`. Empty means the
 catalogue has no usable external video, not that playback failed.
+
+For an AniList franchise, source-native videos remain part-scoped. The backend also uses the same
+title/year/Japanese-animation match as WatchAvailability to add TMDB videos with franchise scope.
+That fallback is refreshed on exact Search, Detail, Subscribe, and a daily followed-anime sweep.
+The public shape is unchanged: clients consume `featuredVideo` and `videos` without branching on
+which catalogue supplied the record. An upcoming/current part-scoped video wins featured selection;
+a franchise campaign wins over trailers tied only to finished parts, so old Season 1 art does not
+hide a newly published fallback trailer.
 
 ### EpisodeMeta
 Per-episode metadata. Richness is **source-dependent**: TMDB gives title/overview/still/runtime/date
@@ -211,7 +221,8 @@ The detail/library payload includes spoiler-safe themes, audience metadata, peop
 videos and the next already-aired episode the authenticated user has not watched. Search/trending
 stay compact but include the fields needed for rich cards: both image orientations, themes and the
 single backend-selected `featuredVideo`. Detail/Search use stale-while-revalidate; a slow daily
-pass also repairs followed anime at AniList's degraded 30-requests/minute ceiling.
+pass repairs deep AniList metadata, while a separate TMDB pass refreshes anime trailers even when
+AniList cannot be reached.
 
 ```jsonc
 // CatalogPerson
@@ -256,8 +267,10 @@ Search is a first-class consumer of this field. A newly materialized TMDB title 
 immediate catalogue fact in the same write as the franchise, while AniList future parts derive the
 same field on read. An exact search hit whose TMDB fact or catalogue-video record is still missing
 gets one bounded show-summary refresh before the response returns. The summary is rebuilt after
-that write, so an available trailer appears in that same Search response. Richer web research is
-then queued from Search itself; opening Detail is not required to start it.
+that write, so an available trailer appears in that same Search response. The same guarantee now
+applies to an exact AniList result with no trailer: a bounded metadata-only TMDB match runs and the
+summary is rebuilt before return. Richer web research is then queued from Search itself; opening
+Detail is not required to start it.
 ```jsonc
 {
   "status": "announced",       // airing | upcoming_dated | announced | announced_no_date | rumored | recently_aired | concluded

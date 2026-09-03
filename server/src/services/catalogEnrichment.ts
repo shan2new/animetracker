@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { fetchEnrichmentByIds, type AniListRequestOptions } from '../anilist/client.js'
 import type {
   AniListCharacterEdge,
@@ -206,7 +206,18 @@ export async function refreshFranchiseEnrichment(
     row.genres ?? [],
     new Set(members.map((item) => item.mediaId)),
   )
-  await db.update(franchise).set({ enrichment: value, updatedAt: new Date() }).where(eq(franchise.id, franchiseId))
+  // TMDB is metadata-only for anime. Merge fallback fields from the row AT UPDATE TIME rather than
+  // the snapshot read above: Search queues both enrichers together, and a read/modify/write here
+  // could otherwise erase a trailer that arrived while the AniList request was in flight.
+  await db.update(franchise).set({
+    enrichment: sql`jsonb_strip_nulls(
+      ${JSON.stringify(value)}::jsonb || jsonb_build_object(
+        'videos', coalesce(${franchise.enrichment}->'videos', '[]'::jsonb),
+        'videoFallback', ${franchise.enrichment}->'videoFallback'
+      )
+    )`,
+    updatedAt: new Date(),
+  }).where(eq(franchise.id, franchiseId))
   return true
 }
 

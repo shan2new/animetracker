@@ -51,6 +51,8 @@ vi.mock('../db/index.js', () => {
   }
 })
 
+vi.mock('../services/animeVideoFallback.js', () => ({ enqueueAnimeVideoFallback: vi.fn() }))
+
 const { meRoutes, accountOwnedTableNames } = await import('./me.js')
 
 const CALLER = '11111111-1111-1111-1111-111111111111'

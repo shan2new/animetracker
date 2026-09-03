@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   searchFranchises: vi.fn(),
   refreshTvUpcomingFact: vi.fn(),
   enqueueFranchiseEnrichment: vi.fn(),
+  refreshAnimeVideoFallback: vi.fn(),
+  enqueueAnimeVideoFallback: vi.fn(),
 }))
 
 vi.mock('../services/watchAvailability.js', () => ({
@@ -30,6 +32,10 @@ vi.mock('../services/search.js', () => ({
 }))
 vi.mock('../services/catalogEnrichment.js', () => ({
   enqueueFranchiseEnrichment: mocks.enqueueFranchiseEnrichment,
+}))
+vi.mock('../services/animeVideoFallback.js', () => ({
+  refreshAnimeVideoFallback: mocks.refreshAnimeVideoFallback,
+  enqueueAnimeVideoFallback: mocks.enqueueAnimeVideoFallback,
 }))
 
 const { franchiseRoutes } = await import('./franchises.js')
@@ -53,6 +59,13 @@ beforeEach(() => {
   mocks.searchFranchises.mockReset().mockResolvedValue({ franchises: [] })
   mocks.refreshTvUpcomingFact.mockReset().mockResolvedValue(null)
   mocks.enqueueFranchiseEnrichment.mockReset()
+  mocks.refreshAnimeVideoFallback.mockReset().mockResolvedValue({
+    checked: false,
+    matched: false,
+    updated: false,
+    videos: 0,
+  })
+  mocks.enqueueAnimeVideoFallback.mockReset()
   mocks.getWatchAvailability.mockResolvedValue({
     country: 'IN',
     status: 'not_available',
@@ -156,6 +169,38 @@ describe('GET /search', () => {
     })
     await app.close()
   })
+
+  it('returns a conservatively matched anime trailer on the same exact-search response', async () => {
+    mocks.searchFranchises.mockResolvedValueOnce({
+      franchises: [{ id: ID, source: 'anilist', title: 'Bleach', featuredVideo: null }],
+    })
+    mocks.refreshAnimeVideoFallback.mockResolvedValueOnce({
+      checked: true,
+      matched: true,
+      updated: true,
+      videos: 2,
+    })
+    mocks.getSummaries.mockResolvedValueOnce([{
+      id: ID,
+      source: 'anilist',
+      title: 'Bleach',
+      featuredVideo: { id: 'Px1xodGZAT0', kind: 'trailer', site: 'youtube' },
+    }])
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'GET', url: '/search?q=Bleach' })
+
+    expect(res.statusCode, res.body).toBe(200)
+    expect(mocks.refreshAnimeVideoFallback).toHaveBeenCalledWith(ID, {
+      request: expect.objectContaining({ maxRetries: 0, timeoutMs: 1_050 }),
+    })
+    expect(mocks.getSummaries).toHaveBeenCalledWith([ID])
+    expect(res.json().franchises[0].featuredVideo).toMatchObject({
+      id: 'Px1xodGZAT0',
+      kind: 'trailer',
+    })
+    expect(mocks.enqueueAnimeVideoFallback).toHaveBeenCalledWith(ID)
+    await app.close()
+  })
 })
 
 describe('GET /franchises/:id', () => {
@@ -179,6 +224,29 @@ describe('GET /franchises/:id', () => {
 
     expect(res.statusCode, res.body).toBe(400)
     expect(mocks.getFranchise).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('fills a missing anime trailer before returning Detail', async () => {
+    const before = { id: ID, source: 'anilist', title: 'Bleach', upcoming: null, featuredVideo: null }
+    const after = {
+      ...before,
+      featuredVideo: { id: 'Px1xodGZAT0', site: 'youtube', kind: 'trailer' },
+    }
+    mocks.getFranchise.mockResolvedValueOnce(before).mockResolvedValueOnce(after)
+    mocks.refreshAnimeVideoFallback.mockResolvedValueOnce({
+      checked: true,
+      matched: true,
+      updated: true,
+      videos: 2,
+    })
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'GET', url: `/franchises/${ID}` })
+
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json().featuredVideo.id).toBe('Px1xodGZAT0')
+    expect(mocks.getFranchise).toHaveBeenCalledTimes(2)
+    expect(mocks.enqueueAnimeVideoFallback).toHaveBeenCalledWith(ID)
     await app.close()
   })
 })

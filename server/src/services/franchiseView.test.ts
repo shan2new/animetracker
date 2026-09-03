@@ -212,4 +212,17 @@ describe('pickFeaturedVideo', () => {
     )
     expect(pickFeaturedVideo([future], [oldTrailer, announcement])).toEqual(announcement)
   })
+
+  it('prefers a current franchise campaign over a trailer tied to a finished part', () => {
+    const finished = part({ mediaId: 1, sequence: 1, label: 'Season 1', status: 'FINISHED' })
+    const oldPartTrailer = video(
+      { type: 'part', mediaId: 1, label: 'Season 1' },
+      { id: 'season-one', kind: 'trailer', publishedAt: '2020-01-01T00:00:00Z' },
+    )
+    const currentCampaign = video(
+      { type: 'franchise' },
+      { id: 'current', kind: 'trailer', publishedAt: '2026-05-19T00:00:00Z' },
+    )
+    expect(pickFeaturedVideo([finished], [oldPartTrailer, currentCampaign])).toEqual(currentCampaign)
+  })
 })

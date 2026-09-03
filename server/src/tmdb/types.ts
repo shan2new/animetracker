@@ -34,6 +34,13 @@ export interface TmdbMovieSearchResult {
   overview: string | null
 }
 
+/** Movie detail fields needed by metadata-only trailer fallback. */
+export interface TmdbMovie {
+  id: number
+  title: string
+  videos?: TmdbVideoResponse
+}
+
 export interface TmdbWatchProvider {
   provider_id: number
   provider_name: string

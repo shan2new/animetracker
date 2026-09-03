@@ -4,14 +4,10 @@ import { franchise, franchiseMember, media } from '../db/schema.js'
 import {
   getMovieWatchProviders,
   getTvWatchProviders,
-  searchMovies,
-  searchTv,
   tmdbEnabled,
   type TmdbRequestOptions,
 } from '../tmdb/client.js'
 import type {
-  TmdbMovieSearchResult,
-  TmdbSearchResult,
   TmdbWatchProvider,
   TmdbWatchProviderMarket,
 } from '../tmdb/types.js'
@@ -21,25 +17,15 @@ import type {
   WatchAvailabilityStatus,
   WatchProvider,
 } from '../types/api.js'
+import { resolveAnimeTmdbTarget } from './animeTmdbMatch.js'
+export { pickAnimeTmdbCandidate as pickAnimeWatchTarget } from './animeTmdbMatch.js'
+export type { AnimeTmdbCandidate as WatchTargetCandidate } from './animeTmdbMatch.js'
 
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000
 const MISS_TTL_MS = 60 * 60 * 1000
 const MAX_CACHE_ENTRIES = 500
 const INTERACTIVE_OPTIONS: TmdbRequestOptions = { maxRetries: 0, timeoutMs: 4_000 }
-const ANIMATION_GENRE_ID = 16
-
 type TargetKind = 'tv' | 'movie'
-
-export interface WatchTargetCandidate {
-  id: number
-  title: string
-  originalTitle: string | null
-  year: number | null
-  popularity: number
-  genreIds: number[]
-  originCountries: string[]
-  originalLanguage?: string | null
-}
 
 interface WatchTarget {
   kind: TargetKind
@@ -56,79 +42,6 @@ const inFlight = new Map<string, Promise<WatchAvailability | null>>()
 
 function emptyAvailability(country: string, status: WatchAvailabilityStatus): WatchAvailability {
   return { country, status, providers: [], link: null, attribution: 'JustWatch' }
-}
-
-function normalizedTitle(value: string): string {
-  return value
-    .normalize('NFKD')
-    .toLocaleLowerCase('en')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function titleTokens(value: string): Set<string> {
-  return new Set(normalizedTitle(value).split(' ').filter((token) => token.length > 1))
-}
-
-function similarity(a: string, b: string): number {
-  const left = titleTokens(a)
-  const right = titleTokens(b)
-  if (left.size === 0 || right.size === 0) return 0
-  let overlap = 0
-  for (const token of left) if (right.has(token)) overlap++
-  return overlap / Math.max(left.size, right.size)
-}
-
-function yearFromDate(value: string | null | undefined): number | null {
-  const match = /^(\d{4})-/.exec(value ?? '')
-  return match ? Number(match[1]) : null
-}
-
-function animeCandidate(candidate: WatchTargetCandidate): boolean {
-  return (
-    candidate.genreIds.includes(ANIMATION_GENRE_ID) &&
-    (candidate.originCountries.includes('JP') || candidate.originalLanguage === 'ja')
-  )
-}
-
-/**
- * Pick a conservative TMDB match for an AniList-owned title. An exact normalized title wins;
- * otherwise most title tokens must agree. The anime gate prevents a same-name live-action result
- * from becoming the source of a confident-looking provider list.
- */
-export function pickAnimeWatchTarget(
-  candidates: WatchTargetCandidate[],
-  aliases: string[],
-  year: number | null,
-): WatchTargetCandidate | null {
-  const names = [...new Set(aliases.map(normalizedTitle).filter(Boolean))]
-  if (names.length === 0) return null
-
-  const scored = candidates.flatMap((candidate) => {
-    if (!animeCandidate(candidate)) return []
-    const candidateNames = [candidate.title, candidate.originalTitle ?? ''].map(normalizedTitle).filter(Boolean)
-    const exact = candidateNames.some((name) => names.includes(name))
-    const bestSimilarity = Math.max(
-      0,
-      ...candidateNames.flatMap((candidateName) => names.map((name) => similarity(candidateName, name))),
-    )
-    // A fuzzy match must share most of the meaningful words. Search rank alone is not identity.
-    if (!exact && bestSimilarity < 0.72) return []
-
-    // A known catalogue year must be corroborated. An undated same-name result is not enough to
-    // distinguish a remake or an announced reboot.
-    if (year != null && candidate.year == null) return []
-    const yearDistance = year != null && candidate.year != null ? Math.abs(year - candidate.year) : null
-    // Same-title remakes exist. Once both sides state a year, a result more than two years away is
-    // not safe enough to label as this work.
-    if (yearDistance != null && yearDistance > 2) return []
-    const yearScore = yearDistance == null ? 0 : yearDistance === 0 ? 20 : yearDistance === 1 ? 10 : 4
-    const titleScore = exact ? 100 : Math.round(bestSimilarity * 70)
-    return [{ candidate, score: titleScore + yearScore + Math.log10(Math.max(1, candidate.popularity)) }]
-  })
-
-  scored.sort((a, b) => b.score - a.score || a.candidate.id - b.candidate.id)
-  return scored[0]?.candidate ?? null
 }
 
 function providerLogo(path: string | null): string | null {
@@ -166,49 +79,6 @@ export function normalizeWatchProviders(market: TmdbWatchProviderMarket | undefi
     .map(({ priority: _priority, rank: _rank, ...provider }) => provider)
 }
 
-function tvCandidate(hit: TmdbSearchResult): WatchTargetCandidate {
-  return {
-    id: hit.id,
-    title: hit.name,
-    originalTitle: hit.original_name ?? null,
-    year: yearFromDate(hit.first_air_date),
-    popularity: hit.popularity ?? 0,
-    genreIds: hit.genre_ids ?? [],
-    originCountries: hit.origin_country ?? [],
-  }
-}
-
-function movieCandidate(hit: TmdbMovieSearchResult): WatchTargetCandidate {
-  return {
-    id: hit.id,
-    title: hit.title,
-    originalTitle: hit.original_title ?? null,
-    year: yearFromDate(hit.release_date),
-    popularity: hit.popularity ?? 0,
-    genreIds: hit.genre_ids ?? [],
-    originCountries: hit.origin_country ?? [],
-    originalLanguage: hit.original_language,
-  }
-}
-
-async function resolveAnimeTarget(
-  title: string,
-  aliases: string[],
-  year: number | null,
-  kind: TargetKind,
-): Promise<WatchTarget | null> {
-  const queries = [...new Set([title, ...aliases].map((value) => value.trim()).filter(Boolean))].slice(0, 2)
-  for (const query of queries) {
-    const candidates =
-      kind === 'movie'
-        ? (await searchMovies(query, { ...INTERACTIVE_OPTIONS, limit: 10 })).map(movieCandidate)
-        : (await searchTv(query, { ...INTERACTIVE_OPTIONS, limit: 10 })).map(tvCandidate)
-    const picked = pickAnimeWatchTarget(candidates, [title, ...aliases], year)
-    if (picked) return { kind, id: picked.id }
-  }
-  return null
-}
-
 async function lookup(franchiseId: string, country: string): Promise<WatchAvailability | null> {
   const [row] = await db
     .select({
@@ -217,6 +87,7 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
       externalId: franchise.externalId,
       title: franchise.title,
       primaryMediaId: franchise.primaryMediaId,
+      enrichment: franchise.enrichment,
     })
     .from(franchise)
     .where(eq(franchise.id, franchiseId))
@@ -228,6 +99,16 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
   let target: WatchTarget | null = null
   if (row.source === 'tmdb' && row.externalId != null) {
     target = { kind: 'tv', id: row.externalId }
+  } else if (
+    row.enrichment?.videoFallback?.status === 'matched' &&
+    row.enrichment.videoFallback.externalId != null
+  ) {
+    // Trailer enrichment already established the same conservative title/year match. Reuse it so
+    // regional availability cannot select a different TMDB work and avoids another search call.
+    target = {
+      kind: row.enrichment.videoFallback.mediaType,
+      id: row.enrichment.videoFallback.externalId,
+    }
   } else {
     const parts = await db
       .select({
@@ -253,12 +134,13 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
       ?? parts.sort((a, b) => a.sequence - b.sequence)[0]
     if (primary) {
       const aliases = [primary.titleEnglish ?? '', primary.titleRomaji ?? ''].filter(Boolean)
-      target = await resolveAnimeTarget(
-        row.title,
+      const resolved = await resolveAnimeTmdbTarget({
+        title: row.title,
         aliases,
-        primary.year,
-        primary.format === 'MOVIE' ? 'movie' : 'tv',
-      )
+        year: primary.year,
+        mediaType: primary.format === 'MOVIE' ? 'movie' : 'tv',
+      }, INTERACTIVE_OPTIONS)
+      target = resolved ? { kind: resolved.mediaType, id: resolved.externalId } : null
     }
   }
 

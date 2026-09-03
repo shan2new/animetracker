@@ -110,6 +110,17 @@ export interface FranchiseEnrichment {
   related: RelatedTitle[]
   /** Show/franchise-level videos; part-specific videos live on `media.videos`. */
   videos: CatalogVideo[]
+  /**
+   * Internal provenance/cache state for AniList-owned anime enriched from TMDB. This never changes
+   * franchise identity: `source` remains AniList and the matched TMDB title is metadata-only.
+   */
+  videoFallback?: {
+    source: 'tmdb'
+    mediaType: 'tv' | 'movie'
+    externalId: number | null
+    status: 'matched' | 'unmatched'
+    checkedAt: string
+  }
   checkedAt: string
 }
 

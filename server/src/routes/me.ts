@@ -14,6 +14,7 @@ import { db } from '../db/index.js'
 import { notifications, progress, subscriptions, users } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
 import type { AccountDeletedResponse } from '../types/api.js'
+import { enqueueAnimeVideoFallback } from '../services/animeVideoFallback.js'
 
 // Board 09's status vocabulary. `subscriptions.status` is a text() column, so the two added
 // values need no migration.
@@ -33,6 +34,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     const body = z.object({ franchiseId: z.string().uuid(), status: statusEnum.optional() }).parse(req.body)
     if (!(await franchiseExists(body.franchiseId))) return reply.code(404).send({ error: 'franchise not found' })
     await subscribe(req.user!.id, body.franchiseId, body.status)
+    enqueueAnimeVideoFallback(body.franchiseId)
     return { ok: true }
   })
 

@@ -2,6 +2,7 @@ import cron from 'node-cron'
 import { env } from '../env.js'
 import { refreshSubscribedNews } from '../news/service.js'
 import { refreshSubscribedAniListEnrichment } from '../services/catalogEnrichment.js'
+import { refreshSubscribedAnimeVideoFallback } from '../services/animeVideoFallback.js'
 import { tmdbEnabled } from '../tmdb/client.js'
 import {
   attachNewSeasons,
@@ -86,6 +87,19 @@ export function startCron(): void {
       console.error('[cron] anime enrichment failed:', (err as Error).message)
     }
   })
+
+  // Daily 04:30: repair missing anime trailers from TMDB independently of AniList. TMDB remains
+  // metadata-only here; this never creates a duplicate TV franchise for an AniList title.
+  if (tmdbEnabled()) {
+    cron.schedule('30 4 * * *', async () => {
+      try {
+        const { checked, matched, videos } = await refreshSubscribedAnimeVideoFallback()
+        console.log(`[cron] anime video fallback: checked ${checked}, matched ${matched}, videos ${videos}`)
+      } catch (err) {
+        console.error('[cron] anime video fallback failed:', (err as Error).message)
+      }
+    })
+  }
 
   // Daily 05:00: agent-based announcement research over subscribed franchises → notifications.
   if (!env.NEWS_AGENT_DISABLED) {

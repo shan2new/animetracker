@@ -1,10 +1,12 @@
 import { env } from '../env.js'
 import { abortReason, abortableSleep, isAbortError, withTimeout } from '../util/abort.js'
 import type {
+  TmdbMovie,
   TmdbMovieSearchResult,
   TmdbSeasonDetail,
   TmdbSearchResult,
   TmdbShow,
+  TmdbVideoResponse,
   TmdbWatchProviderResponse,
 } from './types.js'
 
@@ -13,6 +15,20 @@ const BASE = 'https://api.themoviedb.org/3'
 /** TV support is opt-in: without a token the whole TMDB path is disabled (anime-only mode). */
 export function tmdbEnabled(): boolean {
   return !!env.TMDB_ACCESS_TOKEN
+}
+
+/** Full movie detail for metadata-only anime trailer fallback. Null on a missing/merged title. */
+export async function getMovie(movieId: number, options: TmdbRequestOptions = {}): Promise<TmdbMovie | null> {
+  try {
+    return await tmdbGet<TmdbMovie>(
+      `/movie/${movieId}`,
+      { language: 'en-US', include_video_language: 'en,null', append_to_response: 'videos' },
+      options,
+    )
+  } catch (err) {
+    if ((err as Error).message === 'TMDB 404') return null
+    throw err
+  }
 }
 
 const DEFAULT_MAX_RETRIES = 4
@@ -125,6 +141,23 @@ export async function getSeason(
       { language: 'en-US', include_video_language: 'en,null', append_to_response: 'videos' },
       options,
     )
+  } catch (err) {
+    if ((err as Error).message === 'TMDB 404') return null
+    throw err
+  }
+}
+
+/** Season-scoped videos without downloading the (occasionally enormous) episode list. */
+export async function getSeasonVideos(
+  showId: number,
+  seasonNumber: number,
+  options: TmdbRequestOptions = {},
+): Promise<TmdbVideoResponse | null> {
+  try {
+    return await tmdbGet<TmdbVideoResponse>(`/tv/${showId}/season/${seasonNumber}/videos`, {
+      language: 'en-US',
+      include_video_language: 'en,null',
+    }, options)
   } catch (err) {
     if ((err as Error).message === 'TMDB 404') return null
     throw err

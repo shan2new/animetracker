@@ -72,16 +72,21 @@ const VIDEO_KIND_WEIGHT: Record<FranchiseVideo['kind'], number> = {
   other: 0,
 }
 
-/** Prefer the exact upcoming/current part before video type, then official and newest. */
+/** Prefer an exact upcoming/current part, then franchise campaigns, then finished-part trailers. */
 export function pickFeaturedVideo(parts: FranchisePart[], videos: FranchiseVideo[]): FranchiseVideo | null {
   if (videos.length === 0) return null
   const partPriority = new Map<number, number>()
   for (const part of parts) {
-    const state = part.status === 'NOT_YET_RELEASED' ? 3 : part.isReleasing ? 2 : 1
+    const state = part.status === 'NOT_YET_RELEASED' ? 3 : part.isReleasing ? 2 : 0
     partPriority.set(part.mediaId, state * 10_000 + part.sequence)
   }
   return videos.slice().sort((a, b) => {
-    const scope = (video: FranchiseVideo) => video.scope.type === 'part' ? (partPriority.get(video.scope.mediaId) ?? 0) : -1
+    // A franchise-scoped video cannot outrank a known future/current part, but it should outrank
+    // finished-part trailers: fallback catalogues often carry the newest campaign only at show
+    // scope, and otherwise an old Season 1 trailer would stay featured forever.
+    const scope = (video: FranchiseVideo) => video.scope.type === 'part'
+      ? (partPriority.get(video.scope.mediaId) ?? 0)
+      : 10_000
     return scope(b) - scope(a) ||
       Number(b.official === true) - Number(a.official === true) ||
       VIDEO_KIND_WEIGHT[b.kind] - VIDEO_KIND_WEIGHT[a.kind] ||

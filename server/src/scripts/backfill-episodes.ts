@@ -61,6 +61,7 @@ interface AniListFranchiseRow {
   id: string
   primary_media_id: number | null
   genres: string[] | null
+  enrichment: import('../types/api.js').FranchiseEnrichment | null
 }
 
 interface AniListMemberRow {
@@ -86,7 +87,7 @@ function representativeIds(
 
 async function backfillAniListEnrichment(): Promise<void> {
   const rows = await sql<AniListFranchiseRow[]>`
-    SELECT f.id, f.primary_media_id, f.genres
+    SELECT f.id, f.primary_media_id, f.genres, f.enrichment
     FROM franchise f
     LEFT JOIN subscriptions s ON s.franchise_id = f.id
     WHERE f.source = 'anilist'
@@ -143,6 +144,8 @@ async function backfillAniListEnrichment(): Promise<void> {
       row.genres ?? [],
       new Set(memberRows.map((item) => item.media_id)),
     )
+    enrichment.videos = row.enrichment?.videos ?? []
+    enrichment.videoFallback = row.enrichment?.videoFallback
     await db.update(franchise).set({ enrichment, updatedAt: new Date() }).where(eq(franchise.id, row.id))
     done++
   }
