@@ -1,6 +1,7 @@
 import { relations, sql } from 'drizzle-orm'
 import {
   bigint,
+  boolean,
   index,
   integer,
   jsonb,
@@ -12,7 +13,15 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
-import type { CatalogVideo, EpisodeMeta, FranchiseEnrichment, FranchiseUpcoming } from '../types/api.js'
+import type {
+  ArtworkGallery,
+  CatalogVideo,
+  EpisodeMeta,
+  FranchiseEnrichment,
+  FranchiseUpcoming,
+  RelatedTitle,
+  WatchProvider,
+} from '../types/api.js'
 
 // ---------- Cached AniList catalogue ----------
 
@@ -27,11 +36,14 @@ export const media = pgTable(
     externalId: integer('external_id'), // provider-native id for non-anilist rows
     titleRomaji: text('title_romaji'),
     titleEnglish: text('title_english'),
+    titleNative: text('title_native'),
+    synonyms: jsonb('synonyms').$type<string[]>().default([]),
     format: text('format'), // TV | TV_SHORT | MOVIE | OVA | ONA | SPECIAL | MUSIC
     status: text('status'), // FINISHED | RELEASING | NOT_YET_RELEASED | CANCELLED | HIATUS
     episodes: integer('episodes'),
     cover: text('cover'),
     banner: text('banner'),
+    artwork: jsonb('artwork').$type<ArtworkGallery>(),
     description: text('description'),
     genres: jsonb('genres').$type<string[]>().default([]),
     // Studios (AniList animation studios) or networks (TMDB) — names only, for the detail meta line.
@@ -59,7 +71,7 @@ export const media = pgTable(
     // proper nouns intact; the query uses prefix lexemes so typeahead remains index-backed.
     index('media_title_search_idx').using(
       'gin',
-      sql`to_tsvector('simple', coalesce(${t.titleEnglish}, '') || ' ' || coalesce(${t.titleRomaji}, ''))`,
+      sql`to_tsvector('simple', coalesce(${t.titleEnglish}, '') || ' ' || coalesce(${t.titleRomaji}, '') || ' ' || coalesce(${t.titleNative}, '') || ' ' || coalesce(${t.synonyms}::text, ''))`,
     ),
   ],
 )
@@ -90,6 +102,7 @@ export const franchise = pgTable(
     primaryMediaId: integer('primary_media_id'),
     cover: text('cover'),
     banner: text('banner'),
+    artwork: jsonb('artwork').$type<ArtworkGallery>(),
     description: text('description'),
     genres: jsonb('genres').$type<string[]>().default([]),
     groupingSource: text('grouping_source').notNull().default('relations'), // relations | llm | manual | tmdb
@@ -124,6 +137,9 @@ export const franchiseMember = pgTable(
       .references(() => franchise.id, { onDelete: 'cascade' }),
     partKind: text('part_kind').notNull(), // season | movie | ova | ona | special | music
     sequence: integer('sequence').notNull().default(0),
+    watchOrder: integer('watch_order').notNull().default(0),
+    relationship: text('relationship'),
+    optional: boolean('optional').notNull().default(false),
     label: text('label'),
     addedAt: timestamp('added_at', { withTimezone: true }).defaultNow().notNull(),
   },
@@ -170,6 +186,83 @@ export const progress = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.mediaId] })],
 )
 
+/** Durable, inspectable identity bridges between one canonical franchise and external catalogues. */
+export const catalogLinks = pgTable(
+  'catalog_links',
+  {
+    franchiseId: uuid('franchise_id')
+      .notNull()
+      .references(() => franchise.id, { onDelete: 'cascade' }),
+    provider: text('provider').notNull(),
+    mediaType: text('media_type').notNull(),
+    externalId: integer('external_id'),
+    status: text('status').notNull().default('matched'), // matched | unmatched | rejected
+    matchMethod: text('match_method').notNull().default('catalogue'),
+    confidence: real('confidence'),
+    evidence: jsonb('evidence').$type<Record<string, unknown>>().default({}),
+    checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.franchiseId, t.provider] }),
+    uniqueIndex('catalog_links_provider_external_uq')
+      .on(t.provider, t.mediaType, t.externalId)
+      .where(sql`${t.status} = 'matched' and ${t.externalId} is not null`),
+    index('catalog_links_external_idx').on(t.provider, t.externalId),
+  ],
+)
+
+export const userPreferences = pgTable('user_preferences', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  country: text('country'),
+  language: text('language').notNull().default('en'),
+  providerIds: jsonb('provider_ids').$type<number[]>().notNull().default([]),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
+export const watchAvailabilitySnapshots = pgTable(
+  'watch_availability_snapshots',
+  {
+    franchiseId: uuid('franchise_id')
+      .notNull()
+      .references(() => franchise.id, { onDelete: 'cascade' }),
+    country: text('country').notNull(),
+    status: text('status').notNull(),
+    providers: jsonb('providers').$type<WatchProvider[]>().notNull().default([]),
+    link: text('link'),
+    checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.franchiseId, t.country] }),
+    index('watch_availability_country_expiry_idx').on(t.country, t.expiresAt),
+  ],
+)
+
+export const recommendationEdges = pgTable(
+  'recommendation_edges',
+  {
+    franchiseId: uuid('franchise_id')
+      .notNull()
+      .references(() => franchise.id, { onDelete: 'cascade' }),
+    source: text('source').notNull(),
+    externalId: integer('external_id').notNull(),
+    targetFranchiseId: uuid('target_franchise_id').references(() => franchise.id, { onDelete: 'set null' }),
+    score: real('score'),
+    title: text('title').notNull(),
+    year: integer('year'),
+    images: jsonb('images').$type<RelatedTitle['images']>().notNull(),
+    checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.franchiseId, t.source, t.externalId] }),
+    index('recommendation_edges_target_idx').on(t.targetFranchiseId),
+  ],
+)
+
 // ---------- Announcements & notifications ----------
 
 // One row per distinct piece of upcoming-installment news for a franchise ("Season 4",
@@ -195,6 +288,44 @@ export const announcements = pgTable(
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [uniqueIndex('announcements_franchise_dedupe_idx').on(t.franchiseId, t.dedupeKey)],
+)
+
+/** Immutable research snapshots. `announcements` remains the latest state for fast reads. */
+export const announcementObservations = pgTable(
+  'announcement_observations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    franchiseId: uuid('franchise_id')
+      .notNull()
+      .references(() => franchise.id, { onDelete: 'cascade' }),
+    announcementId: uuid('announcement_id').references(() => announcements.id, { onDelete: 'set null' }),
+    dedupeKey: text('dedupe_key').notNull(),
+    status: text('status').notNull(),
+    next: text('next').notNull(),
+    release: text('release').notNull(),
+    note: text('note'),
+    observedAt: timestamp('observed_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index('announcement_observations_franchise_idx').on(t.franchiseId, t.observedAt)],
+)
+
+export const announcementEvidence = pgTable(
+  'announcement_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    observationId: uuid('observation_id')
+      .notNull()
+      .references(() => announcementObservations.id, { onDelete: 'cascade' }),
+    url: text('url').notNull(),
+    publisher: text('publisher'),
+    publishedAt: text('published_at'),
+    tier: text('tier').notNull().default('unknown'),
+    primary: boolean('primary').notNull().default(false),
+  },
+  (t) => [
+    uniqueIndex('announcement_evidence_observation_url_uq').on(t.observationId, t.url),
+    index('announcement_evidence_observation_idx').on(t.observationId),
+  ],
 )
 
 // Per-user notification inbox. Fanned out from announcements to subscribers at detection time

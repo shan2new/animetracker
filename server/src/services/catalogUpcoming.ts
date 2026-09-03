@@ -53,13 +53,21 @@ export function deriveCatalogUpcoming(input: {
 
   const next = candidates[0]!
   const release = next.nextAiringAt == null ? 'TBA' : new Date(next.nextAiringAt).toISOString().slice(0, 10)
+  const source = providerUrl(input.source, input.franchiseExternalId, next.mediaId)
   return {
     status: next.nextAiringAt == null ? 'announced_no_date' : 'upcoming_dated',
     next: next.label,
     release,
     note: null,
-    source: providerUrl(input.source, input.franchiseExternalId, next.mediaId),
+    source,
     checked: next.fetchedAt?.toISOString() ?? null,
+    evidence: source ? [{
+      url: source,
+      publisher: input.source === 'tmdb' ? 'TMDB' : 'AniList',
+      publishedAt: null,
+      tier: 'catalogue',
+      primary: false,
+    }] : [],
   }
 }
 

@@ -41,6 +41,27 @@ landscape slot. The legacy `cover`/`banner` strings remain for older clients.
 }
 ```
 
+### ArtworkGallery
+
+`artwork` sits beside the best-pair `images` field on franchises, summaries and parts. It exposes
+ranked alternatives so iOS can choose portrait artwork for lists/share sheets and landscape art for
+hero, episode and horizontal-share layouts without URL guessing. Arrays are de-duplicated and
+capped at six; `logos` is populated when the linked catalogue has one.
+
+```jsonc
+{
+  "portraits": [{
+    "url": "https://…", "source": "tmdb", "width": 2000, "height": 3000,
+    "language": "en", "score": 5.31
+  }],
+  "landscapes": [{
+    "url": "https://…", "source": "tmdb", "width": 3840, "height": 2160,
+    "language": null, "score": 5.02
+  }],
+  "logos": []
+}
+```
+
 ### FranchiseVideo
 
 Catalogue-curated external video metadata. AniTrack does not proxy or host video bytes. `url` may
@@ -72,16 +93,18 @@ catalogue has no usable external video, not that playback failed.
 
 For an AniList franchise, source-native videos remain part-scoped. The backend also uses the same
 title/year/Japanese-animation match as WatchAvailability to add TMDB videos with franchise scope.
-That fallback is refreshed on exact Search, Detail, Subscribe, and a daily followed-anime sweep.
+That fallback is refreshed on exact Search, Detail, Subscribe, and a daily catalogue-wide sweep
+that prioritizes followed anime.
 The public shape is unchanged: clients consume `featuredVideo` and `videos` without branching on
 which catalogue supplied the record. An upcoming/current part-scoped video wins featured selection;
 a franchise campaign wins over trailers tied only to finished parts, so old Season 1 art does not
 hide a newly published fallback trailer.
 
 ### EpisodeMeta
-Per-episode metadata. Richness is **source-dependent**: TMDB gives title/overview/still/runtime/date
-from the season endpoint; AniList gives best-effort titles/thumbnails from `streamingEpisodes`
-(numbered by position, often sparse) and **no** per-episode `airDate`/`overview`. Any field may be null.
+Per-episode metadata. TMDB gives title/overview/still/runtime/date from the season endpoint. AniList
+gives exact airing instants plus best-effort streaming titles/thumbnails; when a conservative
+title/year/episode-count match identifies a TMDB season, the backend fills missing descriptive
+fields and horizontal stills while preserving AniList's exact airing instant. Any field may be null.
 ```jsonc
 {
   "number": 1,
@@ -101,11 +124,15 @@ authenticated user's progress.
   "mediaId": 16498,
   "kind": "season",          // season | movie | ova | ona | special | music
   "sequence": 1,              // order within its kind
+  "watchOrder": 1,            // one global chronology across seasons, movies and specials
+  "relationship": "SEQUEL", // source relation when known; otherwise null
+  "optional": false,          // true only for source-identified side/optional material
   "label": "Season 1",       // human label the LLM/grouping assigned
   "title": "Attack on Titan",
   "cover": "https://…",
   "banner": "https://…",
   "images": { "portrait": "https://…", "landscape": "https://…" },
+  "artwork": ArtworkGallery,
   "format": "TV",            // raw AniList format
   "status": "FINISHED",      // raw AniList status
   "isReleasing": false,
@@ -161,11 +188,12 @@ next. Empty when nothing in the window is dated.
   "cover": "https://…",
   "banner": "https://…",
   "images": { "portrait": "https://…", "landscape": "https://…" },
+  "artwork": ArtworkGallery,
   "synopsis": "…",
   "genres": ["Action","Drama"],
   "isReleasing": true,             // any part currently releasing
   "partCounts": { "season": 4, "movie": 2, "ova": 3, "special": 1 },
-  "parts": [ FranchisePart, … ],   // ordered by kind then sequence; each part carries its `episodes`
+  "parts": [ FranchisePart, … ],   // ordered by global watchOrder; each part carries its `episodes`
   "subscription": { "status": "watching", "addedAt": 1700000000000 } | null,  // addedAt = ms epoch the user subscribed
   "upcoming": FranchiseUpcoming | null,  // confirmed/rumored "what's next" — see below
   "year": 2013,                    // premiere year (earliest dated part), or null
@@ -188,7 +216,19 @@ next. Empty when nothing in the window is dated.
     "mediaId": 16498,
     "partLabel": "Season 1",
     "episode": EpisodeMeta
-  } | null
+  } | null,
+  "availability": WatchAvailability, // optional; present when country was requested/saved
+  "metadata": {
+    "completeness": {
+      "artwork": true, "episodes": true, "people": true,
+      "ratings": true, "related": true, "videos": true
+    },
+    "sources": [{
+      "provider": "tmdb", "mediaType": "tv", "externalId": 82596,
+      "matchMethod": "catalogue_owner", "confidence": 1,
+      "checkedAt": "2026-09-03T…"
+    }]
+  }
 }
 ```
 
@@ -201,6 +241,7 @@ next. Empty when nothing in the window is dated.
   "cover": "https://…",
   "banner": "https://…",
   "images": { "portrait": "https://…", "landscape": "https://…" },
+  "artwork": ArtworkGallery,
   "isReleasing": true,
   "partCount": 10,
   "nextAiringAt": 1700000000000,   // soonest upcoming across parts, or null
@@ -208,6 +249,7 @@ next. Empty when nothing in the window is dated.
   "year": 2013,                    // premiere year (for "Anime · 2023" / "TV · 2024"), or null
   "themes": ["Survival", "Military"],
   "featuredVideo": FranchiseVideo | null,
+  "availability": WatchAvailability, // optional; cached preview when country was requested/saved
   // present only in /me/library:
   "status": "watching",            // watching | completed | planned | paused | dropped
   "behind": 2,                      // unwatched aired eps across releasing parts
@@ -241,9 +283,25 @@ AniList cannot be reached.
   "franchiseId": "uuid" | null, // filled only when already materialized locally
   "title": "The Bold Type",
   "year": 2017 | null,
-  "images": { "portrait": "https://…" | null, "landscape": "https://…" | null }
+  "images": { "portrait": "https://…" | null, "landscape": "https://…" | null },
+  "score": 100 | null              // source-native recommendation strength when available
 }
 ```
+
+`GET /me/discover` wraps a related title with an auditable reason instead of a black-box label:
+
+```jsonc
+{
+  "title": RelatedTitle,
+  "because": { "franchiseId": "uuid", "title": "Bleach" },
+  "reason": "Because you completed Bleach",
+  "score": 125
+}
+```
+
+Dropped sources and already-subscribed targets are excluded. Results are capped at three per source
+franchise so one completed title cannot consume the whole feed. If `title.franchiseId` is null,
+send its `source` and `externalId` to `/franchises/resolve` only after the user selects it.
 
 - AniList tags marked as general spoilers, media spoilers, or adult are excluded. TMDB has no
   spoiler bit, so only genres and a conservative allow-list of broad keywords become themes.
@@ -279,6 +337,13 @@ Detail is not required to start it.
   "note": "Announced at AnimeJapan.",
   "source": "https://…",       // primary announcement or provider-catalogue URL, or null
   "checked": "2026-08-24T…",   // ISO date the info was last verified
+  "evidence": [{
+    "url": "https://…",
+    "publisher": "Netflix Tudum" | null,
+    "publishedAt": "2026-08-20" | null,
+    "tier": "official",        // official | trade | reputable | catalogue | unknown
+    "primary": true             // original announcement, not merely coverage
+  }],
   "releaseWindow": {           // `release` resolved into something orderable — DERIVED on read
     "date": "2026-10",         // "YYYY-MM-DD" | "YYYY-MM" | "YYYY", at the precision actually known, or null
     "precision": "month",      // day | month | quarter | year | unknown
@@ -286,6 +351,12 @@ Detail is not required to start it.
   }
 }
 ```
+
+`status` is the classification, not a confidence guess: `rumored` is never presented as
+`announced`. `evidence` makes the reason inspectable on the critical Search/Detail surface.
+Catalogue-derived facts carry a `catalogue` evidence row immediately; agent research can add the
+official primary announcement and independent trade/reputable reporting. The immutable history is
+available at `GET /franchises/:id/announcements`.
 
 **`release` is the only field a client prints; `sortKey` is the only field it sorts by.** Clients
 must not parse `release` themselves — an ISO-only reading of a corpus full of `October 2026` and
@@ -300,8 +371,8 @@ soonest first" list ended up putting October 2026 ahead of an August 2026 date.
   schedule) sorts **last**. Never treat it as 0.
 
 ### WatchAvailability
-Country-specific **streaming** availability for a franchise. The caller supplies an ISO 3166-1
-alpha-2 region; purchase and rental stores are intentionally excluded. Subscription
+Country-specific **streaming** availability for a franchise. The caller can supply an ISO 3166-1
+alpha-2 region or save it once in `/me/preferences`; purchase and rental stores are intentionally excluded. Subscription
 services come first, followed by free and ad-supported services.
 
 For TMDB-owned TV franchises the lookup uses the stored TMDB show id. AniList does not expose a
@@ -316,7 +387,9 @@ no TMDB token. An upstream failure is an HTTP error rather than any of those cat
 
 This data comes from TMDB's JustWatch partnership. TMDB returns a regional watch-page link rather
 than reliable provider deep links, so the client opens `link` for the actual options and must show
-the supplied JustWatch attribution.
+the supplied JustWatch attribution. Search, trending, Library and Detail embed `availability` when
+a region resolves. List responses use persisted stale-while-revalidate snapshots; exact Search and
+Detail do a current bounded lookup. Use the batch endpoint to warm a visible shelf in one request.
 ```jsonc
 {
   "country": "IN",
@@ -326,11 +399,13 @@ the supplied JustWatch attribution.
       "id": 8,
       "name": "Netflix",
       "logo": "https://image.tmdb.org/t/p/w92/…" | null,
-      "access": "subscription"  // subscription | free | ads
+      "access": "subscription", // subscription | free | ads
+      "preferred": true          // optional; saved services sort first
     }
   ],
   "link": "https://www.themoviedb.org/tv/30984-bleach/watch?locale=IN" | null,
-  "attribution": "JustWatch"
+  "attribution": "JustWatch",
+  "checkedAt": "2026-09-03T12:00:00.000Z"
 }
 ```
 
@@ -339,15 +414,22 @@ the supplied JustWatch attribution.
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
 | GET | `/health` | — | `{ ok: true }` |
-| GET | `/franchises/trending?limit=30` | — | `FranchiseListResponse` |
-| GET | `/search?q=&exact=1` | — | `FranchiseListResponse` — empty `q` = trending. Non-empty queries search the indexed local catalogue first; one- or two-character typeahead is always local-only. A genuine miss gets one short AniList + TMDB `/search/tv` attempt, returns known matches immediately, and warms unknown matches through a bounded background queue. Exact-title hits ship any immediate catalogue-backed `upcoming` fact and queue richer announcement research on this surface. Provider failures are reported in `sources` instead of failing the whole request. TMDB results that are Japanese animation are suppressed (AniList owns those). `exact=1` opts out of the spell-correction below |
-| GET | `/franchises/:id?country=IN` | — | `Franchise`; `country` is optional/case-insensitive and selects `audience.contentRating` without guessing a fallback market |
-| GET | `/franchises/:id/watch-providers?country=IN` | — | `WatchAvailability`; `country` is required and case-insensitive. Loaded separately so a cold provider lookup never delays `Franchise` detail |
-| GET | `/me/library` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }` where `LibraryFranchise` = full `Franchise` + `status` + `behind` + `newParts` |
+| GET | `/franchises/trending?limit=30&country=IN` | — | `FranchiseListResponse`; supports the same `source`, `year`, `status`, `theme`, `providerId` filters as Search |
+| GET | `/search?q=&exact=1&source=anilist&year=2026&status=RELEASING&theme=Drama&providerId=8&country=IN` | — | `FranchiseListResponse` — empty `q` = trending. Indexed aliases include English, Romaji, native titles and synonyms. One- or two-character typeahead is local-only. A genuine miss gets one short AniList + TMDB fan-out and bounded materialization. Exact-title hits synchronously refresh immediate `upcoming`, trailer and regional facts, then queue richer research. `exact=1` disables spell correction. All filters are optional; `providerId` requires a query/saved country |
+| POST | `/franchises/resolve` | `{ source: "anilist" \| "tmdb", externalId }` | Materializes a `RelatedTitle` selected by the user and returns its `FranchiseSummary`; `422` when identity/source policy rejects it |
+| GET | `/franchises/:id?country=IN` | — | `Franchise`; `country` is optional/case-insensitive, falls back to saved preference, selects `audience.contentRating`, and attaches current `availability` |
+| GET | `/franchises/:id/announcements?limit=20` | — | `{ observations: AnnouncementObservation[] }` newest-first, with immutable evidence snapshots |
+| GET | `/franchises/:id/watch-providers?country=IN` | — | `WatchAvailability`; `country` is case-insensitive and may be omitted after saving a preference |
+| POST | `/franchises/watch-providers/batch` | `{ franchiseIds: [uuid], country? }` | `{ country, availability: [{ franchiseId, ...WatchAvailability }] }`; max 100, four bounded workers |
+| GET | `/me/preferences` | — | `{ country, language, providerIds, updatedAt }` |
+| PUT | `/me/preferences` | `{ country?: "IN" \| null, language?, providerIds? }` | Saved preference object; omitted fields are preserved |
+| GET | `/me/library?country=IN` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }`; country falls back to preferences and adds cached availability |
+| GET | `/me/discover?limit=20` | — | `{ items: DiscoveryItem[] }`; source-native recommendations with score plus `because`, `reason`, and optional materialized `franchiseId` |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |
 | PATCH | `/me/subscriptions/:franchiseId` | `{ status }` | `{ ok: true }` |
 | DELETE | `/me/subscriptions/:franchiseId` | — | `{ ok: true }` |
 | PUT | `/me/progress` | `{ mediaId, episodes }` | `{ ok: true }` |
+| PUT | `/me/franchises/:franchiseId/progress` | `{ mode: "caught_up" \| "completed" \| "reset", status? }` **or** `{ parts: [{ mediaId, episodes }], status? }` | Atomic canonical `{ ok, franchiseId, status, progress[] }`; rejects foreign/duplicate media IDs before writing; `completed` also upserts completed subscription status |
 | POST | `/me/opened` | — | `{ prevOpenedAt: Int }` (returns the value *before* this call, then stamps now) |
 | GET | `/me/notifications?limit=50` | — | `{ items: NotificationItem[], unread: Int }` newest-first |
 | POST | `/me/notifications/read` | `{ ids?: [uuid] }` | `{ marked: Int }` — omit `ids` to mark all unread as read |
@@ -358,8 +440,8 @@ the supplied JustWatch attribution.
 `DELETE /me` erases the account. It is required by App Store guideline 5.1.1(v) and it is the one
 route in this API that cannot be undone, so its semantics are exact:
 
-- **Erased, not deactivated.** In one transaction: the caller's `notifications`, `subscriptions`
-  and `progress` rows, then the `users` row itself. Every user-owned table is deleted explicitly
+- **Erased, not deactivated.** In one transaction: the caller's `notifications`, `subscriptions`,
+  `progress`, and `user_preferences` rows, then the `users` row itself. Every user-owned table is deleted explicitly
   rather than left to the `ON DELETE CASCADE` each foreign key declares — the cascade is real and
   `me.account.test.ts` asserts it, but a database restored from a dump, or a table added later
   without one, must not be able to turn "delete my account" into "orphan my rows".
@@ -430,7 +512,11 @@ The client computes views exactly like the old app, but per **releasing part**:
 - **Schedule** = releasing parts bucketed into the IST Mon–Sun week by `nextAiringAt`.
 - **Library buckets** = Behind / Caught up (releasing, behind 0) / Finished / Plan, computed
   from the franchise's releasing part + subscription status.
-- **Mark caught up** = `PUT /me/progress {mediaId, episodes: airedEpisodes}` for the releasing part.
+- Render franchise chronology by `watchOrder`; use `relationship`/`optional` for honest side-story
+  labels. Never reconstruct one order by separately sorting season/movie arrays.
+- **Mark caught up** = `PUT /me/franchises/:id/progress {"mode":"caught_up"}`. This updates every
+  member atomically and leaves a `NOT_YET_RELEASED` part at zero. The legacy per-part endpoint
+  remains valid for a single +/- control.
 
 All time math is **IST (Asia/Kolkata)** — port `istParts`, `istDayKey`, `istMondayCol`,
 `fmtCountdown`, `fmtAgo`, `fmtDay`, `fmtTime`, `greetingFor` to Swift.

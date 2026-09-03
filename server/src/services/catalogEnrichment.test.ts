@@ -81,6 +81,7 @@ describe('aniListFranchiseEnrichment', () => {
       title: 'Related',
       year: 2025,
       images: { portrait: 'https://img/portrait.jpg', landscape: 'https://img/landscape.jpg' },
+      score: 100,
     }])
   })
 

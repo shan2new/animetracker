@@ -1,6 +1,13 @@
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull } from 'drizzle-orm'
 import { db } from '../db/index.js'
-import { franchise, franchiseMember, media } from '../db/schema.js'
+import {
+  franchise,
+  franchiseMember,
+  media,
+  subscriptions,
+  userPreferences,
+  watchAvailabilitySnapshots,
+} from '../db/schema.js'
 import {
   getMovieWatchProviders,
   getTvWatchProviders,
@@ -18,6 +25,8 @@ import type {
   WatchProvider,
 } from '../types/api.js'
 import { resolveAnimeTmdbTarget } from './animeTmdbMatch.js'
+import { getCatalogLink, upsertCatalogLink } from './catalogLinks.js'
+import { BoundedTaskQueue } from '../util/taskQueue.js'
 export { pickAnimeTmdbCandidate as pickAnimeWatchTarget } from './animeTmdbMatch.js'
 export type { AnimeTmdbCandidate as WatchTargetCandidate } from './animeTmdbMatch.js'
 
@@ -39,6 +48,9 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>()
 const inFlight = new Map<string, Promise<WatchAvailability | null>>()
+const refreshQueue = new BoundedTaskQueue(3, 100, (key, error) => {
+  console.warn(`availability refresh failed (${key}):`, error instanceof Error ? error.message : error)
+})
 
 function emptyAvailability(country: string, status: WatchAvailabilityStatus): WatchAvailability {
   return { country, status, providers: [], link: null, attribution: 'JustWatch' }
@@ -97,8 +109,11 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
   // TMDB owns general-TV franchises directly. AniList-owned anime needs a conservative title/year
   // bridge because AniList exposes streaming links but no regional catalogue or TMDB id.
   let target: WatchTarget | null = null
+  const tmdbLink = row.source === 'anilist' ? await getCatalogLink(franchiseId, 'tmdb') : null
   if (row.source === 'tmdb' && row.externalId != null) {
     target = { kind: 'tv', id: row.externalId }
+  } else if (tmdbLink?.status === 'matched') {
+    if (tmdbLink.externalId != null) target = { kind: tmdbLink.mediaType as TargetKind, id: tmdbLink.externalId }
   } else if (
     row.enrichment?.videoFallback?.status === 'matched' &&
     row.enrichment.videoFallback.externalId != null
@@ -141,6 +156,16 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
         mediaType: primary.format === 'MOVIE' ? 'movie' : 'tv',
       }, INTERACTIVE_OPTIONS)
       target = resolved ? { kind: resolved.mediaType, id: resolved.externalId } : null
+      await upsertCatalogLink({
+        franchiseId,
+        provider: 'tmdb',
+        mediaType: primary.format === 'MOVIE' ? 'movie' : 'tv',
+        externalId: resolved?.externalId ?? null,
+        status: resolved ? 'matched' : 'unmatched',
+        matchMethod: resolved ? 'title_year_animation' : 'title_year_no_match',
+        confidence: resolved ? 0.9 : null,
+        evidence: { aliases, year: primary.year },
+      })
     }
   }
 
@@ -156,18 +181,60 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
     providers,
     link: market?.link ?? null,
     attribution: 'JustWatch',
+    checkedAt: new Date().toISOString(),
   }
 }
 
-function remember(key: string, value: WatchAvailability): void {
+function ttlFor(value: WatchAvailability): number {
+  return value.status === 'available' ? CACHE_TTL_MS : MISS_TTL_MS
+}
+
+function remember(key: string, value: WatchAvailability, expiresAt = Date.now() + ttlFor(value)): void {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value as string | undefined
     if (oldest) cache.delete(oldest)
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + (value.status === 'available' ? CACHE_TTL_MS : MISS_TTL_MS),
+    expiresAt,
   })
+}
+
+async function persist(franchiseId: string, value: WatchAvailability): Promise<void> {
+  const checkedAt = value.checkedAt ? new Date(value.checkedAt) : new Date()
+  const expiresAt = new Date(checkedAt.getTime() + ttlFor(value))
+  await db
+    .insert(watchAvailabilitySnapshots)
+    .values({
+      franchiseId,
+      country: value.country,
+      status: value.status,
+      providers: value.providers,
+      link: value.link,
+      checkedAt,
+      expiresAt,
+    })
+    .onConflictDoUpdate({
+      target: [watchAvailabilitySnapshots.franchiseId, watchAvailabilitySnapshots.country],
+      set: {
+        status: value.status,
+        providers: value.providers,
+        link: value.link,
+        checkedAt,
+        expiresAt,
+      },
+    })
+}
+
+function fromSnapshot(row: typeof watchAvailabilitySnapshots.$inferSelect): WatchAvailability {
+  return {
+    country: row.country,
+    status: row.status as WatchAvailabilityStatus,
+    providers: row.providers ?? [],
+    link: row.link,
+    attribution: 'JustWatch',
+    checkedAt: row.checkedAt.toISOString(),
+  }
 }
 
 /**
@@ -184,14 +251,117 @@ export async function getWatchAvailability(franchiseId: string, country: string)
   if (hit && hit.expiresAt > Date.now()) return hit.value
   if (hit) cache.delete(key)
 
+  const [stored] = await db
+    .select()
+    .from(watchAvailabilitySnapshots)
+    .where(and(
+      eq(watchAvailabilitySnapshots.franchiseId, franchiseId),
+      eq(watchAvailabilitySnapshots.country, country),
+    ))
+    .limit(1)
+  if (stored && stored.expiresAt.getTime() > Date.now()) {
+    const value = fromSnapshot(stored)
+    remember(key, value, stored.expiresAt.getTime())
+    return value
+  }
+
   const active = inFlight.get(key)
   if (active) return active
   const task = lookup(franchiseId, country)
     .then((value) => {
-      if (value) remember(key, value)
+      if (value) {
+        remember(key, value)
+        void persist(franchiseId, value).catch((error) => {
+          console.warn(`availability snapshot write failed (${key}):`, error instanceof Error ? error.message : error)
+        })
+      }
       return value
     })
     .finally(() => inFlight.delete(key))
   inFlight.set(key, task)
   return task
+}
+
+/**
+ * Read list-card previews in one query. Stale rows remain useful for the current response and are
+ * refreshed in the bounded queue; a list surface never fans out synchronously to TMDB.
+ */
+export async function getAvailabilityPreviews(
+  franchiseIds: string[],
+  country: string,
+): Promise<Map<string, WatchAvailability>> {
+  const out = new Map<string, WatchAvailability>()
+  if (franchiseIds.length === 0) return out
+  const rows = await db
+    .select()
+    .from(watchAvailabilitySnapshots)
+    .where(and(
+      inArray(watchAvailabilitySnapshots.franchiseId, franchiseIds),
+      eq(watchAvailabilitySnapshots.country, country),
+    ))
+  const now = Date.now()
+  const byId = new Map(rows.map((row) => [row.franchiseId, row]))
+  for (const franchiseId of franchiseIds) {
+    const row = byId.get(franchiseId)
+    if (row) out.set(franchiseId, fromSnapshot(row))
+    if (!row || row.expiresAt.getTime() <= now) {
+      refreshQueue.enqueue(`${franchiseId}:${country}`, async () => {
+        await getWatchAvailability(franchiseId, country)
+      })
+    }
+  }
+  return out
+}
+
+export async function getWatchAvailabilityBatch(
+  franchiseIds: string[],
+  country: string,
+): Promise<Map<string, WatchAvailability>> {
+  const out = new Map<string, WatchAvailability>()
+  let next = 0
+  const workers = Array.from({ length: Math.min(4, franchiseIds.length) }, async () => {
+    while (true) {
+      const index = next++
+      if (index >= franchiseIds.length) return
+      const id = franchiseIds[index]!
+      const value = await getWatchAvailability(id, country).catch(() => null)
+      if (value) out.set(id, value)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+/** Warm followed-title availability for every country a user has explicitly saved. */
+export async function refreshPreferredAvailability(limit = 100): Promise<{ checked: number; available: number }> {
+  if (!tmdbEnabled()) return { checked: 0, available: 0 }
+  const rows = await db
+    .selectDistinct({ franchiseId: subscriptions.franchiseId, country: userPreferences.country })
+    .from(subscriptions)
+    .innerJoin(userPreferences, eq(userPreferences.userId, subscriptions.userId))
+    .where(isNotNull(userPreferences.country))
+    .limit(Math.max(0, limit))
+  let checked = 0
+  let available = 0
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(4, rows.length) }, async () => {
+    while (true) {
+      const index = cursor++
+      if (index >= rows.length) return
+      const row = rows[index]!
+      if (!row.country) continue
+      try {
+        const value = await getWatchAvailability(row.franchiseId, row.country)
+        if (value) checked++
+        if (value?.status === 'available') available++
+      } catch (error) {
+        console.warn(
+          `availability warm failed (${row.franchiseId}:${row.country}):`,
+          error instanceof Error ? error.message : error,
+        )
+      }
+    }
+  })
+  await Promise.all(workers)
+  return { checked, available }
 }

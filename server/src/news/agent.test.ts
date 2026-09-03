@@ -17,6 +17,8 @@ describe('buildNewsPrompt', () => {
     expect(prompt).toContain('Deadline')
     expect(prompt).toContain('NOT_YET_RELEASED')
     expect(prompt).toContain('report and verify that installment first')
+    expect(prompt).toContain('official primary')
+    expect(prompt).toContain('evidence')
     expect(prompt).not.toContain('anime franchise "Selling Sunset"')
   })
 

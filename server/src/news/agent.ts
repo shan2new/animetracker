@@ -20,6 +20,13 @@ const newsResultSchema = z.object({
   release: z.string(),
   note: z.string().nullable(),
   source: z.string().nullable(),
+  evidence: z.array(z.object({
+    url: z.string().url(),
+    publisher: z.string().nullable(),
+    publishedAt: z.string().nullable(),
+    tier: z.enum(['official', 'trade', 'reputable', 'catalogue', 'unknown']),
+    primary: z.boolean(),
+  })).max(5),
 })
 
 export type NewsResult = z.infer<typeof newsResultSchema>
@@ -34,8 +41,24 @@ const NEWS_JSON_SCHEMA = {
     release: { type: 'string' },
     note: { type: ['string', 'null'] },
     source: { type: ['string', 'null'] },
+    evidence: {
+      type: 'array',
+      maxItems: 5,
+      items: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          publisher: { type: ['string', 'null'] },
+          publishedAt: { type: ['string', 'null'] },
+          tier: { type: 'string', enum: ['official', 'trade', 'reputable', 'catalogue', 'unknown'] },
+          primary: { type: 'boolean' },
+        },
+        required: ['url', 'publisher', 'publishedAt', 'tier', 'primary'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['status', 'next', 'release', 'note', 'source'],
+  required: ['status', 'next', 'release', 'note', 'source', 'evidence'],
   additionalProperties: false,
 } as const
 
@@ -98,7 +121,12 @@ Field conventions:
 - next: the SHORTEST stable name for the installment. For a numbered TV season use exactly "Season N" (no subtitle), "<subtitle> (movie)" for films, "Final Season Part N" style only when that is the official naming. Empty string when status is recently_aired or concluded.
 - release: a human-readable date or window ("2027-01-09", "January 2027", "Fall 2026"). "TBA" when unknown.
 - note: one short sentence of context (what was announced, by whom, when) or null.
-- source: the URL of the single most authoritative source you found, or null.`
+- source: the URL of the single most authoritative source you found, or null.
+- evidence: up to 5 sources that directly support the classification. Prefer an official primary
+  announcement plus an independent reputable/trade report when both exist. Set tier=official for
+  the studio/network/streamer/production account, trade for industry publications, reputable for
+  established news outlets, catalogue only for AniList/TMDB, and unknown otherwise. Set primary
+  true only for the original announcement. Never include search-result pages or fan speculation.`
 }
 
 // The agent subprocess resolves credentials like Claude Code: an ANTHROPIC_API_KEY in its

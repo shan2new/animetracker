@@ -11,10 +11,18 @@ const mocks = vi.hoisted(() => ({
   enqueueFranchiseEnrichment: vi.fn(),
   refreshAnimeVideoFallback: vi.fn(),
   enqueueAnimeVideoFallback: vi.fn(),
+  getAvailabilityPreviews: vi.fn(),
+  getWatchAvailabilityBatch: vi.fn(),
+  resolveUserPreferences: vi.fn(),
+  listAnnouncementObservations: vi.fn(),
+  ensureTvFranchise: vi.fn(),
+  groupFromSeed: vi.fn(),
 }))
 
 vi.mock('../services/watchAvailability.js', () => ({
   getWatchAvailability: mocks.getWatchAvailability,
+  getAvailabilityPreviews: mocks.getAvailabilityPreviews,
+  getWatchAvailabilityBatch: mocks.getWatchAvailabilityBatch,
 }))
 vi.mock('../services/franchiseView.js', () => ({
   getFranchise: mocks.getFranchise,
@@ -23,9 +31,16 @@ vi.mock('../services/franchiseView.js', () => ({
 }))
 vi.mock('../news/service.js', () => ({
   enqueueFranchiseNewsRefresh: mocks.enqueueFranchiseNewsRefresh,
+  listAnnouncementObservations: mocks.listAnnouncementObservations,
 }))
 vi.mock('../tmdb/service.js', () => ({
   refreshTvUpcomingFact: mocks.refreshTvUpcomingFact,
+  ensureTvFranchise: mocks.ensureTvFranchise,
+}))
+vi.mock('../grouping/service.js', () => ({ groupFromSeed: mocks.groupFromSeed }))
+vi.mock('../services/preferences.js', () => ({
+  resolveUserPreferences: mocks.resolveUserPreferences,
+  applyProviderPreferences: (value: unknown) => value,
 }))
 vi.mock('../services/search.js', () => ({
   searchFranchises: mocks.searchFranchises,
@@ -66,6 +81,14 @@ beforeEach(() => {
     videos: 0,
   })
   mocks.enqueueAnimeVideoFallback.mockReset()
+  mocks.getAvailabilityPreviews.mockReset().mockResolvedValue(new Map())
+  mocks.getWatchAvailabilityBatch.mockReset().mockResolvedValue(new Map())
+  mocks.resolveUserPreferences.mockReset().mockImplementation(async (_userId: string, country?: string) => ({
+    country: country ?? null, language: 'en', providerIds: [], updatedAt: null,
+  }))
+  mocks.listAnnouncementObservations.mockReset().mockResolvedValue([])
+  mocks.ensureTvFranchise.mockReset()
+  mocks.groupFromSeed.mockReset()
   mocks.getWatchAvailability.mockResolvedValue({
     country: 'IN',
     status: 'not_available',
@@ -108,6 +131,25 @@ describe('GET /search', () => {
     await app.inject({ method: 'GET', url: '/search?q=Emily' })
 
     expect(mocks.enqueueFranchiseNewsRefresh).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('passes validated catalogue filters and normalized region into Search 2.0', async () => {
+    mocks.searchFranchises.mockResolvedValueOnce({ franchises: [{ id: ID, title: 'Dark Matter' }] })
+    const app = await appWithUser()
+    const res = await app.inject({
+      method: 'GET',
+      url: '/search?q=dark&source=tmdb&year=2024&status=FINISHED&theme=Drama&country=in',
+    })
+
+    expect(res.statusCode, res.body).toBe(200)
+    expect(mocks.searchFranchises).toHaveBeenCalledWith('dark', 30, expect.objectContaining({
+      filters: {
+        source: 'tmdb', year: 2024, status: 'FINISHED', theme: 'Drama',
+        providerId: undefined, country: 'IN',
+      },
+    }))
+    expect(mocks.getAvailabilityPreviews).toHaveBeenCalledWith([ID], 'IN')
     await app.close()
   })
 
@@ -280,6 +322,18 @@ describe('GET /franchises/:id/watch-providers', () => {
 
     expect(res.statusCode, res.body).toBe(404)
     expect(res.json()).toEqual({ error: 'franchise not found' })
+    await app.close()
+  })
+
+  it('uses the saved country when the request omits an override', async () => {
+    mocks.resolveUserPreferences.mockResolvedValueOnce({
+      country: 'IN', language: 'en', providerIds: [], updatedAt: null,
+    })
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'GET', url: `/franchises/${ID}/watch-providers` })
+
+    expect(res.statusCode, res.body).toBe(200)
+    expect(mocks.getWatchAvailability).toHaveBeenCalledWith(ID, 'IN')
     await app.close()
   })
 })

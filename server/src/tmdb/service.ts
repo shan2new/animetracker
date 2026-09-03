@@ -6,6 +6,7 @@ import { persistFranchises, type GroupOutcome } from '../grouping/service.js'
 import { upsertMediaRows } from '../services/mediaStore.js'
 import { resolveUpcomingWithCatalog } from '../services/catalogUpcoming.js'
 import { enqueueFranchiseEnrichment } from '../services/catalogEnrichment.js'
+import { upsertCatalogLink } from '../services/catalogLinks.js'
 import type { CatalogVideo, EpisodeMeta, FranchiseUpcoming } from '../types/api.js'
 import { getSeason, getShow, tmdbEnabled, type TmdbRequestOptions } from './client.js'
 import {
@@ -14,6 +15,7 @@ import {
   isJapaneseAnimationShow,
   tmdbEpisodes,
   tmdbFranchiseEnrichment,
+  tmdbArtwork,
   tmdbSeasonToMediaRow,
   tmdbShowUpcoming,
   tmdbShowToGroupingResult,
@@ -118,7 +120,17 @@ export async function ensureTvFranchise(
     .from(franchise)
     .where(and(eq(franchise.source, 'tmdb'), eq(franchise.externalId, showId)))
     .limit(1)
-  if (existing) return { franchiseId: existing.id, created: false, attached: 0 }
+  if (existing) {
+    await upsertCatalogLink({
+      franchiseId: existing.id,
+      provider: 'tmdb',
+      mediaType: 'tv',
+      externalId: showId,
+      matchMethod: 'catalogue_owner',
+      confidence: 1,
+    })
+    return { franchiseId: existing.id, created: false, attached: 0 }
+  }
 
   const show = await getShow(showId, { ...opts.request, enrichment: opts.hydrateEpisodes !== false })
   if (!show || includedSeasons(show).length === 0) return null
@@ -159,6 +171,7 @@ export async function ensureTvFranchise(
       primaryMediaId: seasonOne?.id ?? parts[0]!.id,
       cover: imageUrl(show.poster_path, 'w780'),
       banner: imageUrl(show.backdrop_path, 'w1280'),
+      artwork: tmdbArtwork(show),
       description: show.overview || null,
       genres: (show.genres ?? []).map((g) => g.name).slice(0, 6),
       groupingSource: 'tmdb',
@@ -171,6 +184,14 @@ export async function ensureTvFranchise(
     }),
     // One show = one franchise, so every raced member points at the same winner.
     onRaced: async (raced) => ({ franchiseId: raced[0]!.franchiseId, created: false, attached: 0 }),
+  })
+  await upsertCatalogLink({
+    franchiseId: outcome.franchiseId,
+    provider: 'tmdb',
+    mediaType: 'tv',
+    externalId: show.id,
+    matchMethod: 'catalogue_owner',
+    confidence: 1,
   })
   enqueueFranchiseEnrichment(outcome.franchiseId)
   return outcome
@@ -213,6 +234,7 @@ export async function refreshTvShow(
       title: show.name,
       cover: imageUrl(show.poster_path, 'w780'),
       banner: imageUrl(show.backdrop_path, 'w1280'),
+      artwork: tmdbArtwork(show),
       description: show.overview || null,
       genres: (show.genres ?? []).map((genre) => genre.name).slice(0, 6),
       enrichment: tmdbFranchiseEnrichment(show, now),
@@ -220,6 +242,14 @@ export async function refreshTvShow(
       updatedAt: new Date(),
     })
     .where(eq(franchise.id, franchiseId))
+  await upsertCatalogLink({
+    franchiseId,
+    provider: 'tmdb',
+    mediaType: 'tv',
+    externalId: show.id,
+    matchMethod: 'catalogue_owner',
+    confidence: 1,
+  })
   return { refreshed: true, attached }
 }
 
@@ -239,7 +269,16 @@ async function attachTvMembers(franchiseId: string, parts: GroupedPart[]): Promi
 
   await db
     .insert(franchiseMember)
-    .values(fresh.map((p) => ({ mediaId: p.id, franchiseId, partKind: p.partKind, sequence: p.sequence, label: p.label })))
+    .values(fresh.map((p) => ({
+      mediaId: p.id,
+      franchiseId,
+      partKind: p.partKind,
+      sequence: p.sequence,
+      watchOrder: p.watchOrder ?? p.sequence,
+      relationship: p.relationship ?? null,
+      optional: p.optional ?? false,
+      label: p.label,
+    })))
     .onConflictDoNothing()
   await db.update(franchise).set({ updatedAt: new Date() }).where(inArray(franchise.id, [franchiseId]))
   return fresh.length

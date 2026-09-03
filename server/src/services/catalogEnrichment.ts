@@ -13,6 +13,7 @@ import { getShow, type TmdbRequestOptions } from '../tmdb/client.js'
 import { tmdbFranchiseEnrichment } from '../tmdb/mapping.js'
 import type { CatalogPerson, FranchiseEnrichment, FranchisePeople, RelatedTitle } from '../types/api.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
+import { syncRecommendationEdges } from './recommendations.js'
 
 const D = 86_400_000
 const REFRESH_AFTER_MS = 7 * D
@@ -132,6 +133,7 @@ export function aniListFranchiseEnrichment(
         portrait: candidate.coverImage.extraLarge ?? candidate.coverImage.large ?? null,
         landscape: candidate.bannerImage ?? null,
       },
+      score: node.rating ?? null,
     })
     if (related.length >= 10) break
   }
@@ -170,10 +172,12 @@ export async function refreshFranchiseEnrichment(
     if (row.externalId == null) return false
     const show = await getShow(row.externalId, { ...options.tmdbRequest, enrichment: true })
     if (!show) return false
+    const value = tmdbFranchiseEnrichment(show)
     await db
       .update(franchise)
-      .set({ enrichment: tmdbFranchiseEnrichment(show), updatedAt: new Date() })
+      .set({ enrichment: value, updatedAt: new Date() })
       .where(eq(franchise.id, franchiseId))
+    await syncRecommendationEdges(franchiseId, value.related)
     return true
   }
 
@@ -218,6 +222,7 @@ export async function refreshFranchiseEnrichment(
     )`,
     updatedAt: new Date(),
   }).where(eq(franchise.id, franchiseId))
+  await syncRecommendationEdges(franchiseId, value.related)
   return true
 }
 

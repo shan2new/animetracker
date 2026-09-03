@@ -2,7 +2,8 @@ import cron from 'node-cron'
 import { env } from '../env.js'
 import { refreshSubscribedNews } from '../news/service.js'
 import { refreshSubscribedAniListEnrichment } from '../services/catalogEnrichment.js'
-import { refreshSubscribedAnimeVideoFallback } from '../services/animeVideoFallback.js'
+import { refreshAnimeMetadataFallback } from '../services/animeVideoFallback.js'
+import { refreshPreferredAvailability } from '../services/watchAvailability.js'
 import { tmdbEnabled } from '../tmdb/client.js'
 import {
   attachNewSeasons,
@@ -39,10 +40,10 @@ export function startCron(): void {
     try {
       const result = await sweepAniListTrailers()
       if (result.providerReachable === false) {
-        console.warn('[cron] AniList trailer sweep deferred: provider unavailable')
+        console.warn('[cron] AniList catalogue metadata sweep deferred: provider unavailable')
       } else if (result.scanned > 0) {
         console.log(
-          `[cron] AniList trailer sweep: scanned ${result.scanned}, upserted ${result.upserted}, complete=${result.complete}`,
+          `[cron] AniList catalogue metadata sweep: scanned ${result.scanned}, upserted ${result.upserted}, complete=${result.complete}`,
         )
       }
     } catch (err) {
@@ -88,15 +89,26 @@ export function startCron(): void {
     }
   })
 
-  // Daily 04:30: repair missing anime trailers from TMDB independently of AniList. TMDB remains
-  // metadata-only here; this never creates a duplicate TV franchise for an AniList title.
+  // Daily 04:30: repair sparse anime metadata from TMDB independently of AniList. Followed titles
+  // are first, then the rest of the materialized catalogue; this never changes AniList identity.
   if (tmdbEnabled()) {
     cron.schedule('30 4 * * *', async () => {
       try {
-        const { checked, matched, videos } = await refreshSubscribedAnimeVideoFallback()
-        console.log(`[cron] anime video fallback: checked ${checked}, matched ${matched}, videos ${videos}`)
+        const { checked, matched, videos } = await refreshAnimeMetadataFallback()
+        console.log(`[cron] anime metadata fallback: checked ${checked}, matched ${matched}, videos ${videos}`)
       } catch (err) {
-        console.error('[cron] anime video fallback failed:', (err as Error).message)
+        console.error('[cron] anime metadata fallback failed:', (err as Error).message)
+      }
+    })
+
+    // Daily 04:45: keep list-card availability warm only for explicitly saved user countries.
+    // This changes no subscriptions and emits no provider-change notifications.
+    cron.schedule('45 4 * * *', async () => {
+      try {
+        const { checked, available } = await refreshPreferredAvailability()
+        console.log(`[cron] regional availability: checked ${checked}, available ${available}`)
+      } catch (err) {
+        console.error('[cron] regional availability failed:', (err as Error).message)
       }
     })
   }

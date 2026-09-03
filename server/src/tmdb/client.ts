@@ -22,7 +22,12 @@ export async function getMovie(movieId: number, options: TmdbRequestOptions = {}
   try {
     return await tmdbGet<TmdbMovie>(
       `/movie/${movieId}`,
-      { language: 'en-US', include_video_language: 'en,null', append_to_response: 'videos' },
+      {
+        language: 'en-US',
+        include_video_language: 'en,null',
+        include_image_language: 'en,null',
+        append_to_response: 'videos,images,alternative_titles',
+      },
       options,
     )
   } catch (err) {
@@ -115,11 +120,12 @@ export async function getShow(showId: number, options: TmdbShowRequestOptions = 
       {
         language: 'en-US',
         include_video_language: 'en,null',
+        include_image_language: 'en,null',
         // Videos are cheap and useful on the very first materialization. Credits/ratings/
         // recommendations are appended only by background/full refreshes.
         append_to_response: enrichment
-          ? 'videos,content_ratings,aggregate_credits,keywords,recommendations'
-          : 'videos',
+          ? 'videos,content_ratings,aggregate_credits,keywords,recommendations,images,alternative_titles'
+          : 'videos,alternative_titles',
       },
       request,
     )

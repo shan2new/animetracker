@@ -33,6 +33,10 @@ describe('deriveCatalogUpcoming', () => {
       note: null,
       source: 'https://www.themoviedb.org/tv/82596',
       checked: '2026-09-02T14:36:40.961Z',
+      evidence: [{
+        url: 'https://www.themoviedb.org/tv/82596', publisher: 'TMDB', publishedAt: null,
+        tier: 'catalogue', primary: false,
+      }],
     })
   })
 

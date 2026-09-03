@@ -38,7 +38,31 @@ export interface TmdbMovieSearchResult {
 export interface TmdbMovie {
   id: number
   title: string
+  original_title?: string | null
+  overview?: string | null
+  poster_path?: string | null
+  backdrop_path?: string | null
+  release_date?: string | null
+  adult?: boolean
+  genres?: { id: number; name: string }[]
   videos?: TmdbVideoResponse
+  images?: TmdbImages
+  alternative_titles?: { titles?: { iso_3166_1?: string; title: string }[] }
+}
+
+export interface TmdbImage {
+  file_path: string
+  width?: number | null
+  height?: number | null
+  iso_639_1?: string | null
+  vote_average?: number | null
+  vote_count?: number | null
+}
+
+export interface TmdbImages {
+  posters?: TmdbImage[]
+  backdrops?: TmdbImage[]
+  logos?: TmdbImage[]
 }
 
 export interface TmdbWatchProvider {
@@ -114,6 +138,7 @@ export interface TmdbSeason {
 export interface TmdbShow {
   id: number
   name: string
+  original_name?: string | null
   status: TmdbShowStatus
   number_of_seasons: number
   seasons: TmdbSeason[]
@@ -129,6 +154,8 @@ export interface TmdbShow {
   popularity: number
   origin_country: string[]
   videos?: TmdbVideoResponse
+  images?: TmdbImages
+  alternative_titles?: { results?: { iso_3166_1?: string; title: string }[] }
   content_ratings?: {
     results?: { iso_3166_1: string; rating: string; descriptors?: string[] }[]
   }

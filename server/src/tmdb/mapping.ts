@@ -2,6 +2,8 @@ import type { MediaStatus } from '../anilist/types.js'
 import type { media } from '../db/schema.js'
 import type { GroupingResult } from '../grouping/llm.js'
 import type {
+  ArtworkGallery,
+  ArtworkImage,
   CatalogPerson,
   CatalogVideo,
   EpisodeMeta,
@@ -11,7 +13,7 @@ import type {
   RelatedTitle,
   VideoKind,
 } from '../types/api.js'
-import type { TmdbEpisode, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
+import type { TmdbEpisode, TmdbImage, TmdbMovie, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
 
 // Pure TMDB → local-model mapping. No I/O here — everything is unit-testable.
 
@@ -35,6 +37,62 @@ export function tmdbSeasonMediaId(seasonId: number): number {
 
 export function imageUrl(path: string | null | undefined, size: 'w342' | 'w780' | 'w1280'): string | null {
   return path ? `https://image.tmdb.org/t/p/${size}${path}` : null
+}
+
+function rankedArtwork(
+  items: TmdbImage[] | null | undefined,
+  orientation: 'portrait' | 'landscape' | 'logo',
+): ArtworkImage[] {
+  const size = orientation === 'portrait' ? 'w780' : 'w1280'
+  const seen = new Set<string>()
+  return (items ?? [])
+    .slice()
+    .sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0) || (b.vote_count ?? 0) - (a.vote_count ?? 0))
+    .flatMap((item) => {
+      const url = imageUrl(item.file_path, size)
+      if (!url || seen.has(url)) return []
+      seen.add(url)
+      return [{
+        url,
+        source: 'tmdb' as const,
+        width: item.width ?? null,
+        height: item.height ?? null,
+        language: item.iso_639_1 ?? null,
+        score: item.vote_average ?? null,
+      }]
+    })
+    .slice(0, 6)
+}
+
+function prependArtwork(items: ArtworkImage[], url: string | null, orientation: 'portrait' | 'landscape'): ArtworkImage[] {
+  if (!url || items.some((item) => item.url === url)) return items
+  return [{ url, source: 'tmdb' as const, width: null, height: null, language: null, score: null }, ...items].slice(0, 6)
+}
+
+export function tmdbArtwork(show: TmdbShow, season?: TmdbSeason): ArtworkGallery {
+  const primaryPortrait = imageUrl(season?.poster_path ?? show.poster_path, 'w780')
+  const primaryLandscape = imageUrl(show.backdrop_path, 'w1280')
+  return {
+    portraits: prependArtwork(rankedArtwork(show.images?.posters, 'portrait'), primaryPortrait, 'portrait'),
+    landscapes: prependArtwork(rankedArtwork(show.images?.backdrops, 'landscape'), primaryLandscape, 'landscape'),
+    logos: rankedArtwork(show.images?.logos, 'logo'),
+  }
+}
+
+export function tmdbMovieArtwork(movie: TmdbMovie): ArtworkGallery {
+  return {
+    portraits: prependArtwork(
+      rankedArtwork(movie.images?.posters, 'portrait'),
+      imageUrl(movie.poster_path, 'w780'),
+      'portrait',
+    ),
+    landscapes: prependArtwork(
+      rankedArtwork(movie.images?.backdrops, 'landscape'),
+      imageUrl(movie.backdrop_path, 'w1280'),
+      'landscape',
+    ),
+    logos: rankedArtwork(movie.images?.logos, 'logo'),
+  }
 }
 
 /**
@@ -254,7 +312,7 @@ export function tmdbFranchiseEnrichment(show: TmdbShow, nowMs = Date.now()): Fra
   const related: RelatedTitle[] = (show.recommendations?.results ?? [])
     .filter((item) => item.media_type !== 'movie' && item.adult !== true && !!item.name)
     .slice(0, 10)
-    .map((item) => ({
+    .map((item, index) => ({
       source: 'tmdb',
       externalId: item.id,
       franchiseId: null,
@@ -264,6 +322,7 @@ export function tmdbFranchiseEnrichment(show: TmdbShow, nowMs = Date.now()): Fra
         portrait: imageUrl(item.poster_path, 'w780'),
         landscape: imageUrl(item.backdrop_path, 'w1280'),
       },
+      score: 10 - index,
     }))
   return {
     level: hasDeepPayload ? 'full' : 'basic',
@@ -313,6 +372,13 @@ export function tmdbShowUpcoming(show: TmdbShow, nowMs = Date.now()): FranchiseU
 
   const checked = new Date(nowMs).toISOString()
   const source = `https://www.themoviedb.org/tv/${show.id}`
+  const evidence = [{
+    url: source,
+    publisher: 'TMDB',
+    publishedAt: null,
+    tier: 'catalogue' as const,
+    primary: false,
+  }]
   const known = future[0]
   if (known) {
     return {
@@ -322,6 +388,7 @@ export function tmdbShowUpcoming(show: TmdbShow, nowMs = Date.now()): FranchiseU
       note: null,
       source,
       checked,
+      evidence,
     }
   }
 
@@ -338,6 +405,7 @@ export function tmdbShowUpcoming(show: TmdbShow, nowMs = Date.now()): FranchiseU
     note: 'TMDB currently lists the series as returning; no premiere date is available in its catalogue.',
     source,
     checked,
+    evidence,
   }
 }
 
@@ -371,11 +439,14 @@ export function tmdbSeasonToMediaRow(
     externalId: season.id,
     titleRomaji: null,
     titleEnglish: single ? show.name : `${show.name}: ${season.name}`,
+    titleNative: show.original_name ?? null,
+    synonyms: (show.alternative_titles?.results ?? []).map((item) => item.title).filter(Boolean).slice(0, 30),
     format: 'TV',
     status,
     episodes: season.episode_count || null,
     cover: imageUrl(season.poster_path ?? show.poster_path, 'w780'),
     banner: imageUrl(show.backdrop_path, 'w1280'),
+    artwork: tmdbArtwork(show, season),
     description: season.overview || show.overview || null,
     genres: (show.genres ?? []).map((g) => g.name),
     studios: tmdbNetworks(show),
@@ -409,6 +480,11 @@ export function tmdbShowToGroupingResult(show: TmdbShow): GroupingResult {
           id: tmdbSeasonMediaId(s.id),
           partKind: s.season_number === 0 ? 'special' : 'season',
           sequence: s.season_number,
+          // PostgreSQL `integer` tops out at ~2.1b. Keep specials after any plausible numbered
+          // season without sending JavaScript's MAX_SAFE_INTEGER into an integer column.
+          watchOrder: s.season_number === 0 ? 10_000 : s.season_number,
+          relationship: s.season_number === 0 ? 'SPECIAL' : s.season_number === 1 ? null : 'SEQUEL',
+          optional: s.season_number === 0,
           label: s.season_number === 0 ? 'Specials' : `Season ${s.season_number}`,
         })),
       },

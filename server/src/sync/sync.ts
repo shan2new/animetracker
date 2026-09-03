@@ -10,7 +10,9 @@ import { isJapaneseAnimation } from '../tmdb/mapping.js'
 import { ensureTvFranchise, refreshTvShow } from '../tmdb/service.js'
 import { mapWithConcurrency } from '../util/concurrency.js'
 
-const ANILIST_TRAILER_SWEEP_KEY = 'anilist_trailer_backfill_v1'
+// v2 deliberately restarts the completed trailer-only cursor: MEDIA_FIELDS now also carries
+// native titles, synonyms and artwork, and pre-v2 rows need one full catalogue pass to gain them.
+const ANILIST_TRAILER_SWEEP_KEY = 'anilist_catalog_metadata_v2'
 const ANILIST_TRAILER_SWEEP_LIMIT = 2_500
 const ANILIST_TRAILER_REQUEST_SIZE = 50
 const ANILIST_TRAILER_REQUEST_INTERVAL_MS = 2_300
@@ -46,8 +48,8 @@ export interface AniListTrailerSweepResult {
 }
 
 /**
- * One-time, resumable repair for media rows written before `media.videos` existed. Empty videos
- * cannot identify unfinished work because many titles genuinely have no trailer, so progress is a
+ * One-time, resumable repair for media rows written before videos/native titles/synonyms/artwork
+ * existed. Empty fields cannot identify unfinished work because many titles genuinely omit them, so progress is a
  * durable id cursor rather than `WHERE videos = []`. One hourly run covers the current catalogue;
  * each 50-id request is spaced below AniList's degraded 30 requests/minute ceiling. A provider-wide
  * outage leaves the cursor untouched and the next hour retries without requiring a page visit.

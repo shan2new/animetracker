@@ -8,7 +8,8 @@ const ENDPOINT = 'https://graphql.anilist.co'
 // full node when we expand into it).
 const MEDIA_FIELDS = `
   id
-  title { romaji english }
+  title { romaji english native }
+  synonyms
   coverImage { extraLarge large }
   bannerImage
   trailer { id site thumbnail }

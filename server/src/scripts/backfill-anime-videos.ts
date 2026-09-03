@@ -3,8 +3,8 @@
 
 import { sql } from '../db/index.js'
 import {
+  refreshAnimeMetadataFallback,
   refreshAnimeVideoFallback,
-  refreshSubscribedAnimeVideoFallback,
 } from '../services/animeVideoFallback.js'
 
 const franchiseId = process.argv[2]?.trim()
@@ -17,8 +17,8 @@ try {
     })
     console.log(`[anime-videos] ${franchiseId}:`, result)
   } else {
-    const result = await refreshSubscribedAnimeVideoFallback(100, { force: true })
-    console.log('[anime-videos] subscribed:', result)
+    const result = await refreshAnimeMetadataFallback(100, { force: true })
+    console.log('[anime-videos] catalogue:', result)
   }
 } finally {
   await sql.end()
