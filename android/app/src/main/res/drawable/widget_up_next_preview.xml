@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The widget picker's thumbnail, and the pre-API-35 half of the preview story.
+
+  From API 35 `GlanceAppWidget.providePreview` renders the REAL composition into the picker (see
+  `PreviouslyWidget.providePreview`); below that the picker can only show a drawable, and a widget
+  with no preview is a grey box in the one place a widget is won or lost.
+
+  This is a wireframe of the card's own anatomy — pill, the moment in accent, the show, the fact —
+  drawn in the app's colours. It should be REPLACED with a rendered screenshot before the beta:
+  a wireframe is honest about the layout and says nothing about the photograph, which is most of
+  what the real card is.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="250dp"
+    android:height="110dp"
+    android:viewportWidth="250"
+    android:viewportHeight="110">
+
+    <!-- The canvas. -->
+    <path
+        android:pathData="M0,0 h250 v110 h-250 z"
+        android:fillColor="@color/canvas" />
+
+    <!-- The OverArtLabel capsule. -->
+    <path
+        android:pathData="M16,16 h74 v24 h-74 z"
+        android:fillColor="@color/widget_preview_plate" />
+
+    <!-- Its accent dot: today's drop. -->
+    <path
+        android:pathData="M23.5,28 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0 z"
+        android:fillColor="@color/widget_accent" />
+
+    <!-- The eyebrow's word. -->
+    <path
+        android:pathData="M34,25 h46 v6 h-46 z"
+        android:fillColor="@color/widget_preview_ink_quiet" />
+
+    <!-- The moment — the clock, in accent. -->
+    <path
+        android:pathData="M16,54 h84 v20 h-84 z"
+        android:fillColor="@color/widget_accent" />
+
+    <!-- The show. -->
+    <path
+        android:pathData="M16,82 h136 v11 h-136 z"
+        android:fillColor="@color/widget_preview_ink" />
+
+    <!-- The fact line. -->
+    <path
+        android:pathData="M16,98 h96 v7 h-96 z"
+        android:fillColor="@color/widget_preview_ink_faint" />
+</vector>

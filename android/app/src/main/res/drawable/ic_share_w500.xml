@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols Rounded: share — opsz 24, wght 500, GRAD -25, FILL 0.
+  Vendored from google/material-design-icons (Apache 2.0), file share_wght500gradN25_24px.svg.
+
+  The source viewBox is "0 -960 960 960" — a NEGATIVE viewport origin, which VectorDrawable cannot
+  express (the same limitation that forced the four tab icons into ImageVector builders). Rather
+  than re-arithmetic every path — which is where a vendoring pass silently corrupts a glyph — the
+  path data is copied VERBATIM and the whole set is translated by 960 in y by its group, so the
+  rendered geometry is provably Google's.
+
+  fillColor is white because an untinted Image() of a black glyph is invisible on the #09090B
+  canvas; every call site tints through LocalControlInk. Do not bake a theme colour in here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M716.87-81.59q-51.48 0-87.38-35.99-35.9-36-35.9-87.42 0-7.19 1-14.9 1-7.7 3-14.15L328.3-390.5q-17.21 16.46-38.82 25.18-21.62 8.73-45.28 8.73-51.79 0-87.7-36.14-35.91-36.15-35.91-87.78 0-51.22 35.99-87.06 36-35.84 87.42-35.84 23.92 0 45.75 8.48 21.84 8.47 38.55 24.43l269.29-156.45q-2-6.45-3-14.15-1-7.71-1-14.9 0-51.42 36.03-87.42 36.03-35.99 87.51-35.99 51.48 0 87.38 35.85t35.9 87.07q0 51.64-35.99 87.77-36 36.13-87.42 36.13-23.74 0-45.41-8.49-21.68-8.49-38.89-24.94L363.41-510.2q2 6.77 3 14.87t1 15.29q0 7.2-1 14.9-1 7.71-3 14.16l269.29 156q17.21-16.45 38.82-24.94 21.62-8.49 45.28-8.49 51.79 0 87.7 36.14 35.91 36.15 35.91 87.78 0 51.22-36.03 87.06t-87.51 35.84ZM717-715q17 0 29-12t12-29q0-17-12-29t-29-12q-17 0-29 12t-12 29q0 17 12 29t29 12ZM244-439q17 0 29-12t12-29q0-17-12-29t-29-12q-17 0-29 12t-12 29q0 17 12 29t29 12Zm473 275q17 0 29-12t12-29q0-17-12-29t-29-12q-17 0-29 12t-12 29q0 17 12 29t29 12Zm0-592ZM244-480Zm473 275Z" />
+    </group>
+</vector>

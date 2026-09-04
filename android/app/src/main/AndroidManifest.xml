@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Every screen is served from the backend; there is no offline-only mode, only an offline
+         copy of the library. Cleartext is permitted to a dev server in the DEBUG variant only
+         (src/debug/res/xml/network_security_config.xml); production is HTTPS. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- `SyncCenter.startMonitoring` reads `ConnectivityManager.getActiveNetwork` and registers a
+         default-network callback; both are `@RequiresPermission(ACCESS_NETWORK_STATE)` and throw
+         SecurityException without it. It has only ever worked because the merged manifest picked
+         the permission up transitively from a dependency — a version bump that dropped it would
+         silently break the app root. Declared here, where it is actually used.
+         (iOS needs no entitlement for NWPathMonitor, so there is no counterpart on that side.) -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- EPISODE ALERTS (`notifications/`).
+
+         `POST_NOTIFICATIONS` is a runtime permission from API 33 and harmless below it; the ASK is
+         raised contextually, from the Search tab's primer after an airing show has been added, the
+         same moment iOS asks. Without the declaration `checkSelfPermission` answers DENIED forever
+         and the feature is dead with nothing in the log to say why.
+
+         `SCHEDULE_EXACT_ALARM`, and deliberately **never `USE_EXACT_ALARM`**: Play policy reserves
+         that one for apps whose core function is alarms, timers or calendars, and declaring it here
+         is a review rejection (research/product-decisions.md §4). This grant is DENIED BY DEFAULT on
+         Android 14+ at targetSdk 36, so the inexact branch is the normal path and the app has to be
+         correct on it — see `AlarmScheduler`, which ships both.
+
+         `RECEIVE_BOOT_COMPLETED` because the platform clears every alarm on reboot. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- WHY THE WIDGET'S ART IS BLANK WITHOUT THIS, ON EXACTLY THE DEVICES THAT MATTER.
+
+         `WidgetArt.grantToLaunchers` hands the launcher a per-URI read grant for the cached banner,
+         and to do that it must first ASK WHO THE LAUNCHERS ARE — `queryIntentActivities` for
+         MAIN/HOME. From Android 11 that query is subject to package-visibility filtering: an app
+         that has not declared what it needs to see gets an EMPTY list back, with no error and no
+         exception. The grant loop then runs zero times, the launcher opens the `content://` URI it
+         was handed, and the platform refuses it:
+
+             ContentProviderHelper: Permission Denial: opening provider
+             androidx.core.content.FileProvider from …/nexuslauncher … not exported from UID …
+             Icon: Unable to load image from URI: content://com.anitrack.app.fileprovider/…
+
+         The card still draws — pill, title, episode, progress — so nothing looks broken; the art is
+         simply missing, and only on API 30+. It rendered correctly on the API 26 floor throughout,
+         which is the trap: the platform where this works is the one nobody ships to.
+
+         **This must stay a narrow `<intent>` filter and must never become `QUERY_ALL_PACKAGES`** —
+         that permission is Play-policy restricted in the same way `USE_EXACT_ALARM` is, and the app
+         does not qualify for it. All this declares is "I need to see home screens", which is
+         exactly and only what issuing the grant requires. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".PreviouslyApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Previously">
+
+        <!--
+          Four things here are load-bearing, and three of them fail silently if dropped.
+
+          * `screenOrientation="portrait"` — there is no landscape layout anywhere in this app, on
+            either platform (iOS pins `UISupportedInterfaceOrientations` to portrait).
+          * `launchMode="singleTop"` — WITHOUT IT THE ALERT-TAP ROUTE SILENTLY DIES. With the
+            default `standard` mode a notification tap on a WARM app creates a second MainActivity
+            instance, `onNewIntent` never fires, and nothing happens — while a cold-start test still
+            passes, because a cold start reads `onCreate`'s intent. (Not `singleTask`, which would
+            additionally clear the tab stacks on every tap.)
+          * `Theme.Previously.Splash` — the launcher theme is the splash theme, so the system's own
+            splash sits on the same true black the ident's base does; `installSplashScreen()` swaps
+            in `postSplashScreenTheme` (`Theme.Previously`) as it leaves.
+          * NO `android:configChanges`. A font-scale change RECREATES the Activity by design, and
+            the navigation stacks and each screen's state survive it because they are saveable —
+            not because recreation was suppressed. Suppressing it would leave stale text metrics
+            behind and make the accessibility half of the capture matrix un-photographable.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.Previously.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          EPISODE ALERTS (`notifications/`).
+
+          * `AiringReceiver` is `exported="false"`: the alarm `PendingIntent` names it explicitly, so
+            it needs no intent-filter and nothing outside this app has any business firing it. One
+            alarm per air-time MINUTE wakes it, it posts every alert in that bucket as one designed
+            bundle, and it re-arms. **An explicit-component PendingIntent at an undeclared receiver
+            arms happily and fires into nothing**, which is why `AlarmScheduler` logs an error at its
+            first arm if this element is missing — the manifest is the one part of that chain the
+            compiler does not check.
+          * `AlarmRearmReceiver` is `exported="true"` because the SYSTEM delivers its five broadcasts.
+            Alarms survive neither a reboot, an app update, nor a clock change, and the exact-alarm
+            grant can flip while the app is not running; each of those re-arms from the persisted
+            plan, with no network and no session. Without it the armed set silently empties overnight
+            while every bell in the UI still says armed.
+
+          Neither is any use on a force-stopped app — Samsung's "Put unused apps to sleep" is on by
+          default and Xiaomi denies Autostart — which receives no broadcasts at all. That is the
+          feature's ceiling, and it is stated rather than mitigated.
+        -->
+        <receiver
+            android:name=".notifications.AiringReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".notifications.AlarmRearmReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <intent-filter>
+                <!-- API 31+: the user granted or revoked "Alarms & reminders". -->
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          THE "UP NEXT" HOME-SCREEN WIDGET (`widget/`).
+
+          Three things here fail silently if they are dropped, and one of them is invisible in QA
+          until a launcher restarts.
+
+          * The provider is `exported="true"` because the LAUNCHER — a different application — binds
+            to it. It carries no data of its own; everything it renders it reads from this app's own
+            files inside this app's own process.
+          * `FileProvider` with `grantUriPermissions="true"` is what lets the widget hand the
+            launcher a `content://` reference to a cached banner instead of a decoded bitmap. A
+            bitmap crosses the Binder transaction and is charged against the platform's per-widget
+            memory ceiling; a reference is free. **Without the provider — or without the explicit
+            per-URI grant `WidgetArt` issues — the art is simply BLANK on most launchers, with no
+            error anywhere**, and without the persistable half of that grant it goes blank again the
+            next time the launcher process restarts. Its authority is
+            `${applicationId}.fileprovider`, built by hand in `WidgetArt.authority`; the two must
+            move together.
+          * `WidgetBoundaryReceiver` is `exported="false"`: nothing outside this app has any business
+            firing it. It is woken by ONE inexact alarm at the next episode's air instant — the only
+            moment the card's meaning changes while nobody is touching the phone. **No exact-alarm
+            permission is declared and none may be**: Play policy reserves `USE_EXACT_ALARM` for
+            alarm, timer and calendar apps, and a five-minute window is indistinguishable to somebody
+            reading a card that says "in 3h 12m".
+        -->
+        <receiver
+            android:name=".widget.UpNextWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_up_next_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/up_next_widget_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.WidgetBoundaryReceiver"
+            android:exported="false" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

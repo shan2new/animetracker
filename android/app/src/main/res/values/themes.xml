@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark-only by construction. The app never follows the system light/dark setting, and never
+         takes dynamic colour: see docs/android-port/research/product-decisions.md.
+
+         The four platform guards below are NOT the same job as the Compose colour scheme (that is
+         `PreviouslyTheme` / `PreviouslyColorScheme`): they stop the PLATFORM from second-guessing a
+         dark app — `isLightTheme` is what force-dark and several OEM shells read, and the two
+         light-bar flags decide whether the system draws its icons in ink or in white. Without them
+         a bare `enableEdgeToEdge()` leaves a LIGHT navigation bar on API 26 (caught on
+         PreviouslyFloor_API26, 4 Sep). -->
+    <style name="Theme.Previously" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/launch_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:isLightTheme">false</item>
+        <item name="android:forceDarkAllowed">false</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+
+    <!--
+      The launcher theme, and the first half of the splash hand-off.
+
+      At targetSdk 36 the platform ALWAYS draws its own splash before the first composable runs. It
+      cannot be skipped, only handed off from — so the two grounds must be the SAME BLACK, or the
+      app's very first frame carries a colour step straight into the 0.92 s ignite that
+      `ui/shell/SplashScreen.kt` spends its whole timeline on. `windowSplashScreenBackground` is
+      therefore `#000000` — true black for OLED, NOT `ThemeColor.canvas` (#09090B); see
+      `@color/launch_background`.
+
+      `postSplashScreenTheme` is what `installSplashScreen()` swaps in once the system frame leaves,
+      so the Activity spends its life on `Theme.Previously` and this style exists only for the
+      launch frame.
+    -->
+    <style name="Theme.Previously.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/launch_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.Previously</item>
+    </style>
+</resources>

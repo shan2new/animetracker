@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols Rounded: visibility — opsz 24, wght 500, GRAD -25, FILL 0.
+  Vendored from google/material-design-icons (Apache 2.0), file visibility_wght500gradN25_24px.svg.
+
+  The source viewBox is "0 -960 960 960" — a NEGATIVE viewport origin, which VectorDrawable cannot
+  express (the same limitation that forced the four tab icons into ImageVector builders). Rather
+  than re-arithmetic every path — which is where a vendoring pass silently corrupts a glyph — the
+  path data is copied VERBATIM and the whole set is translated by 960 in y by its group, so the
+  rendered geometry is provably Google's.
+
+  fillColor is white because an untinted Image() of a black glyph is invisible on the #09090B
+  canvas; every call site tints through LocalControlInk. Do not bake a theme colour in here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M480-326q72.5 0 123.25-50.75T654-500q0-72.5-50.75-123.25T480-674q-72.5 0-123.25 50.75T306-500q0 72.5 50.75 123.25T480-326Zm.16-73.02q-42.01 0-71.57-29.41-29.57-29.4-29.57-71.41t29.41-71.57q29.4-29.57 71.41-29.57t71.57 29.41q29.57 29.4 29.57 71.41t-29.41 71.57q-29.4 29.57-71.41 29.57Zm-.09 198.43q-132 0-241.19-70.98Q129.7-342.54 66.22-458.98q-5.72-9.69-8.21-20.02-2.49-10.33-2.49-21.01 0-10.69 2.49-21 2.49-10.32 8.21-20.01 63.48-116.44 172.59-187.41 109.11-70.98 241.12-70.98 132 0 241.19 70.98 109.18 70.97 172.66 187.41 5.72 9.69 8.21 20.02 2.49 10.33 2.49 21.01 0 10.69-2.49 21-2.49 10.32-8.21 20.01-63.48 116.44-172.59 187.41-109.11 70.98-241.12 70.98ZM480-500Zm.02 217q111.24 0 204.25-58.62T826.28-500q-49-99.76-142.03-158.38Q591.22-717 479.98-717q-111.24 0-204.25 58.62T133.72-500q49 99.76 142.03 158.38Q368.78-283 480.02-283Z" />
+    </group>
+</vector>

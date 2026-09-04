@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The eyebrow's accent dot — today's drop, or a later-today airing.
+
+  Amber here is STATE, one of its two legal readings. The WORD beside it stays ink: an amber word
+  would be the "press this" reading the design law never allows.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@color/widget_accent" />
+</shape>

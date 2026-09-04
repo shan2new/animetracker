@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The widget's shape drawables, and the ONLY place in this app where a colour is written twice.
+
+  A `<shape>` cannot read a Kotlin object, and `RemoteViews` cannot draw a gradient any other way —
+  so the five values below are transcriptions of `design/ThemeColor`, named after the token they
+  carry and useless anywhere else. Everything the widget draws in code reads `ThemeColor` directly
+  (see `widget/PreviouslyWidget.kt`); nothing here may be reached from a screen.
+
+  If a token moves, these move with it. They are listed with their source so that is checkable.
+-->
+<resources>
+
+    <!-- ThemeColor.canvas #09090B at 90 %, 44 % and 0 % — the billboard's copy scrim, bottom→top. -->
+    <color name="widget_scrim_bottom">#E609090B</color>
+    <color name="widget_scrim_middle">#7009090B</color>
+    <color name="widget_scrim_top">#0009090B</color>
+
+    <!-- ThemeColor.scrimStrong — black at 72 %. The OverArtLabel capsule's ground. -->
+    <color name="widget_pill_ground">#B8000000</color>
+
+    <!-- ThemeColor.accent. The eyebrow's dot and the progress fill. -->
+    <color name="widget_accent">#FFF0A24E</color>
+
+    <!-- ThemeColor.strokeStrong — white at 20 %. The progress track. -->
+    <color name="widget_progress_track">#33FFFFFF</color>
+
+    <!-- Preview artwork only (the widget picker's thumbnail); never drawn on a placed card. -->
+    <color name="widget_preview_plate">#26F4F1EC</color>
+    <color name="widget_preview_ink">#F2F4F1EC</color>
+    <color name="widget_preview_ink_quiet">#8CF4F1EC</color>
+    <color name="widget_preview_ink_faint">#99AAA6A0</color>
+</resources>

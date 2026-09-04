@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  `OverArtLabel`'s capsule, as a shape rather than as `GlanceModifier.cornerRadius`.
+
+  `cornerRadius` needs `RemoteViews.setViewOutlinePreferredRadius`, which arrives in API 31; this
+  app's floor is 26, and a rectangle of black over a photograph on a third of the field is not the
+  same object. The radius is half the 24 dp height, which is what makes it a capsule.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/widget_pill_ground" />
+    <corners android:radius="12dp" />
+</shape>

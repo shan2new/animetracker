@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  "Up Next" — one widget, one urgent fact.
+
+  * `targetCellWidth/Height` are the Android 12+ sizing contract; `minWidth/minHeight` are the
+    pre-12 fallback. Both are declared, because this app's floor is API 26.
+  * `updatePeriodMillis="0"` is deliberate and load-bearing. The platform will not deliver a
+    `updatePeriodMillis` update "more than once every 30 minutes" anyway, it WAKES THE DEVICE to
+    deliver it, and it would duplicate the WorkManager path in `widget/WidgetState.kt` — two
+    schedulers producing the same render. The refresh ladder lives in code, where it can read the
+    library and arm the next episode boundary.
+  * `initialLayout` is Glance's own resource: the frame the launcher shows for the fraction of a
+    second before the first composition lands.
+  * `previewImage` is not optional — the picker is where a widget is won or lost. From API 35
+    `GlanceAppWidget.providePreview` renders the real composition over the top of it.
+  * No `configure` activity: there is nothing to configure. The card shows what Today would lead
+    with, which is a decision the app has already made once and must not make twice.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="110dp"
+    android:maxResizeWidth="440dp"
+    android:maxResizeHeight="290dp"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:updatePeriodMillis="0"
+    android:description="@string/widget_up_next_description"
+    android:previewImage="@drawable/widget_up_next_preview"
+    android:initialLayout="@layout/glance_default_loading_layout" />

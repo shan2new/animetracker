@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols Rounded: close — opsz 24, wght 500, GRAD -25, FILL 0.
+  Vendored from google/material-design-icons (Apache 2.0), file close_wght500gradN25_24px.svg.
+
+  The source viewBox is "0 -960 960 960" — a NEGATIVE viewport origin, which VectorDrawable cannot
+  express (the same limitation that forced the four tab icons into ImageVector builders). Rather
+  than re-arithmetic every path — which is where a vendoring pass silently corrupts a glyph — the
+  path data is copied VERBATIM and the whole set is translated by 960 in y by its group, so the
+  rendered geometry is provably Google's.
+
+  fillColor is white because an untinted Image() of a black glyph is invisible on the #09090B
+  canvas; every call site tints through LocalControlInk. Do not bake a theme colour in here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M480-419.35 289.33-228.67Q276.65-216 259-216.25t-30.33-12.92q-12.17-12.68-11.92-30.08t12.42-29.58L419.35-480 229.17-671.17Q217-683.35 217-700.75t12.17-30.08q12.18-12.67 29.83-12.92t30.33 12.42L480-540.65l190.67-190.68Q683.35-744 701-743.75t30.33 12.92q12.17 12.68 11.92 30.08t-12.42 29.58L540.65-480l190.18 191.17Q743-276.65 743-259.25t-12.17 30.08Q718.65-216.5 701-216.25t-30.33-12.42L480-419.35Z" />
+    </group>
+</vector>

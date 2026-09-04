@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The debug-only half of the manifest. The manifest merger folds this into the main one for the
+  debug variant only, so `network_security_config.xml` — and the cleartext exemption it carries —
+  cannot reach a release build even by accident.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application android:networkSecurityConfig="@xml/network_security_config">
+
+        <!--
+          Glance's own debug hook, and the only way to force a widget re-render from a terminal:
+
+              adb shell am broadcast \
+                -a androidx.glance.appwidget.action.DEBUG_UPDATE \
+                -n com.anitrack.app/.widget.UpNextWidgetReceiver
+
+          The receiver ignores the action unless the application is flagged debuggable, so this
+          filter is belt AND braces — but it lives in the debug manifest anyway, because a release
+          APK advertising a re-render intent is an invitation nobody needs to send.
+
+          The merger folds this into the receiver declared in the main manifest by name; it adds a
+          filter and changes nothing else.
+        -->
+        <receiver
+            android:name=".widget.UpNextWidgetReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.glance.appwidget.action.DEBUG_UPDATE" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

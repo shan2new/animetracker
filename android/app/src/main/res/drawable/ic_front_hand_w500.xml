@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols Rounded: front_hand — opsz 24, wght 500, GRAD -25, FILL 0.
+  Vendored from google/material-design-icons (Apache 2.0), file front_hand_wght500gradN25_24px.svg.
+
+  The source viewBox is "0 -960 960 960" — a NEGATIVE viewport origin, which VectorDrawable cannot
+  express (the same limitation that forced the four tab icons into ImageVector builders). Rather
+  than re-arithmetic every path — which is where a vendoring pass silently corrupts a glyph — the
+  path data is copied VERBATIM and the whole set is translated by 960 in y by its group, so the
+  rendered geometry is provably Google's.
+
+  fillColor is white because an untinted Image() of a black glyph is invisible on the #09090B
+  canvas; every call site tints through LocalControlInk. Do not bake a theme colour in here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M515.83-919.57q16.69 0 28.65 11.96 11.95 11.96 11.95 28.65v345.57q0 16.69-11.95 28.65-11.96 11.96-28.65 11.96-16.7 0-28.66-11.96-11.95-11.96-11.95-28.65v-345.57q0-16.69 11.95-28.65 11.96-11.96 28.66-11.96Zm-156.68 41.44q16.7 0 28.65 11.96 11.96 11.95 11.96 28.65v304.13q0 16.69-11.96 28.65-11.95 11.96-28.65 11.96-16.69 0-28.65-11.96-11.96-11.96-11.96-28.65v-304.13q0-16.7 11.96-28.65 11.96-11.96 28.65-11.96ZM499.53-41.87q-140.99 0-239.33-98.46-98.33-98.45-98.33-239.67v-377.52q0-16.7 11.96-28.65 11.95-11.96 28.65-11.96 16.69 0 28.65 11.96 11.96 11.95 11.96 28.65V-380q0 107.3 74.44 182.11 74.44 74.8 181.91 74.8 107.28 0 182.38-74.8Q756.91-272.7 756.91-380v-139.39h-4.41q-16.74 0-28.07 11.36-11.32 11.36-11.32 28.15v96.03q0 17.65-12.68 30.33-12.67 12.67-30.32 12.67H592.5q-32.75 0-56.07 23.32t-23.32 56.07v37.5q0 16.7-11.96 28.66-11.95 11.95-28.65 11.95t-28.65-11.95q-11.96-11.96-11.96-28.66v-37.5q0-66.93 46.84-113.77 46.84-46.84 113.77-46.84h39.39v-375.45q0-16.7 11.96-28.65 11.95-11.96 28.65-11.96t28.65 11.96q11.96 11.95 11.96 28.65v203.95q9.78-3.76 19.52-5.4 9.75-1.64 19.87-1.64h42.63q17.65 0 30.33 12.68 12.67 12.67 12.67 30.32V-380q0 141.22-98.59 239.67-98.59 98.46-240.01 98.46Zm41.08-320.35Z" />
+    </group>
+</vector>

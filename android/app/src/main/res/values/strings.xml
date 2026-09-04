@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Previously.</string>
+
+    <!--
+      The widget picker's two strings, and the only user-facing copy in this app that is NOT in the
+      `Copy` catalogue.
+
+      It cannot be: both are read by the SYSTEM's widget picker out of the manifest, before any of
+      this app's code runs, and a manifest attribute can only reference a resource. They are plain
+      ASCII on purpose — the reason the rest of the copy lives in a Kotlin object is that an
+      `strings.xml` round-trip eats U+00A0, U+2060 and U+2019, and neither of these carries one.
+
+      "Next up" is `Copy.Label.nextUp` and the label above is `Copy.Brand.wordmark`; both are
+      DUPLICATES, and `StringResourceCopyTest` asserts they still equal the entries they duplicate,
+      because "kept in step by hand" is not a mechanism. The description has no counterpart in the
+      table — nothing else in the app describes the widget — so that test audits its voice instead.
+      It states what the card shows, with no exclamation and no promise.
+    -->
+    <string name="widget_up_next_label">Next up</string>
+    <string name="widget_up_next_description">The next episode from your library.</string>
+</resources>

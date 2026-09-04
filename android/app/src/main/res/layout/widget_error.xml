@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The last resort: what the launcher shows when the Glance composition itself throws.
+
+  It carries NO colours and NO copy. `PreviouslyWidget.onCompositionError` sets both from
+  `ThemeColor` and the copy catalogue, so this file cannot become a second place where the app
+  decides what near-black is or what a failure is called.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_error_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:id="@+id/widget_error_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:padding="16dp"
+        android:maxLines="2"
+        android:textSize="13sp" />
+</FrameLayout>

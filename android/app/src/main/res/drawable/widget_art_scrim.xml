@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The billboard's legibility fade.
+
+  A widget cannot blur and cannot draw a gradient in code, so the app's `HeroCopyScrim` becomes one
+  `<shape><gradient>` laid over the whole card. `android:angle="90"` runs BOTTOM → TOP, so the
+  opaque end is under the copy and the art is untouched at the head, where the pill has its own
+  capsule.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="90"
+        android:startColor="@color/widget_scrim_bottom"
+        android:centerColor="@color/widget_scrim_middle"
+        android:endColor="@color/widget_scrim_top" />
+</shape>

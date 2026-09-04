@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The ONE directory this app shares outside its sandbox: Coil's art disk cache.
+
+  The widget hands the launcher a `content://` reference rather than a decoded bitmap, because a
+  bitmap crosses the Binder transaction and is charged against `AppWidgetServiceImpl`'s per-widget
+  memory ceiling (`screen_w × screen_h × 4 × 1.5` bytes, shared across every `SizeMode.Responsive`
+  layout). A reference costs nothing.
+
+  The path matches `ui/image/ImageLoader.kt`'s `DiskCache.directory` — `cacheDir/image_cache` — and
+  nothing else is exposed. Read-only grants are issued per URI to the resolved launcher package and
+  to no one else (`widget/WidgetState.kt`, `WidgetArt.grantToLaunchers`).
+-->
+<paths>
+    <cache-path name="image_cache" path="image_cache/" />
+</paths>

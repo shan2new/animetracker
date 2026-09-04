@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ThemeColor.canvas — the one app ground. Mirrors ios ThemeTokens.swift. -->
+    <color name="canvas">#FF09090B</color>
+
+    <!--
+      The LAUNCH frame, and it is deliberately not `canvas`.
+
+      iOS's `LaunchBackground.colorset` is r/g/b 0.000 — true black, for OLED continuity: the pixels
+      are off, and the splash ident's own base is the same black, so there is no step between the
+      system's launch frame and the app's first drawn frame. #09090B here would put a visible
+      colour change in front of the one frame the brand ident exists for (PLAN §4.7 states this
+      once, and errata-patches the research note that said `@color/canvas`).
+    -->
+    <color name="launch_background">#FF000000</color>
+</resources>

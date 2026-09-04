@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material Symbols Rounded: info — opsz 24, wght 500, GRAD -25, FILL 0.
+  Vendored from google/material-design-icons (Apache 2.0), file info_wght500gradN25_24px.svg.
+
+  The source viewBox is "0 -960 960 960" — a NEGATIVE viewport origin, which VectorDrawable cannot
+  express (the same limitation that forced the four tab icons into ImageVector builders). Rather
+  than re-arithmetic every path — which is where a vendoring pass silently corrupts a glyph — the
+  path data is copied VERBATIM and the whole set is translated by 960 in y by its group, so the
+  rendered geometry is provably Google's.
+
+  fillColor is white because an untinted Image() of a black glyph is invisible on the #09090B
+  canvas; every call site tints through LocalControlInk. Do not bake a theme colour in here.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <group android:translateY="960">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M480.5-281.41q17.02 0 29.06-12.03 12.03-12.04 12.03-29.06v-155.41q0-17.03-12.03-29.06Q497.52-519 480.5-519t-29.06 12.03q-12.03 12.03-12.03 29.06v155.41q0 17.02 12.03 29.06 12.04 12.03 29.06 12.03Zm-.61-309.81q18.14 0 30.52-12.27 12.37-12.27 12.37-30.4 0-18.14-12.27-30.52-12.27-12.37-30.4-12.37-18.14 0-30.52 12.27-12.37 12.27-12.37 30.4 0 18.14 12.27 30.52 12.27 12.37 30.4 12.37ZM480-81.87q-82.82 0-155.41-31.38T198.3-198.43q-53.69-53.79-85.06-126.31Q81.87-397.26 81.87-480q0-82.82 31.38-155.41t85.18-126.29q53.79-53.69 126.31-85.06 72.52-31.37 155.26-31.37 82.82 0 155.41 31.38t126.29 85.18q53.69 53.79 85.06 126.31 31.37 72.52 31.37 155.26 0 82.82-31.38 155.41T761.57-198.3q-53.79 53.69-126.31 85.06Q562.74-81.87 480-81.87Zm0-86q130.54 0 221.34-90.79 90.79-90.8 90.79-221.34 0-130.54-90.79-221.34-90.8-90.79-221.34-90.79-130.54 0-221.34 90.79-90.79 90.8-90.79 221.34 0 130.54 90.79 221.34 90.8 90.79 221.34 90.79ZM480-480Z" />
+    </group>
+</vector>
