@@ -128,7 +128,23 @@ describe('deterministicGroup', () => {
     const movies = f.parts.filter((p) => p.partKind === 'movie')
     expect(movies).toHaveLength(1)
     expect(movies[0]!.sequence).toBe(1)
+    expect(f.parts.slice().sort((a, b) => a.watchOrder! - b.watchOrder!).map((part) => part.id))
+      .toEqual([1, 10, 2, 3])
     // canonical name = earliest season's title
     expect(f.canonicalName).toBe('AoT S1')
+  })
+
+  it('expresses a new part relative to the franchise instead of copying AniList edge direction', () => {
+    const result = deterministicGroup({
+      candidates: [
+        { id: 1, title: 'Season 1', format: 'TV', status: 'FINISHED', seasonYear: 2020, episodes: 12, synopsis: '' },
+        { id: 2, title: 'Season 2', format: 'TV', status: 'FINISHED', seasonYear: 2022, episodes: 12, synopsis: '' },
+      ],
+      // From Season 2's perspective, Season 1 is its PREQUEL.
+      edges: [{ from: 2, to: 1, type: 'PREQUEL' }],
+    })
+    const ordered = result.franchises[0]!.parts.slice().sort((a, b) => a.watchOrder! - b.watchOrder!)
+    expect(ordered[0]).toMatchObject({ id: 1, relationship: null })
+    expect(ordered[1]).toMatchObject({ id: 2, relationship: 'SEQUEL', optional: false })
   })
 })

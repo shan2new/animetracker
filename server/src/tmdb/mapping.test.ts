@@ -429,6 +429,7 @@ describe('tmdbFranchiseEnrichment', () => {
         portrait: 'https://image.tmdb.org/t/p/w780/related-poster.jpg',
         landscape: 'https://image.tmdb.org/t/p/w1280/related-back.jpg',
       },
+      score: 10,
     })
     expect(value.videos[0]?.id).toBe('youtube-id')
   })
@@ -448,6 +449,10 @@ describe('tmdbShowUpcoming', () => {
       note: null,
       source: 'https://www.themoviedb.org/tv/82596',
       checked: new Date(NOW).toISOString(),
+      evidence: [{
+        url: 'https://www.themoviedb.org/tv/82596', publisher: 'TMDB', publishedAt: null,
+        tier: 'catalogue', primary: false,
+      }],
     })
   })
 
@@ -497,9 +502,18 @@ describe('tmdbShowToGroupingResult', () => {
     expect(r.franchises).toHaveLength(1)
     expect(r.franchises[0]!.canonicalName).toBe('Test Show')
     expect(r.franchises[0]!.parts).toEqual([
-      { id: TMDB_ID_OFFSET + 1000, partKind: 'special', sequence: 0, label: 'Specials' },
-      { id: TMDB_ID_OFFSET + 1001, partKind: 'season', sequence: 1, label: 'Season 1' },
-      { id: TMDB_ID_OFFSET + 1002, partKind: 'season', sequence: 2, label: 'Season 2' },
+      {
+        id: TMDB_ID_OFFSET + 1000, partKind: 'special', sequence: 0, watchOrder: 10_000,
+        relationship: 'SPECIAL', optional: true, label: 'Specials',
+      },
+      {
+        id: TMDB_ID_OFFSET + 1001, partKind: 'season', sequence: 1, watchOrder: 1,
+        relationship: null, optional: false, label: 'Season 1',
+      },
+      {
+        id: TMDB_ID_OFFSET + 1002, partKind: 'season', sequence: 2, watchOrder: 2,
+        relationship: 'SEQUEL', optional: false, label: 'Season 2',
+      },
     ])
   })
 })

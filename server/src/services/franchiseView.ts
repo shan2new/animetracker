@@ -6,6 +6,8 @@ import { franchise, franchiseMember, media, progress, subscriptions } from '../d
 import type { PartKind } from '../grouping/partKind.js'
 import type {
   Airing,
+  ArtworkGallery,
+  ArtworkImage,
   ArtworkSet,
   AudienceInfo,
   CatalogVideo,
@@ -28,6 +30,7 @@ import {
 import { withReleaseWindow } from './releaseWindow.js'
 import { resolveRelatedFranchiseIds } from './catalogEnrichment.js'
 import { stripHtml } from '../util/text.js'
+import { catalogLinkViews } from './catalogLinks.js'
 
 const D = 86_400_000
 const KIND_ORDER: PartKind[] = ['season', 'movie', 'ova', 'ona', 'special', 'music']
@@ -36,6 +39,30 @@ const EMPTY_PEOPLE = { creators: [], directors: [], cast: [] }
 
 function artwork(portrait: string | null | undefined, landscape: string | null | undefined): ArtworkSet {
   return { portrait: portrait || null, landscape: landscape || null }
+}
+
+function artworkGallery(
+  stored: ArtworkGallery | null | undefined,
+  images: ArtworkSet,
+  source: MediaSource,
+  additions: ArtworkGallery[] = [],
+): ArtworkGallery {
+  const fallback = (url: string | null): ArtworkImage[] => url ? [{
+    url, source, width: null, height: null, language: null, score: null,
+  }] : []
+  const merge = (items: ArtworkImage[]) => {
+    const seen = new Set<string>()
+    return items.filter((item) => {
+      if (seen.has(item.url)) return false
+      seen.add(item.url)
+      return true
+    }).slice(0, 6)
+  }
+  return {
+    portraits: merge([...(stored?.portraits ?? []), ...fallback(images.portrait), ...additions.flatMap((item) => item.portraits)]),
+    landscapes: merge([...(stored?.landscapes ?? []), ...fallback(images.landscape), ...additions.flatMap((item) => item.landscapes)]),
+    logos: merge([...(stored?.logos ?? []), ...additions.flatMap((item) => item.logos)]),
+  }
 }
 
 function scopedPartVideos(m: MediaRow, member: MemberRow): FranchiseVideo[] {
@@ -72,16 +99,21 @@ const VIDEO_KIND_WEIGHT: Record<FranchiseVideo['kind'], number> = {
   other: 0,
 }
 
-/** Prefer the exact upcoming/current part before video type, then official and newest. */
+/** Prefer an exact upcoming/current part, then franchise campaigns, then finished-part trailers. */
 export function pickFeaturedVideo(parts: FranchisePart[], videos: FranchiseVideo[]): FranchiseVideo | null {
   if (videos.length === 0) return null
   const partPriority = new Map<number, number>()
   for (const part of parts) {
-    const state = part.status === 'NOT_YET_RELEASED' ? 3 : part.isReleasing ? 2 : 1
+    const state = part.status === 'NOT_YET_RELEASED' ? 3 : part.isReleasing ? 2 : 0
     partPriority.set(part.mediaId, state * 10_000 + part.sequence)
   }
   return videos.slice().sort((a, b) => {
-    const scope = (video: FranchiseVideo) => video.scope.type === 'part' ? (partPriority.get(video.scope.mediaId) ?? 0) : -1
+    // A franchise-scoped video cannot outrank a known future/current part, but it should outrank
+    // finished-part trailers: fallback catalogues often carry the newest campaign only at show
+    // scope, and otherwise an old Season 1 trailer would stay featured forever.
+    const scope = (video: FranchiseVideo) => video.scope.type === 'part'
+      ? (partPriority.get(video.scope.mediaId) ?? 0)
+      : 10_000
     return scope(b) - scope(a) ||
       Number(b.official === true) - Number(a.official === true) ||
       VIDEO_KIND_WEIGHT[b.kind] - VIDEO_KIND_WEIGHT[a.kind] ||
@@ -240,6 +272,9 @@ function toPart(
     mediaId: m.id,
     kind: member.partKind as PartKind,
     sequence: member.sequence,
+    watchOrder: member.watchOrder || member.sequence,
+    relationship: member.relationship ?? null,
+    optional: member.optional,
     label: member.label ?? title,
     title,
     cover: m.cover ?? '',
@@ -247,6 +282,7 @@ function toPart(
     // the distinction to choose a composition that does not crop the subject into a wide slot.
     banner: m.banner ?? '',
     images: artwork(m.cover, m.banner),
+    artwork: artworkGallery(m.artwork, artwork(m.cover, m.banner), source),
     format: m.format,
     status: m.status,
     isReleasing,
@@ -270,6 +306,8 @@ function toPart(
 
 function sortParts(parts: FranchisePart[]): FranchisePart[] {
   return parts.sort((a, b) => {
+    const order = a.watchOrder - b.watchOrder
+    if (order !== 0) return order
     const k = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)
     return k !== 0 ? k : a.sequence - b.sequence
   })
@@ -351,6 +389,7 @@ function buildFranchise(
     f.cover || parts.find((part) => part.images.portrait)?.images.portrait,
     f.banner || parts.find((part) => part.images.landscape)?.images.landscape,
   )
+  const gallery = artworkGallery(f.artwork, images, source, parts.map((part) => part.artwork))
   const audience: AudienceInfo = {
     isAdult: f.enrichment?.isAdult ?? null,
     contentRating: null,
@@ -367,6 +406,7 @@ function buildFranchise(
     cover: f.cover ?? '',
     banner: f.banner ?? '',
     images,
+    artwork: gallery,
     synopsis: f.description ?? '',
     genres: f.genres ?? [],
     isReleasing: parts.some((p) => p.isReleasing),
@@ -383,6 +423,17 @@ function buildFranchise(
     people: f.enrichment?.people ?? EMPTY_PEOPLE,
     related: f.enrichment?.related ?? [],
     continueWatching: deriveContinueWatching(parts, episodesByMediaId),
+    metadata: {
+      completeness: {
+        artwork: gallery.portraits.length > 0 && gallery.landscapes.length > 0,
+        episodes: parts.some((part) => (mediaById.get(part.mediaId)?.episodesList?.length ?? 0) > 0),
+        people: (f.enrichment?.people?.creators?.length ?? 0) + (f.enrichment?.people?.directors?.length ?? 0) + (f.enrichment?.people?.cast?.length ?? 0) > 0,
+        ratings: (f.enrichment?.contentRatings.length ?? 0) > 0,
+        related: (f.enrichment?.related.length ?? 0) > 0,
+        videos: videos.length > 0,
+      },
+      sources: [],
+    },
   }
 }
 
@@ -409,6 +460,7 @@ export async function getFranchise(franchiseId: string, userId?: string, country
 
   // Detail is the only response that ships the full per-episode list.
   const built = buildFranchise(f, members, mediaById, watchedById, sub, { episodes: true })
+  built.metadata.sources = (await catalogLinkViews([franchiseId])).get(franchiseId) ?? []
   built.related = await resolveRelatedFranchiseIds(built.related)
   const normalizedCountry = country?.toUpperCase()
   built.audience.contentRating = normalizedCountry
@@ -456,13 +508,24 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
       const landscape = f.banner || primary?.banner || mems
         .map((member) => mediaById.get(member.mediaId)?.banner)
         .find((value): value is string => !!value)
+      const images = artwork(portrait, landscape)
+      const gallery = artworkGallery(
+        f.artwork,
+        images,
+        source,
+        mems.flatMap((member) => {
+          const value = mediaById.get(member.mediaId)?.artwork
+          return value ? [value] : []
+        }),
+      )
       return {
         id: f.id,
         source,
         title: f.title,
         cover: f.cover ?? '',
         banner: f.banner ?? '',
-        images: artwork(portrait, landscape),
+        images,
+        artwork: gallery,
         isReleasing: releasing,
         // The count Detail prints under "Seasons & movies": episodic members only, never OVAs,
         // specials or music videos — Search and Detail must agree.
@@ -562,9 +625,11 @@ export async function getLibrary(userId: string, lastOpenedAt: number): Promise<
     out.push({ ...fr, status, behind, newParts })
   }
   const resolvedRelated = await resolveRelatedFranchiseIds(out.flatMap((item) => item.related))
+  const links = await catalogLinkViews(out.map((item) => item.id))
   const relatedByKey = new Map(resolvedRelated.map((item) => [`${item.source}:${item.externalId}`, item]))
   for (const item of out) {
     item.related = item.related.map((related) => relatedByKey.get(`${related.source}:${related.externalId}`) ?? related)
+    item.metadata.sources = links.get(item.id) ?? []
   }
   return out
 }

@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { fetchEnrichmentByIds, type AniListRequestOptions } from '../anilist/client.js'
 import type {
   AniListCharacterEdge,
@@ -13,6 +13,7 @@ import { getShow, type TmdbRequestOptions } from '../tmdb/client.js'
 import { tmdbFranchiseEnrichment } from '../tmdb/mapping.js'
 import type { CatalogPerson, FranchiseEnrichment, FranchisePeople, RelatedTitle } from '../types/api.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
+import { syncRecommendationEdges } from './recommendations.js'
 
 const D = 86_400_000
 const REFRESH_AFTER_MS = 7 * D
@@ -132,6 +133,7 @@ export function aniListFranchiseEnrichment(
         portrait: candidate.coverImage.extraLarge ?? candidate.coverImage.large ?? null,
         landscape: candidate.bannerImage ?? null,
       },
+      score: node.rating ?? null,
     })
     if (related.length >= 10) break
   }
@@ -170,10 +172,12 @@ export async function refreshFranchiseEnrichment(
     if (row.externalId == null) return false
     const show = await getShow(row.externalId, { ...options.tmdbRequest, enrichment: true })
     if (!show) return false
+    const value = tmdbFranchiseEnrichment(show)
     await db
       .update(franchise)
-      .set({ enrichment: tmdbFranchiseEnrichment(show), updatedAt: new Date() })
+      .set({ enrichment: value, updatedAt: new Date() })
       .where(eq(franchise.id, franchiseId))
+    await syncRecommendationEdges(franchiseId, value.related)
     return true
   }
 
@@ -206,7 +210,19 @@ export async function refreshFranchiseEnrichment(
     row.genres ?? [],
     new Set(members.map((item) => item.mediaId)),
   )
-  await db.update(franchise).set({ enrichment: value, updatedAt: new Date() }).where(eq(franchise.id, franchiseId))
+  // TMDB is metadata-only for anime. Merge fallback fields from the row AT UPDATE TIME rather than
+  // the snapshot read above: Search queues both enrichers together, and a read/modify/write here
+  // could otherwise erase a trailer that arrived while the AniList request was in flight.
+  await db.update(franchise).set({
+    enrichment: sql`jsonb_strip_nulls(
+      ${JSON.stringify(value)}::jsonb || jsonb_build_object(
+        'videos', coalesce(${franchise.enrichment}->'videos', '[]'::jsonb),
+        'videoFallback', ${franchise.enrichment}->'videoFallback'
+      )
+    )`,
+    updatedAt: new Date(),
+  }).where(eq(franchise.id, franchiseId))
+  await syncRecommendationEdges(franchiseId, value.related)
   return true
 }
 

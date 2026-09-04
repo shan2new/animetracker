@@ -22,7 +22,8 @@ export interface AniListRelationEdge {
 // Raw shape returned by the AniList GraphQL API for a Media node.
 export interface AniListMedia {
   id: number
-  title: { romaji: string | null; english: string | null }
+  title: { romaji: string | null; english: string | null; native?: string | null }
+  synonyms?: string[] | null
   coverImage: { extraLarge: string | null; large: string | null }
   bannerImage: string | null
   trailer?: { id: string | null; site: string | null; thumbnail: string | null } | null

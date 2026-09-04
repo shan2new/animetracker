@@ -5,6 +5,7 @@ import { franchise, franchiseMember, media } from '../db/schema.js'
 import { env } from '../env.js'
 import { makeAniListFetcher, upsertMedia } from '../services/mediaStore.js'
 import { basicAniListEnrichment, enqueueFranchiseEnrichment } from '../services/catalogEnrichment.js'
+import { upsertCatalogLink } from '../services/catalogLinks.js'
 import { stripHtml } from '../util/text.js'
 import { expandComponent, type MediaFetcher } from './graph.js'
 import {
@@ -17,7 +18,7 @@ import {
   type LlmGrouper,
 } from './llm.js'
 import { partKindForFormat } from './partKind.js'
-import type { FranchiseEnrichment, FranchiseUpcoming } from '../types/api.js'
+import type { ArtworkGallery, FranchiseEnrichment, FranchiseUpcoming } from '../types/api.js'
 
 export interface GroupOptions {
   grouper?: LlmGrouper
@@ -62,7 +63,11 @@ export async function groupKnownComponent(
 
   // Already grouped? Attach any ungrouped members to the existing franchise.
   const existing = await db.select().from(franchiseMember).where(inArray(franchiseMember.mediaId, ids))
-  if (existing.length > 0) return attachToExisting(existing, component, seedId)
+  if (existing.length > 0) {
+    const outcome = await attachToExisting(existing, component, seedId)
+    await ensureAniListOwnerLink(outcome.franchiseId)
+    return outcome
+  }
 
   // Fresh grouping. The grouper (LLM/deterministic) can take seconds, so it runs OUTSIDE the
   // transaction — we must not pin a DB connection for its duration.
@@ -80,6 +85,7 @@ export async function groupKnownComponent(
     console.warn(`grouping LLM failed for seed ${seedId}; using deterministic fallback:`, err)
     result = await new DeterministicGrouper().group(input)
   }
+  decoratePartOrder(result, input)
 
   const outcome = await persistFranchises({
     result,
@@ -94,6 +100,16 @@ export async function groupKnownComponent(
         primaryMediaId: primary?.id ?? null,
         cover: primary?.coverImage.extraLarge ?? primary?.coverImage.large ?? null,
         banner: primary?.bannerImage ?? null,
+        artwork: primary ? {
+          portraits: (primary.coverImage.extraLarge ?? primary.coverImage.large) ? [{
+            url: (primary.coverImage.extraLarge ?? primary.coverImage.large)!, source: 'anilist',
+            width: null, height: null, language: null, score: null,
+          }] : [],
+          landscapes: primary.bannerImage ? [{
+            url: primary.bannerImage, source: 'anilist', width: null, height: null, language: null, score: null,
+          }] : [],
+          logos: [],
+        } : null,
         description: stripHtml(primary?.description ?? null),
         genres,
         groupingSource: result.model ? 'llm' : 'relations',
@@ -106,8 +122,26 @@ export async function groupKnownComponent(
     },
     onRaced: (raced, tx) => attachToExisting(raced, component, seedId, tx),
   })
+  await ensureAniListOwnerLink(outcome.franchiseId)
   enqueueFranchiseEnrichment(outcome.franchiseId)
   return outcome
+}
+
+async function ensureAniListOwnerLink(franchiseId: string): Promise<void> {
+  const [row] = await db
+    .select({ primaryMediaId: franchise.primaryMediaId })
+    .from(franchise)
+    .where(inArray(franchise.id, [franchiseId]))
+    .limit(1)
+  if (row?.primaryMediaId == null) return
+  await upsertCatalogLink({
+    franchiseId,
+    provider: 'anilist',
+    mediaType: 'anime',
+    externalId: row.primaryMediaId,
+    matchMethod: 'catalogue_owner',
+    confidence: 1,
+  })
 }
 
 /** Per-franchise row values supplied by the caller of persistFranchises. */
@@ -116,6 +150,7 @@ export interface FranchisePersistMeta {
   primaryMediaId: number | null
   cover: string | null
   banner: string | null
+  artwork?: ArtworkGallery | null
   description: string | null
   genres: string[]
   groupingSource: string
@@ -169,6 +204,9 @@ export async function persistFranchises(opts: {
               franchiseId: fid,
               partKind: p.partKind,
               sequence: p.sequence,
+              watchOrder: p.watchOrder ?? p.sequence,
+              relationship: p.relationship ?? null,
+              optional: p.optional ?? false,
               label: p.label,
             })),
         )
@@ -220,13 +258,31 @@ async function attachNewMembers(
   const existingParts = await exec.select().from(franchiseMember).where(inArray(franchiseMember.franchiseId, [franchiseId]))
   const nextSeq = new Map<string, number>()
   for (const p of existingParts) nextSeq.set(p.partKind, Math.max(nextSeq.get(p.partKind) ?? 0, p.sequence))
+  let nextWatchOrder = Math.max(0, ...existingParts.map((part) => part.watchOrder))
 
-  const values = fresh.map((m) => {
+  const values = fresh
+    .slice()
+    .sort((a, b) => catalogueOrderKey(a) - catalogueOrderKey(b) || a.id - b.id)
+    .map((m) => {
     const kind = partKindForFormat(m.format)
     const seq = (nextSeq.get(kind) ?? 0) + 1
     nextSeq.set(kind, seq)
     const label = kind === 'season' ? `Season ${seq}` : `${kind[0]!.toUpperCase()}${kind.slice(1)} ${seq}`
-    return { mediaId: m.id, franchiseId, partKind: kind, sequence: seq, label }
+    const rawRelationship = (m.relations?.edges ?? []).find((edge) => alreadyMembers.has(edge.node.id))?.relationType ?? null
+    // AniList describes the RELATED node from the current media's perspective. When a newly
+    // attached title says the old title is its PREQUEL, this new title's franchise relationship is
+    // therefore SEQUEL (and vice versa).
+    const relationship = invertDirectedRelationship(rawRelationship)
+    return {
+      mediaId: m.id,
+      franchiseId,
+      partKind: kind,
+      sequence: seq,
+      watchOrder: ++nextWatchOrder,
+      relationship,
+      optional: relationship === 'SIDE_STORY' || kind === 'music',
+      label,
+    }
   })
   await exec.insert(franchiseMember).values(values).onConflictDoNothing()
   await exec.update(franchise).set({ updatedAt: new Date() }).where(inArray(franchise.id, [franchiseId]))
@@ -253,6 +309,7 @@ function buildInput(component: Map<number, AniListMedia>): GroupingInput {
     format: m.format,
     status: m.status,
     seasonYear: m.seasonYear,
+    season: m.season,
     episodes: m.episodes,
     synopsis: stripHtml(m.description),
   }))
@@ -263,6 +320,47 @@ function buildInput(component: Map<number, AniListMedia>): GroupingInput {
       .map((e) => ({ from: m.id, to: e.node.id, type: e.relationType })),
   )
   return { candidates, edges }
+}
+
+const SEASON_RANK: Record<string, number> = { WINTER: 0, SPRING: 1, SUMMER: 2, FALL: 3 }
+
+function catalogueOrderKey(media: Pick<AniListMedia, 'seasonYear' | 'season'>): number {
+  return (media.seasonYear ?? 9999) * 10 + (SEASON_RANK[media.season ?? ''] ?? 0)
+}
+
+function invertDirectedRelationship(value: string | null): string | null {
+  if (value === 'PREQUEL') return 'SEQUEL'
+  if (value === 'SEQUEL') return 'PREQUEL'
+  return value
+}
+
+/** Add one global, source-grounded order without asking the grouping model to invent chronology. */
+function decoratePartOrder(result: GroupingResult, input: GroupingInput): void {
+  const candidates = new Map(input.candidates.map((candidate) => [candidate.id, candidate]))
+  for (const grouped of result.franchises) {
+    const ids = new Set(grouped.parts.map((part) => part.id))
+    const ordered = grouped.parts
+      .slice()
+      .sort((a, b) => {
+        const aa = candidates.get(a.id)
+        const bb = candidates.get(b.id)
+        const ak = (aa?.seasonYear ?? 9999) * 10 + (SEASON_RANK[aa?.season ?? ''] ?? 0)
+        const bk = (bb?.seasonYear ?? 9999) * 10 + (SEASON_RANK[bb?.season ?? ''] ?? 0)
+        return ak - bk || a.sequence - b.sequence || a.id - b.id
+      })
+    ordered.forEach((part, index) => {
+        const relations = input.edges.filter(
+          (edge) => ids.has(edge.from) && ids.has(edge.to) && (edge.from === part.id || edge.to === part.id),
+        ).map((edge) => edge.to === part.id ? edge.type : invertDirectedRelationship(edge.type))
+        const relationship = index === 0 ? null : relations.find((value) => value === 'SIDE_STORY')
+          ?? relations.find((value) => value === 'SEQUEL' || value === 'PREQUEL')
+          ?? relations[0]
+          ?? null
+        part.watchOrder = index + 1
+        part.relationship = relationship
+        part.optional = relationship === 'SIDE_STORY' || part.partKind === 'music'
+      })
+  }
 }
 
 function pickPrimary(ids: number[], component: Map<number, AniListMedia>): AniListMedia | undefined {

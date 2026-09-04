@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 import { searchMedia } from '../anilist/client.js'
 import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
@@ -49,12 +49,22 @@ export interface SearchProfile {
   totalMs: number
 }
 
+export interface SearchFilters {
+  source?: 'anilist' | 'tmdb'
+  year?: number
+  status?: 'FINISHED' | 'RELEASING' | 'NOT_YET_RELEASED' | 'CANCELLED' | 'HIATUS'
+  theme?: string
+  providerId?: number
+  country?: string
+}
+
 interface SearchOptions {
   exact?: boolean
   /** Aborted when the iOS client supersedes this query or disconnects. */
   signal?: AbortSignal
   /** Route-level structured logging hook; never receives the raw query. */
   onProfile?: (profile: SearchProfile) => void
+  filters?: SearchFilters
 }
 
 /**
@@ -100,14 +110,17 @@ export async function searchFranchises(
   }
 
   if (!trimmed) {
-    const franchises = await getTrendingFranchises(limit)
+    const candidates = await getTrendingFranchises(Math.min(100, Math.max(limit, limit * 4)))
+    const allowed = await filterFranchiseIds(candidates.map((item) => item.id), opts.filters)
+    const allowedSet = new Set(allowed)
+    const franchises = candidates.filter((item) => allowedSet.has(item.id)).slice(0, limit)
     return finish({ franchises, sources }, 'trending')
   }
 
   // One- and two-character typeahead never triggers network, LLM, or catalogue writes. Indexed
   // prefix search still returns known titles; an empty result simply waits for the next keystroke.
   const localStarted = performance.now()
-  const localIds = await searchLocalFranchiseIds(trimmed, limit)
+  const localIds = await searchLocalFranchiseIds(trimmed, limit, opts.filters)
   profile.localMs = roundMs(performance.now() - localStarted)
   profile.localResults = localIds.length
   if (localIds.length > 0 || trimmed.length < MIN_REMOTE_QUERY_LENGTH) {
@@ -115,7 +128,7 @@ export async function searchFranchises(
   }
 
   const upstreamStarted = performance.now()
-  let [animeHits, rawTvHits] = await searchProviders(trimmed, limit, requestSignal, sources)
+  let [animeHits, rawTvHits] = await searchProviders(trimmed, limit, requestSignal, sources, opts.filters)
   let correctedQuery: string | undefined
 
   // Correction is deliberately serial and only runs after at least one provider positively
@@ -137,7 +150,7 @@ export async function searchFranchises(
     if (corrected && !requestSignal.aborted) {
       // Typo repair usually points at a known popular title. Re-check Postgres before paying for
       // a second provider fan-out.
-      const correctedLocal = await searchLocalFranchiseIds(corrected, limit)
+      const correctedLocal = await searchLocalFranchiseIds(corrected, limit, opts.filters)
       if (correctedLocal.length > 0) {
         correctedQuery = corrected
         profile.upstreamMs = roundMs(performance.now() - upstreamStarted)
@@ -152,7 +165,7 @@ export async function searchFranchises(
         )
       }
 
-      ;[animeHits, rawTvHits] = await searchProviders(corrected, limit, requestSignal, sources)
+      ;[animeHits, rawTvHits] = await searchProviders(corrected, limit, requestSignal, sources, opts.filters)
       if (animeHits.length > 0 || rawTvHits.length > 0) correctedQuery = corrected
     }
   }
@@ -162,7 +175,7 @@ export async function searchFranchises(
   const tvHits = rawTvHits.filter((hit) => !isJapaneseAnimation(hit))
   profile.tmdbHits = tvHits.length
   let resolved = await resolveProviderHits(animeHits, tvHits)
-  let ids = interleave(resolved.animeIds, resolved.tvIds)
+  let ids = await filterFranchiseIds(interleave(resolved.animeIds, resolved.tvIds), opts.filters)
 
   const tasks = requestSignal.aborted
     ? []
@@ -183,7 +196,7 @@ export async function searchFranchises(
       ])
       profile.enrichmentWaitMs = roundMs(performance.now() - waitStarted)
       resolved = await resolveProviderHits(animeHits, tvHits)
-      ids = interleave(resolved.animeIds, resolved.tvIds)
+      ids = await filterFranchiseIds(interleave(resolved.animeIds, resolved.tvIds), opts.filters)
     }
   }
 
@@ -202,9 +215,10 @@ async function searchProviders(
   limit: number,
   signal: AbortSignal,
   sources: { anilist: SourceOutcome; tmdb: SourceOutcome },
+  filters?: SearchFilters,
 ): Promise<[AniListMedia[], TmdbSearchResult[]]> {
   const providerLimit = Math.min(Math.max(limit, 10), 20)
-  const searchAniList = searchMedia(query, {
+  const searchAniList = filters?.source === 'tmdb' ? Promise.resolve([]) : searchMedia(query, {
     signal,
     maxRetries: 0,
     timeoutMs: SOURCE_TIMEOUT_MS,
@@ -212,7 +226,10 @@ async function searchProviders(
   }).then(
     (hits) => {
       sources.anilist = 'ok'
-      return hits
+      return hits.filter((hit) =>
+        (filters?.year == null || hit.seasonYear === filters.year) &&
+        (filters?.status == null || hit.status === filters.status),
+      )
     },
     () => {
       sources.anilist = 'failed'
@@ -220,7 +237,7 @@ async function searchProviders(
     },
   )
 
-  const searchTmdb = !tmdbEnabled()
+  const searchTmdb = !tmdbEnabled() || filters?.source === 'anilist'
     ? Promise.resolve([])
     : searchTv(query, {
         signal,
@@ -230,7 +247,10 @@ async function searchProviders(
       }).then(
         (hits) => {
           sources.tmdb = 'ok'
-          return hits
+          return hits.filter((hit) => {
+            const year = Number(hit.first_air_date?.slice(0, 4)) || null
+            return filters?.year == null || year === filters.year
+          })
         },
         () => {
           sources.tmdb = 'failed'
@@ -338,7 +358,57 @@ function enqueueEnrichment(
  * Local typeahead over canonical names plus every installment alias. Both expressions have GIN
  * indexes in schema.ts. Prefix tsquery lexemes keep typeahead index-backed as the catalogue grows.
  */
-async function searchLocalFranchiseIds(query: string, limit: number): Promise<string[]> {
+function searchFilterConditions(filters?: SearchFilters): SQL[] {
+  if (!filters) return []
+  const conditions: SQL[] = []
+  if (filters.source) conditions.push(sql`${franchise.source} = ${filters.source}`)
+  if (filters.year != null) conditions.push(sql`exists (
+    select 1 from franchise_member sfm
+    join media sm on sm.id = sfm.media_id
+    where sfm.franchise_id = ${franchise.id} and sm.season_year = ${filters.year}
+  )`)
+  if (filters.status) conditions.push(sql`exists (
+    select 1 from franchise_member sfm
+    join media sm on sm.id = sfm.media_id
+    where sfm.franchise_id = ${franchise.id} and sm.status = ${filters.status}
+  )`)
+  if (filters.theme) conditions.push(sql`exists (
+    select 1 from jsonb_array_elements_text(
+      case when jsonb_array_length(coalesce(${franchise.enrichment}->'themes', '[]'::jsonb)) > 0
+        then ${franchise.enrichment}->'themes' else coalesce(${franchise.genres}, '[]'::jsonb) end
+    ) as search_theme(value)
+    where lower(search_theme.value) = lower(${filters.theme})
+  )`)
+  if (filters.providerId != null && filters.country) conditions.push(sql`(
+    not exists (
+      select 1 from watch_availability_snapshots swas
+      where swas.franchise_id = ${franchise.id}
+        and swas.country = ${filters.country}
+        and swas.expires_at > now()
+    )
+    or exists (
+      select 1 from watch_availability_snapshots swas
+      where swas.franchise_id = ${franchise.id}
+        and swas.country = ${filters.country}
+        and swas.expires_at > now()
+        and swas.status = 'available'
+        and swas.providers @> ${JSON.stringify([{ id: filters.providerId }])}::jsonb
+    )
+  )`)
+  return conditions
+}
+
+async function filterFranchiseIds(ids: string[], filters?: SearchFilters): Promise<string[]> {
+  if (ids.length === 0 || !filters || Object.keys(filters).length === 0) return ids
+  const rows = await db
+    .select({ id: franchise.id })
+    .from(franchise)
+    .where(and(inArray(franchise.id, ids), ...searchFilterConditions(filters)))
+  const allowed = new Set(rows.map((row) => row.id))
+  return ids.filter((id) => allowed.has(id))
+}
+
+async function searchLocalFranchiseIds(query: string, limit: number, filters?: SearchFilters): Promise<string[]> {
   const lexemes = query.normalize('NFKC').toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu) ?? []
   if (lexemes.length === 0) return []
   const tsQueryText = lexemes.map((token) => `${token}:*`).join(' & ')
@@ -346,7 +416,7 @@ async function searchLocalFranchiseIds(query: string, limit: number): Promise<st
   const prefix = `${phrase}%`
   const tsQuery = sql`to_tsquery('simple', ${tsQueryText})`
   const franchiseVector = sql`to_tsvector('simple', coalesce(${franchise.title}, ''))`
-  const mediaVector = sql`to_tsvector('simple', coalesce(${media.titleEnglish}, '') || ' ' || coalesce(${media.titleRomaji}, ''))`
+  const mediaVector = sql`to_tsvector('simple', coalesce(${media.titleEnglish}, '') || ' ' || coalesce(${media.titleRomaji}, '') || ' ' || coalesce(${media.titleNative}, '') || ' ' || coalesce(${media.synonyms}::text, ''))`
   const rowLimit = Math.min(Math.max(limit * 2, 20), 100)
 
   const franchiseScore = sql<number>`(
@@ -371,14 +441,15 @@ async function searchLocalFranchiseIds(query: string, limit: number): Promise<st
     db
       .select({ id: franchise.id, score: franchiseScore })
       .from(franchise)
-      .where(sql`${franchiseVector} @@ ${tsQuery}`)
+      .where(and(sql`${franchiseVector} @@ ${tsQuery}`, ...searchFilterConditions(filters)))
       .orderBy(desc(franchiseScore), desc(franchise.updatedAt))
       .limit(rowLimit),
     db
       .select({ id: franchiseMember.franchiseId, score: mediaScore, popularity })
       .from(media)
       .innerJoin(franchiseMember, eq(franchiseMember.mediaId, media.id))
-      .where(sql`${mediaVector} @@ ${tsQuery}`)
+      .innerJoin(franchise, eq(franchise.id, franchiseMember.franchiseId))
+      .where(and(sql`${mediaVector} @@ ${tsQuery}`, ...searchFilterConditions(filters)))
       .groupBy(franchiseMember.franchiseId)
       .orderBy(desc(mediaScore), desc(popularity))
       .limit(rowLimit),

@@ -1,17 +1,20 @@
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull } from 'drizzle-orm'
 import { db } from '../db/index.js'
-import { franchise, franchiseMember, media } from '../db/schema.js'
+import {
+  franchise,
+  franchiseMember,
+  media,
+  subscriptions,
+  userPreferences,
+  watchAvailabilitySnapshots,
+} from '../db/schema.js'
 import {
   getMovieWatchProviders,
   getTvWatchProviders,
-  searchMovies,
-  searchTv,
   tmdbEnabled,
   type TmdbRequestOptions,
 } from '../tmdb/client.js'
 import type {
-  TmdbMovieSearchResult,
-  TmdbSearchResult,
   TmdbWatchProvider,
   TmdbWatchProviderMarket,
 } from '../tmdb/types.js'
@@ -21,25 +24,17 @@ import type {
   WatchAvailabilityStatus,
   WatchProvider,
 } from '../types/api.js'
+import { resolveAnimeTmdbTarget } from './animeTmdbMatch.js'
+import { getCatalogLink, upsertCatalogLink } from './catalogLinks.js'
+import { BoundedTaskQueue } from '../util/taskQueue.js'
+export { pickAnimeTmdbCandidate as pickAnimeWatchTarget } from './animeTmdbMatch.js'
+export type { AnimeTmdbCandidate as WatchTargetCandidate } from './animeTmdbMatch.js'
 
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000
 const MISS_TTL_MS = 60 * 60 * 1000
 const MAX_CACHE_ENTRIES = 500
 const INTERACTIVE_OPTIONS: TmdbRequestOptions = { maxRetries: 0, timeoutMs: 4_000 }
-const ANIMATION_GENRE_ID = 16
-
 type TargetKind = 'tv' | 'movie'
-
-export interface WatchTargetCandidate {
-  id: number
-  title: string
-  originalTitle: string | null
-  year: number | null
-  popularity: number
-  genreIds: number[]
-  originCountries: string[]
-  originalLanguage?: string | null
-}
 
 interface WatchTarget {
   kind: TargetKind
@@ -53,82 +48,12 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>()
 const inFlight = new Map<string, Promise<WatchAvailability | null>>()
+const refreshQueue = new BoundedTaskQueue(3, 100, (key, error) => {
+  console.warn(`availability refresh failed (${key}):`, error instanceof Error ? error.message : error)
+})
 
 function emptyAvailability(country: string, status: WatchAvailabilityStatus): WatchAvailability {
   return { country, status, providers: [], link: null, attribution: 'JustWatch' }
-}
-
-function normalizedTitle(value: string): string {
-  return value
-    .normalize('NFKD')
-    .toLocaleLowerCase('en')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function titleTokens(value: string): Set<string> {
-  return new Set(normalizedTitle(value).split(' ').filter((token) => token.length > 1))
-}
-
-function similarity(a: string, b: string): number {
-  const left = titleTokens(a)
-  const right = titleTokens(b)
-  if (left.size === 0 || right.size === 0) return 0
-  let overlap = 0
-  for (const token of left) if (right.has(token)) overlap++
-  return overlap / Math.max(left.size, right.size)
-}
-
-function yearFromDate(value: string | null | undefined): number | null {
-  const match = /^(\d{4})-/.exec(value ?? '')
-  return match ? Number(match[1]) : null
-}
-
-function animeCandidate(candidate: WatchTargetCandidate): boolean {
-  return (
-    candidate.genreIds.includes(ANIMATION_GENRE_ID) &&
-    (candidate.originCountries.includes('JP') || candidate.originalLanguage === 'ja')
-  )
-}
-
-/**
- * Pick a conservative TMDB match for an AniList-owned title. An exact normalized title wins;
- * otherwise most title tokens must agree. The anime gate prevents a same-name live-action result
- * from becoming the source of a confident-looking provider list.
- */
-export function pickAnimeWatchTarget(
-  candidates: WatchTargetCandidate[],
-  aliases: string[],
-  year: number | null,
-): WatchTargetCandidate | null {
-  const names = [...new Set(aliases.map(normalizedTitle).filter(Boolean))]
-  if (names.length === 0) return null
-
-  const scored = candidates.flatMap((candidate) => {
-    if (!animeCandidate(candidate)) return []
-    const candidateNames = [candidate.title, candidate.originalTitle ?? ''].map(normalizedTitle).filter(Boolean)
-    const exact = candidateNames.some((name) => names.includes(name))
-    const bestSimilarity = Math.max(
-      0,
-      ...candidateNames.flatMap((candidateName) => names.map((name) => similarity(candidateName, name))),
-    )
-    // A fuzzy match must share most of the meaningful words. Search rank alone is not identity.
-    if (!exact && bestSimilarity < 0.72) return []
-
-    // A known catalogue year must be corroborated. An undated same-name result is not enough to
-    // distinguish a remake or an announced reboot.
-    if (year != null && candidate.year == null) return []
-    const yearDistance = year != null && candidate.year != null ? Math.abs(year - candidate.year) : null
-    // Same-title remakes exist. Once both sides state a year, a result more than two years away is
-    // not safe enough to label as this work.
-    if (yearDistance != null && yearDistance > 2) return []
-    const yearScore = yearDistance == null ? 0 : yearDistance === 0 ? 20 : yearDistance === 1 ? 10 : 4
-    const titleScore = exact ? 100 : Math.round(bestSimilarity * 70)
-    return [{ candidate, score: titleScore + yearScore + Math.log10(Math.max(1, candidate.popularity)) }]
-  })
-
-  scored.sort((a, b) => b.score - a.score || a.candidate.id - b.candidate.id)
-  return scored[0]?.candidate ?? null
 }
 
 function providerLogo(path: string | null): string | null {
@@ -166,49 +91,6 @@ export function normalizeWatchProviders(market: TmdbWatchProviderMarket | undefi
     .map(({ priority: _priority, rank: _rank, ...provider }) => provider)
 }
 
-function tvCandidate(hit: TmdbSearchResult): WatchTargetCandidate {
-  return {
-    id: hit.id,
-    title: hit.name,
-    originalTitle: hit.original_name ?? null,
-    year: yearFromDate(hit.first_air_date),
-    popularity: hit.popularity ?? 0,
-    genreIds: hit.genre_ids ?? [],
-    originCountries: hit.origin_country ?? [],
-  }
-}
-
-function movieCandidate(hit: TmdbMovieSearchResult): WatchTargetCandidate {
-  return {
-    id: hit.id,
-    title: hit.title,
-    originalTitle: hit.original_title ?? null,
-    year: yearFromDate(hit.release_date),
-    popularity: hit.popularity ?? 0,
-    genreIds: hit.genre_ids ?? [],
-    originCountries: hit.origin_country ?? [],
-    originalLanguage: hit.original_language,
-  }
-}
-
-async function resolveAnimeTarget(
-  title: string,
-  aliases: string[],
-  year: number | null,
-  kind: TargetKind,
-): Promise<WatchTarget | null> {
-  const queries = [...new Set([title, ...aliases].map((value) => value.trim()).filter(Boolean))].slice(0, 2)
-  for (const query of queries) {
-    const candidates =
-      kind === 'movie'
-        ? (await searchMovies(query, { ...INTERACTIVE_OPTIONS, limit: 10 })).map(movieCandidate)
-        : (await searchTv(query, { ...INTERACTIVE_OPTIONS, limit: 10 })).map(tvCandidate)
-    const picked = pickAnimeWatchTarget(candidates, [title, ...aliases], year)
-    if (picked) return { kind, id: picked.id }
-  }
-  return null
-}
-
 async function lookup(franchiseId: string, country: string): Promise<WatchAvailability | null> {
   const [row] = await db
     .select({
@@ -217,6 +99,7 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
       externalId: franchise.externalId,
       title: franchise.title,
       primaryMediaId: franchise.primaryMediaId,
+      enrichment: franchise.enrichment,
     })
     .from(franchise)
     .where(eq(franchise.id, franchiseId))
@@ -226,8 +109,21 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
   // TMDB owns general-TV franchises directly. AniList-owned anime needs a conservative title/year
   // bridge because AniList exposes streaming links but no regional catalogue or TMDB id.
   let target: WatchTarget | null = null
+  const tmdbLink = row.source === 'anilist' ? await getCatalogLink(franchiseId, 'tmdb') : null
   if (row.source === 'tmdb' && row.externalId != null) {
     target = { kind: 'tv', id: row.externalId }
+  } else if (tmdbLink?.status === 'matched') {
+    if (tmdbLink.externalId != null) target = { kind: tmdbLink.mediaType as TargetKind, id: tmdbLink.externalId }
+  } else if (
+    row.enrichment?.videoFallback?.status === 'matched' &&
+    row.enrichment.videoFallback.externalId != null
+  ) {
+    // Trailer enrichment already established the same conservative title/year match. Reuse it so
+    // regional availability cannot select a different TMDB work and avoids another search call.
+    target = {
+      kind: row.enrichment.videoFallback.mediaType,
+      id: row.enrichment.videoFallback.externalId,
+    }
   } else {
     const parts = await db
       .select({
@@ -253,12 +149,23 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
       ?? parts.sort((a, b) => a.sequence - b.sequence)[0]
     if (primary) {
       const aliases = [primary.titleEnglish ?? '', primary.titleRomaji ?? ''].filter(Boolean)
-      target = await resolveAnimeTarget(
-        row.title,
+      const resolved = await resolveAnimeTmdbTarget({
+        title: row.title,
         aliases,
-        primary.year,
-        primary.format === 'MOVIE' ? 'movie' : 'tv',
-      )
+        year: primary.year,
+        mediaType: primary.format === 'MOVIE' ? 'movie' : 'tv',
+      }, INTERACTIVE_OPTIONS)
+      target = resolved ? { kind: resolved.mediaType, id: resolved.externalId } : null
+      await upsertCatalogLink({
+        franchiseId,
+        provider: 'tmdb',
+        mediaType: primary.format === 'MOVIE' ? 'movie' : 'tv',
+        externalId: resolved?.externalId ?? null,
+        status: resolved ? 'matched' : 'unmatched',
+        matchMethod: resolved ? 'title_year_animation' : 'title_year_no_match',
+        confidence: resolved ? 0.9 : null,
+        evidence: { aliases, year: primary.year },
+      })
     }
   }
 
@@ -274,18 +181,60 @@ async function lookup(franchiseId: string, country: string): Promise<WatchAvaila
     providers,
     link: market?.link ?? null,
     attribution: 'JustWatch',
+    checkedAt: new Date().toISOString(),
   }
 }
 
-function remember(key: string, value: WatchAvailability): void {
+function ttlFor(value: WatchAvailability): number {
+  return value.status === 'available' ? CACHE_TTL_MS : MISS_TTL_MS
+}
+
+function remember(key: string, value: WatchAvailability, expiresAt = Date.now() + ttlFor(value)): void {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value as string | undefined
     if (oldest) cache.delete(oldest)
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + (value.status === 'available' ? CACHE_TTL_MS : MISS_TTL_MS),
+    expiresAt,
   })
+}
+
+async function persist(franchiseId: string, value: WatchAvailability): Promise<void> {
+  const checkedAt = value.checkedAt ? new Date(value.checkedAt) : new Date()
+  const expiresAt = new Date(checkedAt.getTime() + ttlFor(value))
+  await db
+    .insert(watchAvailabilitySnapshots)
+    .values({
+      franchiseId,
+      country: value.country,
+      status: value.status,
+      providers: value.providers,
+      link: value.link,
+      checkedAt,
+      expiresAt,
+    })
+    .onConflictDoUpdate({
+      target: [watchAvailabilitySnapshots.franchiseId, watchAvailabilitySnapshots.country],
+      set: {
+        status: value.status,
+        providers: value.providers,
+        link: value.link,
+        checkedAt,
+        expiresAt,
+      },
+    })
+}
+
+function fromSnapshot(row: typeof watchAvailabilitySnapshots.$inferSelect): WatchAvailability {
+  return {
+    country: row.country,
+    status: row.status as WatchAvailabilityStatus,
+    providers: row.providers ?? [],
+    link: row.link,
+    attribution: 'JustWatch',
+    checkedAt: row.checkedAt.toISOString(),
+  }
 }
 
 /**
@@ -302,14 +251,117 @@ export async function getWatchAvailability(franchiseId: string, country: string)
   if (hit && hit.expiresAt > Date.now()) return hit.value
   if (hit) cache.delete(key)
 
+  const [stored] = await db
+    .select()
+    .from(watchAvailabilitySnapshots)
+    .where(and(
+      eq(watchAvailabilitySnapshots.franchiseId, franchiseId),
+      eq(watchAvailabilitySnapshots.country, country),
+    ))
+    .limit(1)
+  if (stored && stored.expiresAt.getTime() > Date.now()) {
+    const value = fromSnapshot(stored)
+    remember(key, value, stored.expiresAt.getTime())
+    return value
+  }
+
   const active = inFlight.get(key)
   if (active) return active
   const task = lookup(franchiseId, country)
     .then((value) => {
-      if (value) remember(key, value)
+      if (value) {
+        remember(key, value)
+        void persist(franchiseId, value).catch((error) => {
+          console.warn(`availability snapshot write failed (${key}):`, error instanceof Error ? error.message : error)
+        })
+      }
       return value
     })
     .finally(() => inFlight.delete(key))
   inFlight.set(key, task)
   return task
+}
+
+/**
+ * Read list-card previews in one query. Stale rows remain useful for the current response and are
+ * refreshed in the bounded queue; a list surface never fans out synchronously to TMDB.
+ */
+export async function getAvailabilityPreviews(
+  franchiseIds: string[],
+  country: string,
+): Promise<Map<string, WatchAvailability>> {
+  const out = new Map<string, WatchAvailability>()
+  if (franchiseIds.length === 0) return out
+  const rows = await db
+    .select()
+    .from(watchAvailabilitySnapshots)
+    .where(and(
+      inArray(watchAvailabilitySnapshots.franchiseId, franchiseIds),
+      eq(watchAvailabilitySnapshots.country, country),
+    ))
+  const now = Date.now()
+  const byId = new Map(rows.map((row) => [row.franchiseId, row]))
+  for (const franchiseId of franchiseIds) {
+    const row = byId.get(franchiseId)
+    if (row) out.set(franchiseId, fromSnapshot(row))
+    if (!row || row.expiresAt.getTime() <= now) {
+      refreshQueue.enqueue(`${franchiseId}:${country}`, async () => {
+        await getWatchAvailability(franchiseId, country)
+      })
+    }
+  }
+  return out
+}
+
+export async function getWatchAvailabilityBatch(
+  franchiseIds: string[],
+  country: string,
+): Promise<Map<string, WatchAvailability>> {
+  const out = new Map<string, WatchAvailability>()
+  let next = 0
+  const workers = Array.from({ length: Math.min(4, franchiseIds.length) }, async () => {
+    while (true) {
+      const index = next++
+      if (index >= franchiseIds.length) return
+      const id = franchiseIds[index]!
+      const value = await getWatchAvailability(id, country).catch(() => null)
+      if (value) out.set(id, value)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+/** Warm followed-title availability for every country a user has explicitly saved. */
+export async function refreshPreferredAvailability(limit = 100): Promise<{ checked: number; available: number }> {
+  if (!tmdbEnabled()) return { checked: 0, available: 0 }
+  const rows = await db
+    .selectDistinct({ franchiseId: subscriptions.franchiseId, country: userPreferences.country })
+    .from(subscriptions)
+    .innerJoin(userPreferences, eq(userPreferences.userId, subscriptions.userId))
+    .where(isNotNull(userPreferences.country))
+    .limit(Math.max(0, limit))
+  let checked = 0
+  let available = 0
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(4, rows.length) }, async () => {
+    while (true) {
+      const index = cursor++
+      if (index >= rows.length) return
+      const row = rows[index]!
+      if (!row.country) continue
+      try {
+        const value = await getWatchAvailability(row.franchiseId, row.country)
+        if (value) checked++
+        if (value?.status === 'available') available++
+      } catch (error) {
+        console.warn(
+          `availability warm failed (${row.franchiseId}:${row.country}):`,
+          error instanceof Error ? error.message : error,
+        )
+      }
+    }
+  })
+  await Promise.all(workers)
+  return { checked, available }
 }

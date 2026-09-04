@@ -2,8 +2,17 @@ import cron from 'node-cron'
 import { env } from '../env.js'
 import { refreshSubscribedNews } from '../news/service.js'
 import { refreshSubscribedAniListEnrichment } from '../services/catalogEnrichment.js'
+import { refreshAnimeMetadataFallback } from '../services/animeVideoFallback.js'
+import { refreshPreferredAvailability } from '../services/watchAvailability.js'
 import { tmdbEnabled } from '../tmdb/client.js'
-import { attachNewSeasons, refreshAiring, refreshAiringTv, seedTrending, seedTrendingTv } from './sync.js'
+import {
+  attachNewSeasons,
+  refreshAiring,
+  refreshAiringTv,
+  seedTrending,
+  seedTrendingTv,
+  sweepAniListTrailers,
+} from './sync.js'
 
 let started = false
 
@@ -27,6 +36,18 @@ export function startCron(): void {
       } catch (err) {
         console.error('[cron] refreshAiringTv failed:', (err as Error).message)
       }
+    }
+    try {
+      const result = await sweepAniListTrailers()
+      if (result.providerReachable === false) {
+        console.warn('[cron] AniList catalogue metadata sweep deferred: provider unavailable')
+      } else if (result.scanned > 0) {
+        console.log(
+          `[cron] AniList catalogue metadata sweep: scanned ${result.scanned}, upserted ${result.upserted}, complete=${result.complete}`,
+        )
+      }
+    } catch (err) {
+      console.error('[cron] AniList trailer sweep failed:', (err as Error).message)
     }
   })
 
@@ -67,6 +88,30 @@ export function startCron(): void {
       console.error('[cron] anime enrichment failed:', (err as Error).message)
     }
   })
+
+  // Daily 04:30: repair sparse anime metadata from TMDB independently of AniList. Followed titles
+  // are first, then the rest of the materialized catalogue; this never changes AniList identity.
+  if (tmdbEnabled()) {
+    cron.schedule('30 4 * * *', async () => {
+      try {
+        const { checked, matched, videos } = await refreshAnimeMetadataFallback()
+        console.log(`[cron] anime metadata fallback: checked ${checked}, matched ${matched}, videos ${videos}`)
+      } catch (err) {
+        console.error('[cron] anime metadata fallback failed:', (err as Error).message)
+      }
+    })
+
+    // Daily 04:45: keep list-card availability warm only for explicitly saved user countries.
+    // This changes no subscriptions and emits no provider-change notifications.
+    cron.schedule('45 4 * * *', async () => {
+      try {
+        const { checked, available } = await refreshPreferredAvailability()
+        console.log(`[cron] regional availability: checked ${checked}, available ${available}`)
+      } catch (err) {
+        console.error('[cron] regional availability failed:', (err as Error).message)
+      }
+    })
+  }
 
   // Daily 05:00: agent-based announcement research over subscribed franchises → notifications.
   if (!env.NEWS_AGENT_DISABLED) {

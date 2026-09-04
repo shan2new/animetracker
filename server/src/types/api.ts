@@ -18,6 +18,8 @@ export interface WatchProvider {
   name: string
   logo: string | null
   access: WatchAccess
+  /** Present/true when the authenticated user saved this service as a preference. */
+  preferred?: boolean
 }
 
 /** Country-specific streaming availability returned by GET /franchises/:id/watch-providers. */
@@ -32,12 +34,33 @@ export interface WatchAvailability {
   link: string | null
   /** Required attribution for TMDB watch-provider data. */
   attribution: 'JustWatch'
+  /** When this regional snapshot was last checked. Null only for disabled/unpersisted responses. */
+  checkedAt?: string | null
 }
+
+/** Compact regional fact safe to attach to list/search rows. */
+export type WatchAvailabilityPreview = WatchAvailability
 
 /** Explicit artwork orientation. Legacy `cover`/`banner` remain for older clients. */
 export interface ArtworkSet {
   portrait: string | null
   landscape: string | null
+}
+
+export interface ArtworkImage {
+  url: string
+  source: MediaSource
+  width: number | null
+  height: number | null
+  language: string | null
+  score: number | null
+}
+
+/** Ranked alternatives for layouts/share cards; `images` remains the single best pair. */
+export interface ArtworkGallery {
+  portraits: ArtworkImage[]
+  landscapes: ArtworkImage[]
+  logos: ArtworkImage[]
 }
 
 export type VideoKind = 'trailer' | 'teaser' | 'announcement' | 'featurette' | 'clip' | 'other'
@@ -98,6 +121,34 @@ export interface RelatedTitle {
   title: string
   year: number | null
   images: ArtworkSet
+  /** Source-native recommendation strength where available. */
+  score?: number | null
+}
+
+export type CatalogProvider = 'anilist' | 'tmdb'
+export type CatalogMediaType = 'tv' | 'movie' | 'anime'
+
+export interface CatalogLinkView {
+  provider: CatalogProvider
+  mediaType: CatalogMediaType
+  externalId: number
+  matchMethod: string
+  confidence: number | null
+  checkedAt: string
+}
+
+export interface MetadataCompleteness {
+  artwork: boolean
+  episodes: boolean
+  people: boolean
+  ratings: boolean
+  related: boolean
+  videos: boolean
+}
+
+export interface FranchiseMetadataState {
+  completeness: MetadataCompleteness
+  sources: CatalogLinkView[]
 }
 
 /** Deep catalogue metadata persisted separately from the latency-sensitive search index. */
@@ -110,7 +161,30 @@ export interface FranchiseEnrichment {
   related: RelatedTitle[]
   /** Show/franchise-level videos; part-specific videos live on `media.videos`. */
   videos: CatalogVideo[]
+  /**
+   * Internal provenance/cache state for AniList-owned anime enriched from TMDB. This never changes
+   * franchise identity: `source` remains AniList and the matched TMDB title is metadata-only.
+   */
+  videoFallback?: {
+    source: 'tmdb'
+    mediaType: 'tv' | 'movie'
+    externalId: number | null
+    status: 'matched' | 'unmatched'
+    checkedAt: string
+    /** Bump when the fallback starts persisting another class of metadata. */
+    metadataVersion?: number
+  }
   checkedAt: string
+}
+
+export type AnnouncementEvidenceTier = 'official' | 'trade' | 'reputable' | 'catalogue' | 'unknown'
+
+export interface AnnouncementEvidence {
+  url: string
+  publisher: string | null
+  publishedAt: string | null
+  tier: AnnouncementEvidenceTier
+  primary: boolean
 }
 
 /**
@@ -126,6 +200,8 @@ export interface FranchiseUpcoming {
   note: string | null
   source: string | null
   checked: string | null // ISO date the info was last verified
+  /** Multiple inspectable sources. Older stored rows may omit this and read back as an empty list. */
+  evidence?: AnnouncementEvidence[]
 }
 
 /**
@@ -195,11 +271,18 @@ export interface FranchisePart {
   mediaId: number
   kind: PartKind
   sequence: number
+  /** Global order across seasons, movies and specials. */
+  watchOrder: number
+  /** Source relation to the main work (SEQUEL, SIDE_STORY, etc.) when known. */
+  relationship: string | null
+  /** True only when source evidence identifies optional/side material. */
+  optional: boolean
   label: string
   title: string
   cover: string
   banner: string
   images: ArtworkSet
+  artwork: ArtworkGallery
   format: string | null
   status: string | null
   isReleasing: boolean
@@ -254,6 +337,7 @@ export interface Franchise {
   cover: string
   banner: string
   images: ArtworkSet
+  artwork: ArtworkGallery
   synopsis: string
   genres: string[]
   isReleasing: boolean
@@ -273,6 +357,10 @@ export interface Franchise {
   people: FranchisePeople
   related: RelatedTitle[]
   continueWatching: ContinueWatching | null
+  /** Regional availability when a country was requested/resolved for this response. */
+  availability?: WatchAvailabilityPreview
+  /** Why fields are present/missing and which catalogues were safely linked. */
+  metadata: FranchiseMetadataState
 }
 
 export interface FranchiseSummary {
@@ -282,6 +370,7 @@ export interface FranchiseSummary {
   cover: string
   banner: string
   images: ArtworkSet
+  artwork: ArtworkGallery
   isReleasing: boolean
   partCount: number
   nextAiringAt: number | null
@@ -293,6 +382,8 @@ export interface FranchiseSummary {
   status?: WatchStatus
   behind?: number
   newParts?: number
+  /** Cached/bounded regional preview when a country was requested/resolved. */
+  availability?: WatchAvailabilityPreview
 }
 
 export type LibraryFranchise = Franchise & { status: WatchStatus; behind: number; newParts: number }
@@ -309,6 +400,38 @@ export interface FranchiseListResponse {
   originalQuery?: string
   /** Per-catalogue outcome. Absent on routes that do not fan out. */
   sources?: { anilist: SourceOutcome; tmdb: SourceOutcome }
+}
+
+export interface UserPreferences {
+  country: string | null
+  language: string
+  providerIds: number[]
+  updatedAt: string | null
+}
+
+export interface DiscoveryItem {
+  title: RelatedTitle
+  because: { franchiseId: string; title: string }
+  reason: string
+  score: number
+}
+
+export interface AnnouncementObservationView {
+  id: string
+  announcementId: string | null
+  status: string
+  next: string
+  release: string
+  note: string | null
+  observedAt: string
+  evidence: AnnouncementEvidence[]
+}
+
+export interface FranchiseProgressCommandResponse {
+  ok: true
+  franchiseId: string
+  status: WatchStatus | null
+  progress: { mediaId: number; episodes: number }[]
 }
 
 /**

@@ -3,7 +3,7 @@ import { fetchByIds, type AniListRequestOptions } from '../anilist/client.js'
 import type { AniListMedia } from '../anilist/types.js'
 import { db } from '../db/index.js'
 import { media, mediaRelations } from '../db/schema.js'
-import type { CatalogVideo, EpisodeMeta } from '../types/api.js'
+import type { ArtworkGallery, ArtworkImage, CatalogVideo, EpisodeMeta } from '../types/api.js'
 
 export type MediaRow = typeof media.$inferInsert
 
@@ -78,6 +78,22 @@ export function aniListVideos(m: AniListMedia): CatalogVideo[] {
   }]
 }
 
+function aniListArtwork(m: AniListMedia): ArtworkGallery {
+  const image = (url: string | null | undefined): ArtworkImage[] => url ? [{
+    url,
+    source: 'anilist',
+    width: null,
+    height: null,
+    language: null,
+    score: null,
+  }] : []
+  return {
+    portraits: image(m.coverImage.extraLarge ?? m.coverImage.large),
+    landscapes: image(m.bannerImage),
+    logos: [],
+  }
+}
+
 export function toMediaRow(m: AniListMedia): MediaRow {
   return {
     id: m.id,
@@ -85,12 +101,15 @@ export function toMediaRow(m: AniListMedia): MediaRow {
     externalId: null,
     titleRomaji: m.title.romaji,
     titleEnglish: m.title.english,
+    titleNative: m.title.native ?? null,
+    synonyms: [...new Set((m.synonyms ?? []).map((value) => value.trim()).filter(Boolean))].slice(0, 30),
     format: m.format,
     status: m.status,
     episodes: m.episodes,
     cover: m.coverImage.extraLarge ?? m.coverImage.large ?? null,
     // Never put portrait art in the landscape slot; an honest null lets clients choose layout.
     banner: m.bannerImage ?? null,
+    artwork: aniListArtwork(m),
     description: m.description,
     genres: m.genres ?? [],
     studios: aniListStudios(m),
@@ -129,11 +148,14 @@ export async function upsertMediaRows(rows: MediaRow[], opts: { setLastAired?: b
         externalId: sqlExcluded('external_id'),
         titleRomaji: sqlExcluded('title_romaji'),
         titleEnglish: sqlExcluded('title_english'),
+        titleNative: sqlExcluded('title_native'),
+        synonyms: sqlExcluded('synonyms'),
         format: sqlExcluded('format'),
         status: sqlExcluded('status'),
         episodes: sqlExcluded('episodes'),
         cover: sqlExcluded('cover'),
         banner: sqlExcluded('banner'),
+        artwork: sqlExcluded('artwork'),
         description: sqlExcluded('description'),
         genres: sqlExcluded('genres'),
         studios: sqlExcluded('studios'),

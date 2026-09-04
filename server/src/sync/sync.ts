@@ -1,7 +1,7 @@
-import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { fetchByIds, fetchLastAired, fetchTrending } from '../anilist/client.js'
 import { db } from '../db/index.js'
-import { franchise, franchiseMember, media, subscriptions } from '../db/schema.js'
+import { franchise, franchiseMember, media, subscriptions, syncState } from '../db/schema.js'
 import { env } from '../env.js'
 import { groupFromSeed } from '../grouping/service.js'
 import { upsertMedia } from '../services/mediaStore.js'
@@ -9,6 +9,101 @@ import { getTrendingTv, tmdbEnabled } from '../tmdb/client.js'
 import { isJapaneseAnimation } from '../tmdb/mapping.js'
 import { ensureTvFranchise, refreshTvShow } from '../tmdb/service.js'
 import { mapWithConcurrency } from '../util/concurrency.js'
+
+// v2 deliberately restarts the completed trailer-only cursor: MEDIA_FIELDS now also carries
+// native titles, synonyms and artwork, and pre-v2 rows need one full catalogue pass to gain them.
+const ANILIST_TRAILER_SWEEP_KEY = 'anilist_catalog_metadata_v2'
+const ANILIST_TRAILER_SWEEP_LIMIT = 2_500
+const ANILIST_TRAILER_REQUEST_SIZE = 50
+const ANILIST_TRAILER_REQUEST_INTERVAL_MS = 2_300
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+function chunked<T>(values: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let index = 0; index < values.length; index += size) out.push(values.slice(index, index + size))
+  return out
+}
+
+async function saveTrailerSweepState(cursor: number, complete: boolean): Promise<void> {
+  await db
+    .insert(syncState)
+    .values({
+      key: ANILIST_TRAILER_SWEEP_KEY,
+      value: { cursor, complete },
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: syncState.key,
+      set: { value: { cursor, complete }, updatedAt: new Date() },
+    })
+}
+
+export interface AniListTrailerSweepResult {
+  scanned: number
+  upserted: number
+  complete: boolean
+  /** null means the sweep had already completed and made no provider request. */
+  providerReachable: boolean | null
+}
+
+/**
+ * One-time, resumable repair for media rows written before videos/native titles/synonyms/artwork
+ * existed. Empty fields cannot identify unfinished work because many titles genuinely omit them, so progress is a
+ * durable id cursor rather than `WHERE videos = []`. One hourly run covers the current catalogue;
+ * each 50-id request is spaced below AniList's degraded 30 requests/minute ceiling. A provider-wide
+ * outage leaves the cursor untouched and the next hour retries without requiring a page visit.
+ */
+export async function sweepAniListTrailers(
+  options: { limit?: number; requestIntervalMs?: number } = {},
+): Promise<AniListTrailerSweepResult> {
+  const [saved] = await db
+    .select({ value: syncState.value })
+    .from(syncState)
+    .where(eq(syncState.key, ANILIST_TRAILER_SWEEP_KEY))
+    .limit(1)
+  if (saved?.value?.complete === true) {
+    return { scanned: 0, upserted: 0, complete: true, providerReachable: null }
+  }
+  const rawCursor = saved?.value?.cursor
+  const cursor = typeof rawCursor === 'number' && Number.isInteger(rawCursor) ? rawCursor : 0
+  const limit = Math.max(1, options.limit ?? ANILIST_TRAILER_SWEEP_LIMIT)
+  const rows = await db
+    .select({ id: media.id })
+    .from(media)
+    .where(and(eq(media.source, 'anilist'), gt(media.id, cursor)))
+    .orderBy(asc(media.id))
+    .limit(limit + 1)
+  if (rows.length === 0) {
+    await saveTrailerSweepState(cursor, true)
+    return { scanned: 0, upserted: 0, complete: true, providerReachable: null }
+  }
+
+  const hasMore = rows.length > limit
+  const batch = rows.slice(0, limit)
+  const chunks = chunked(batch, ANILIST_TRAILER_REQUEST_SIZE)
+  let scanned = 0
+  let upserted = 0
+  for (let index = 0; index < chunks.length; index++) {
+    const ids = chunks[index]!.map((row) => row.id)
+    const fresh = await fetchByIds(ids, { maxRetries: 1, timeoutMs: 10_000 })
+    // fetchByIds deliberately degrades failed batches to []; for this repair pass an all-empty
+    // response means "do not advance" rather than "all these known ids vanished".
+    if (fresh.length === 0) {
+      return { scanned, upserted, complete: false, providerReachable: false }
+    }
+    await upsertMedia(fresh)
+    scanned += ids.length
+    upserted += fresh.length
+    const nextCursor = ids.at(-1)!
+    const complete = !hasMore && index === chunks.length - 1
+    await saveTrailerSweepState(nextCursor, complete)
+    if (index < chunks.length - 1) {
+      await sleep(Math.max(0, options.requestIntervalMs ?? ANILIST_TRAILER_REQUEST_INTERVAL_MS))
+    }
+  }
+  return { scanned, upserted, complete: !hasMore, providerReachable: true }
+}
 
 /**
  * Refresh airing data for currently-releasing AniList media (next episode + exact last-aired
@@ -32,13 +127,14 @@ export async function refreshAiring(): Promise<number> {
   if (ids.length === 0) return 0
 
   const fresh = await fetchByIds(ids)
+  if (fresh.length === 0) throw new Error(`AniList returned no airing media (requested ${ids.length})`)
   await upsertMedia(fresh)
 
   const lastAired = await fetchLastAired(ids)
   for (const [id, ts] of Object.entries(lastAired)) {
     await db.update(media).set({ lastAiredAt: ts }).where(eq(media.id, Number(id)))
   }
-  return ids.length
+  return fresh.length
 }
 
 /**

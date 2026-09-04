@@ -19,6 +19,7 @@
     "news": "tsx src/scripts/news-once.ts",
     "tv": "tsx src/scripts/tv-one.ts",
     "backfill": "tsx src/scripts/backfill-episodes.ts",
+    "anime-videos": "tsx src/scripts/backfill-anime-videos.ts",
     "auth:smoke": "tsx src/scripts/auth-smoke.ts",
     "test": "vitest run"
   },

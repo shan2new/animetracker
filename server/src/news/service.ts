@@ -1,8 +1,17 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { desc, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/index.js'
-import { announcements, franchise, franchiseMember, media, notifications, subscriptions } from '../db/schema.js'
+import {
+  announcementEvidence,
+  announcementObservations,
+  announcements,
+  franchise,
+  franchiseMember,
+  media,
+  notifications,
+  subscriptions,
+} from '../db/schema.js'
 import { env } from '../env.js'
-import type { FranchiseUpcoming } from '../types/api.js'
+import type { AnnouncementEvidence, AnnouncementObservationView, FranchiseUpcoming } from '../types/api.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
 import { researchFranchiseNews, type NewsResult } from './agent.js'
 
@@ -177,55 +186,125 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
   const upcoming: FranchiseUpcoming = { ...result, checked: new Date().toISOString() }
   await db.update(franchise).set({ upcoming }).where(eq(franchise.id, franchiseId))
 
-  if (!isNoteworthy(result.status) || !result.next.trim()) return { checked: true, notified: 0 }
-
-  const key = dedupeKey(result.next)
-  const existing = priorRows.find((a) => sameInstallment(a.dedupeKey, key))
-
-  const newRank = STATUS_RANK[result.status] ?? 0
-  const oldRank = existing ? (STATUS_RANK[existing.status] ?? 0) : 0
-
+  const noteworthy = isNoteworthy(result.status) && !!result.next.trim()
+  const key = noteworthy ? dedupeKey(result.next) : `__state__:${result.status}`
+  const existing = noteworthy ? priorRows.find((a) => sameInstallment(a.dedupeKey, key)) : undefined
   let event: NewsEvent | null = null
-  if (!existing) event = 'new'
-  else if (newRank > oldRank) event = 'upgraded'
-  else if (newRank === oldRank && !isConcreteRelease(existing.release) && isConcreteRelease(result.release)) event = 'dated'
+  let announcementId: string | null = null
+  if (noteworthy) {
+    const newRank = STATUS_RANK[result.status] ?? 0
+    const oldRank = existing ? (STATUS_RANK[existing.status] ?? 0) : 0
+    if (!existing) event = 'new'
+    else if (newRank > oldRank) event = 'upgraded'
+    else if (newRank === oldRank && !isConcreteRelease(existing.release) && isConcreteRelease(result.release)) event = 'dated'
 
-  let announcementId: string
-  if (!existing) {
-    const [row] = await db
-      .insert(announcements)
-      .values({
-        franchiseId,
-        dedupeKey: key,
-        status: result.status,
-        next: result.next,
-        release: result.release,
-        note: result.note,
-        source: result.source,
-      })
-      .returning({ id: announcements.id })
-    announcementId = row!.id
-  } else {
-    // Never let a lower-confidence re-report downgrade a stored announcement.
-    const advance = newRank >= oldRank
-    await db
-      .update(announcements)
-      .set({
-        lastSeenAt: new Date(),
-        ...(advance
-          ? { status: result.status, next: result.next, release: result.release, note: result.note, source: result.source }
-          : {}),
-      })
-      .where(eq(announcements.id, existing.id))
-    announcementId = existing.id
+    if (!existing) {
+      const [row] = await db
+        .insert(announcements)
+        .values({
+          franchiseId,
+          dedupeKey: key,
+          status: result.status,
+          next: result.next,
+          release: result.release,
+          note: result.note,
+          source: result.source,
+        })
+        .returning({ id: announcements.id })
+      announcementId = row!.id
+    } else {
+      // Never let a lower-confidence re-report downgrade a stored announcement.
+      const advance = newRank >= oldRank
+      await db
+        .update(announcements)
+        .set({
+          lastSeenAt: new Date(),
+          ...(advance
+            ? { status: result.status, next: result.next, release: result.release, note: result.note, source: result.source }
+            : {}),
+        })
+        .where(eq(announcements.id, existing.id))
+      announcementId = existing.id
+    }
   }
 
-  if (!event) return { checked: true, notified: 0 }
+  const [observation] = await db
+    .insert(announcementObservations)
+    .values({
+      franchiseId,
+      announcementId,
+      dedupeKey: key,
+      status: result.status,
+      next: result.next,
+      release: result.release,
+      note: result.note,
+    })
+    .returning({ id: announcementObservations.id })
+  const evidence = normalizedEvidence(result)
+  if (observation && evidence.length > 0) {
+    await db.insert(announcementEvidence).values(evidence.map((item) => ({
+      observationId: observation.id,
+      ...item,
+    }))).onConflictDoNothing()
+  }
+
+  if (!event || !announcementId) return { checked: true, notified: 0 }
 
   const { kind, body } = notificationText(result, event)
   const notified = await fanOut(franchiseId, f.title, announcementId, kind, body)
   console.log(`[news] "${f.title}": ${event} → notified ${notified} subscriber(s): ${body}`)
   return { checked: true, notified }
+}
+
+function normalizedEvidence(result: NewsResult): AnnouncementEvidence[] {
+  const candidates: AnnouncementEvidence[] = result.evidence.length > 0
+    ? result.evidence
+    : result.source
+      ? [{ url: result.source, publisher: null, publishedAt: null, tier: 'unknown', primary: false }]
+      : []
+  const byUrl = new Map<string, AnnouncementEvidence>()
+  for (const item of candidates) if (!byUrl.has(item.url)) byUrl.set(item.url, item)
+  return [...byUrl.values()].slice(0, 5)
+}
+
+/** Inspectable evidence history behind the latest one-line `upcoming` state. */
+export async function listAnnouncementObservations(
+  franchiseId: string,
+  limit = 20,
+): Promise<AnnouncementObservationView[]> {
+  const rows = await db
+    .select()
+    .from(announcementObservations)
+    .where(eq(announcementObservations.franchiseId, franchiseId))
+    .orderBy(desc(announcementObservations.observedAt))
+    .limit(limit)
+  if (rows.length === 0) return []
+  const evidence = await db
+    .select()
+    .from(announcementEvidence)
+    .where(inArray(announcementEvidence.observationId, rows.map((row) => row.id)))
+  const byObservation = new Map<string, AnnouncementEvidence[]>()
+  for (const item of evidence) {
+    const list = byObservation.get(item.observationId) ?? []
+    list.push({
+      url: item.url,
+      publisher: item.publisher,
+      publishedAt: item.publishedAt,
+      tier: item.tier as AnnouncementEvidence['tier'],
+      primary: item.primary,
+    })
+    byObservation.set(item.observationId, list)
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    announcementId: row.announcementId,
+    status: row.status,
+    next: row.next,
+    release: row.release,
+    note: row.note,
+    observedAt: row.observedAt.toISOString(),
+    evidence: byObservation.get(row.id) ?? [],
+  }))
 }
 
 /**

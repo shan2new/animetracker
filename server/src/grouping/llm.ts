@@ -9,6 +9,7 @@ export interface GroupingCandidate {
   format: string | null
   status: string | null
   seasonYear: number | null
+  season?: string | null
   episodes: number | null
   synopsis: string
 }
@@ -29,6 +30,10 @@ export interface GroupedPart {
   partKind: PartKind
   sequence: number
   label: string
+  /** Derived after grouping; the model still owns only within-kind sequence/labels. */
+  watchOrder?: number
+  relationship?: string | null
+  optional?: boolean
 }
 
 export interface GroupedFranchise {
