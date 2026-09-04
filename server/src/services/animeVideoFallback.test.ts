@@ -49,6 +49,7 @@ vi.mock('./recommendations.js', () => ({ syncRecommendationEdges: vi.fn(async ()
 const {
   animeTrailerSeasonNumbers,
   matchAnimePartsToTmdbSeasons,
+  mergeArtwork,
   mergeAnimeVideoFallback,
   overlayAnimeEpisodes,
   refreshAnimeVideoFallback,
@@ -138,6 +139,34 @@ describe('anime episode metadata matching', () => {
   })
 })
 
+describe('mergeArtwork', () => {
+  const image = (
+    url: string,
+    source: 'anilist' | 'tmdb',
+    width: number | null,
+    height: number | null,
+    score: number | null,
+  ) => ({ url, source, width, height, language: null, score })
+
+  it('ranks each orientation by resolution before catalogue score or input order', () => {
+    const value = mergeArtwork({
+      portraits: [image('anilist-cover', 'anilist', null, null, null)],
+      landscapes: [image('rated-2k', 'tmdb', 2048, 1152, 9)],
+      logos: [],
+    }, {
+      portraits: [
+        image('tmdb-1200', 'tmdb', 1200, 1800, 9),
+        image('tmdb-2000', 'tmdb', 2000, 3000, 3),
+      ],
+      landscapes: [image('4k', 'tmdb', 3840, 2160, 3)],
+      logos: [],
+    })
+
+    expect(value.portraits.map((item) => item.url)).toEqual(['tmdb-2000', 'tmdb-1200', 'anilist-cover'])
+    expect(value.landscapes.map((item) => item.url)).toEqual(['4k', 'rated-2k'])
+  })
+})
+
 describe('mergeAnimeVideoFallback', () => {
   it('preserves AniList catalogue facts while recording metadata-only TMDB provenance', () => {
     const result = mergeAnimeVideoFallback(
@@ -170,7 +199,18 @@ describe('mergeAnimeVideoFallback', () => {
 describe('refreshAnimeVideoFallback', () => {
   it('stores show and latest-season trailers on the existing AniList franchise', async () => {
     h.selectRows.push(
-      [{ source: 'anilist', title: 'Bleach', primaryMediaId: 1, genres: ['Action'], enrichment: deep }],
+      [{
+        source: 'anilist', title: 'Bleach', primaryMediaId: 1, genres: ['Action'], enrichment: deep,
+        cover: 'https://anilist/cover.jpg', banner: 'https://anilist/banner.jpg',
+        artwork: {
+          portraits: [{
+            url: 'https://anilist/cover.jpg', source: 'anilist', width: null, height: null,
+            language: null, score: null,
+          }],
+          landscapes: [],
+          logos: [],
+        },
+      }],
       [{
         id: 1,
         titleEnglish: 'Bleach',
@@ -181,6 +221,16 @@ describe('refreshAnimeVideoFallback', () => {
         videos: [],
       }],
     )
+    h.getShow.mockResolvedValueOnce({
+      ...show,
+      poster_path: '/bleach-poster.jpg',
+      backdrop_path: '/bleach-backdrop.jpg',
+      images: {
+        posters: [],
+        backdrops: [],
+        logos: [],
+      },
+    })
     h.getSeason.mockResolvedValueOnce({
       id: 2,
       season_number: 2,
@@ -206,7 +256,22 @@ describe('refreshAnimeVideoFallback', () => {
     expect(h.getSeason).toHaveBeenCalledWith(30984, 2, undefined)
     expect(h.writes).toHaveLength(2)
     expect(h.writes[0]).toMatchObject({ episodesList: [] })
-    expect(h.writes[1]).toMatchObject({ updatedAt: expect.any(Date) })
+    expect(h.writes[1]).toMatchObject({
+      cover: 'https://image.tmdb.org/t/p/w780/bleach-poster.jpg',
+      banner: 'https://image.tmdb.org/t/p/w1280/bleach-backdrop.jpg',
+      artwork: {
+        portraits: [
+          expect.objectContaining({
+            url: 'https://image.tmdb.org/t/p/w780/bleach-poster.jpg', source: 'tmdb',
+          }),
+          expect.objectContaining({ url: 'https://anilist/cover.jpg', source: 'anilist' }),
+        ],
+        landscapes: [expect.objectContaining({
+          url: 'https://image.tmdb.org/t/p/w1280/bleach-backdrop.jpg', source: 'tmdb',
+        })],
+      },
+      updatedAt: expect.any(Date),
+    })
   })
 
   it('does no provider work while a successful fallback cache is fresh', async () => {
@@ -222,6 +287,7 @@ describe('refreshAnimeVideoFallback', () => {
         externalId: 30984,
         status: 'matched',
         checkedAt: new Date().toISOString(),
+        metadataVersion: 1,
       },
     }
     h.selectRows.push(
@@ -237,5 +303,31 @@ describe('refreshAnimeVideoFallback', () => {
     expect(h.resolveTarget).not.toHaveBeenCalled()
     expect(h.getShow).not.toHaveBeenCalled()
     expect(h.writes).toEqual([])
+  })
+
+  it('revisits a fresh trailer-only cache so existing matches gain artwork', async () => {
+    const oldCache: FranchiseEnrichment = {
+      ...deep,
+      videos: [],
+      videoFallback: {
+        source: 'tmdb', mediaType: 'tv', externalId: 30984, status: 'matched',
+        checkedAt: new Date().toISOString(),
+      },
+    }
+    h.selectRows.push(
+      [{ source: 'anilist', title: 'Bleach', primaryMediaId: 1, genres: [], enrichment: oldCache }],
+      [{
+        id: 1, titleEnglish: 'Bleach', titleRomaji: 'BLEACH', titleNative: null, synonyms: [],
+        format: 'TV', year: 2004, sequence: 1, totalEpisodes: 366, episodes: [], artwork: null, videos: [],
+      }],
+    )
+
+    await expect(refreshAnimeVideoFallback('franchise-id')).resolves.toMatchObject({
+      checked: true,
+      matched: true,
+      updated: true,
+    })
+    expect(h.getShow).toHaveBeenCalled()
+    expect(h.writes.at(-1)).toMatchObject({ updatedAt: expect.any(Date) })
   })
 })

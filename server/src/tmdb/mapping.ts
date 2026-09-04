@@ -14,6 +14,7 @@ import type {
   VideoKind,
 } from '../types/api.js'
 import type { TmdbEpisode, TmdbImage, TmdbMovie, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
+import { rankArtwork } from '../util/artwork.js'
 
 // Pure TMDB → local-model mapping. No I/O here — everything is unit-testable.
 
@@ -44,14 +45,11 @@ function rankedArtwork(
   orientation: 'portrait' | 'landscape' | 'logo',
 ): ArtworkImage[] {
   const size = orientation === 'portrait' ? 'w780' : 'w1280'
-  const seen = new Set<string>()
-  return (items ?? [])
-    .slice()
-    .sort((a, b) => (b.vote_average ?? 0) - (a.vote_average ?? 0) || (b.vote_count ?? 0) - (a.vote_count ?? 0))
+  return rankArtwork(
+    (items ?? [])
     .flatMap((item) => {
       const url = imageUrl(item.file_path, size)
-      if (!url || seen.has(url)) return []
-      seen.add(url)
+      if (!url) return []
       return [{
         url,
         source: 'tmdb' as const,
@@ -60,21 +58,23 @@ function rankedArtwork(
         language: item.iso_639_1 ?? null,
         score: item.vote_average ?? null,
       }]
-    })
-    .slice(0, 6)
+    }),
+  )
 }
 
-function prependArtwork(items: ArtworkImage[], url: string | null, orientation: 'portrait' | 'landscape'): ArtworkImage[] {
+function prependArtwork(items: ArtworkImage[], url: string | null): ArtworkImage[] {
   if (!url || items.some((item) => item.url === url)) return items
-  return [{ url, source: 'tmdb' as const, width: null, height: null, language: null, score: null }, ...items].slice(0, 6)
+  return rankArtwork([...items, {
+    url, source: 'tmdb' as const, width: null, height: null, language: null, score: null,
+  }])
 }
 
 export function tmdbArtwork(show: TmdbShow, season?: TmdbSeason): ArtworkGallery {
   const primaryPortrait = imageUrl(season?.poster_path ?? show.poster_path, 'w780')
   const primaryLandscape = imageUrl(show.backdrop_path, 'w1280')
   return {
-    portraits: prependArtwork(rankedArtwork(show.images?.posters, 'portrait'), primaryPortrait, 'portrait'),
-    landscapes: prependArtwork(rankedArtwork(show.images?.backdrops, 'landscape'), primaryLandscape, 'landscape'),
+    portraits: prependArtwork(rankedArtwork(show.images?.posters, 'portrait'), primaryPortrait),
+    landscapes: prependArtwork(rankedArtwork(show.images?.backdrops, 'landscape'), primaryLandscape),
     logos: rankedArtwork(show.images?.logos, 'logo'),
   }
 }
@@ -84,12 +84,10 @@ export function tmdbMovieArtwork(movie: TmdbMovie): ArtworkGallery {
     portraits: prependArtwork(
       rankedArtwork(movie.images?.posters, 'portrait'),
       imageUrl(movie.poster_path, 'w780'),
-      'portrait',
     ),
     landscapes: prependArtwork(
       rankedArtwork(movie.images?.backdrops, 'landscape'),
       imageUrl(movie.backdrop_path, 'w1280'),
-      'landscape',
     ),
     logos: rankedArtwork(movie.images?.logos, 'logo'),
   }

@@ -11,8 +11,11 @@ Franchises come from one of two catalogues, tagged by `source` on `Franchise`/`F
 keep decoding):
 
 - `"anilist"` — anime. Parts are AniList Media entries; grouping via the relation graph (+LLM).
-  A conservatively matched TMDB title may enrich videos and regional availability, but it never
-  changes this identity or creates a second TMDB franchise for the same anime.
+  A conservatively matched TMDB title may enrich artwork, videos, episode context, ratings, people,
+  recommendations and regional availability, but it never changes this identity or creates a
+  second TMDB franchise for the same anime. The highest-resolution available portrait and landscape
+  become the response's best `cover`/`banner` and `images.portrait`/`images.landscape` pair; when
+  both orientations exist, both are returned. AniList art remains in `artwork` as an alternative.
 - `"tmdb"` — general TV. One TMDB **show** = one franchise; each TMDB **season** is a part
   (`kind: "season"`, `sequence` = TMDB season_number; season 0 → `kind: "special"`, label
   "Specials"). `mediaId` = `1_000_000_000 + TMDB season id`. Grouping is deterministic (no LLM).

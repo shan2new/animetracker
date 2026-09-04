@@ -171,6 +171,8 @@ export interface FranchiseEnrichment {
     externalId: number | null
     status: 'matched' | 'unmatched'
     checkedAt: string
+    /** Bump when the fallback starts persisting another class of metadata. */
+    metadataVersion?: number
   }
   checkedAt: string
 }

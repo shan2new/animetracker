@@ -12,6 +12,7 @@ import { tmdbArtwork, tmdbEpisodes, tmdbFranchiseEnrichment, tmdbMovieArtwork, t
 import type { TmdbSeason, TmdbSeasonDetail, TmdbShow, TmdbVideo } from '../tmdb/types.js'
 import type { ArtworkGallery, CatalogVideo, EpisodeMeta, FranchiseEnrichment } from '../types/api.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
+import { rankArtwork } from '../util/artwork.js'
 import {
   resolveAnimeTmdbTarget,
   type AnimeTmdbMediaType,
@@ -24,6 +25,7 @@ const D = 86_400_000
 const VIDEO_TTL_MS = 7 * D
 const EMPTY_TTL_MS = D
 const BACKGROUND_INTERVAL_MS = 150
+const ANIME_TMDB_METADATA_VERSION = 1
 const TV_FORMATS = new Set(['TV', 'TV_SHORT', 'ONA'])
 
 const queue = new BoundedTaskQueue(2, 48, (key, error) => {
@@ -60,7 +62,9 @@ export interface AnimePartSeasonMatch {
 
 function fallbackFresh(value: FranchiseEnrichment | null | undefined, nowMs = Date.now()): boolean {
   const state = value?.videoFallback
-  if (!state) return false
+  // `videoFallback` originally cached trailers only. Treat those rows as stale once so every
+  // existing match passes through the wider metadata path and gains TMDB artwork as well.
+  if (!state || state.metadataVersion !== ANIME_TMDB_METADATA_VERSION) return false
   const checked = Date.parse(state.checkedAt)
   const ttl = (value?.videos?.length ?? 0) > 0 ? VIDEO_TTL_MS : EMPTY_TTL_MS
   return Number.isFinite(checked) && checked > nowMs - ttl
@@ -150,6 +154,7 @@ export function mergeAnimeVideoFallback(
       externalId: target?.externalId ?? null,
       status: target ? 'matched' : 'unmatched',
       checkedAt,
+      metadataVersion: ANIME_TMDB_METADATA_VERSION,
     },
     checkedAt,
   }
@@ -160,12 +165,7 @@ export function mergeArtwork(
   fallback: ArtworkGallery | null | undefined,
 ): ArtworkGallery {
   const merge = (a: ArtworkGallery['portraits'] = [], b: ArtworkGallery['portraits'] = []) => {
-    const seen = new Set<string>()
-    return [...a, ...b].filter((item) => {
-      if (seen.has(item.url)) return false
-      seen.add(item.url)
-      return true
-    }).slice(0, 6)
+    return rankArtwork([...a, ...b])
   }
   return {
     portraits: merge(primary?.portraits, fallback?.portraits),
@@ -231,8 +231,9 @@ export function overlayAnimeEpisodes(existing: EpisodeMeta[], fallback: EpisodeM
 }
 
 /**
- * Enrich one AniList franchise with TMDB trailers without materializing a TMDB franchise or
- * changing any AniList part. Failures throw and therefore never become durable "unmatched" facts.
+ * Enrich one AniList franchise from its conservatively matched TMDB twin without materializing a
+ * second franchise or changing AniList identity. Failures throw and therefore never become durable
+ * "unmatched" facts.
  */
 export async function refreshAnimeVideoFallback(
   franchiseId: string,
@@ -369,11 +370,20 @@ export async function refreshAnimeVideoFallback(
     videoFallback: enrichment.videoFallback,
     checkedAt: enrichment.checkedAt,
   }
+  // `cover` / `banner` are the legacy best-pair fields shipped to the current iOS app. Keeping the
+  // TMDB images only in the new gallery leaves the billboard rendering AniList's 460x639 cover even
+  // after a successful match. Promote the twin's canonical art here; the gallery retains both
+  // providers, and franchise.source remains `anilist`.
+  const mergedArtwork = fallbackArtwork ? mergeArtwork(row.artwork, fallbackArtwork) : row.artwork
+  const enrichedCover = mergedArtwork?.portraits[0]?.url ?? null
+  const enrichedBanner = mergedArtwork?.landscapes[0]?.url ?? null
   // Merge only the fallback fields into the value present AT UPDATE TIME. The AniList deep
   // enricher can run concurrently from Search, and neither writer may clobber the other's facts.
   await db.update(franchise).set({
     enrichment: sql`coalesce(${franchise.enrichment}, ${JSON.stringify(enrichment)}::jsonb) || ${JSON.stringify(patch)}::jsonb`,
-    ...(fallbackArtwork ? { artwork: mergeArtwork(row.artwork, fallbackArtwork) } : {}),
+    ...(enrichedCover ? { cover: enrichedCover } : {}),
+    ...(enrichedBanner ? { banner: enrichedBanner } : {}),
+    ...(mergedArtwork ? { artwork: mergedArtwork } : {}),
     updatedAt: new Date(),
   }).where(eq(franchise.id, franchiseId))
   await upsertCatalogLink({
