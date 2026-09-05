@@ -1,7 +1,7 @@
 export default function sitemap() {
   return [
     {
-      url: 'https://previously-tv.shan2new.chatgpt.site/',
+      url: 'https://landing-ten-theta-55.vercel.app/',
       changeFrequency: 'monthly',
       priority: 1,
     },

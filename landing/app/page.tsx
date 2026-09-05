@@ -43,7 +43,7 @@ export default function Home() {
               'A TV and anime tracking app for iPhone. Keep your shows, seasons and episode progress together, see upcoming episodes, and catch up on release updates.',
             applicationCategory: 'LifestyleApplication',
             operatingSystem: 'iOS 18 or later',
-            url: 'https://previously-tv.shan2new.chatgpt.site',
+            url: 'https://landing-ten-theta-55.vercel.app',
             author: {
               '@type': 'Person',
               name: 'Shantanu Sinha',

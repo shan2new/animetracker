@@ -4,6 +4,6 @@ export default function robots() {
       { userAgent: '*', allow: '/' },
       { userAgent: 'OAI-SearchBot', allow: '/' },
     ],
-    sitemap: 'https://previously-tv.shan2new.chatgpt.site/sitemap.xml',
+    sitemap: 'https://landing-ten-theta-55.vercel.app/sitemap.xml',
   };
 }

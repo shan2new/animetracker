@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-const origin = 'https://previously-tv.shan2new.chatgpt.site';
+const origin = 'https://landing-ten-theta-55.vercel.app';
 export const metadata: Metadata = {
   metadataBase: new URL(origin),
   title: 'Previously. — TV & anime tracking, right where you left off',
