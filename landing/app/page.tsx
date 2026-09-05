@@ -3,6 +3,7 @@ import { ArrowUpRight } from 'lucide-react';
 import { Experience, Questions } from './experience';
 import { Brand, SiteFooter } from './site-chrome';
 import './gallery.css';
+import './product-tour.css';
 export default function Home() {
   return (
     <main id="main" className="gallery">
@@ -12,7 +13,7 @@ export default function Home() {
       <header className="gallery-header gallery-wrap">
         <Brand />
         <nav aria-label="Main navigation">
-          <a href="#experience-library">Explore the app</a>
+          <a href="#experience">Explore the app</a>
           <a href="#questions">Questions</a>
           <a href="/support">
             Support <ArrowUpRight size={14} />
@@ -41,7 +42,7 @@ export default function Home() {
             description:
               'A TV and anime tracking app for iPhone. Keep your shows, seasons and episode progress together, see upcoming episodes, and catch up on release updates.',
             applicationCategory: 'LifestyleApplication',
-            operatingSystem: 'iOS 26',
+            operatingSystem: 'iOS 18 or later',
             url: 'https://previously-tv.shan2new.chatgpt.site',
             author: {
               '@type': 'Person',

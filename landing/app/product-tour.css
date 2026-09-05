@@ -1,0 +1,407 @@
+.product-tour {
+  position: relative;
+  padding: 28px 0 48px;
+  scroll-margin-top: 28px;
+}
+.tour-anchor {
+  position: absolute;
+  top: 0;
+  scroll-margin-top: 28px;
+}
+.tour-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 24px;
+  margin-bottom: 28px;
+}
+.tour-heading h2 {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.8px;
+  line-height: 1.2;
+}
+.tour-heading > span {
+  color: #aaa6a0;
+  font-size: 14px;
+}
+.native-tour-tabs {
+  gap: 0;
+}
+.native-tour-navigation[data-slot='tabs-list'] {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  width: 100%;
+  height: auto;
+  display: flex;
+  justify-content: flex-start;
+  gap: 16px;
+  padding: 0;
+  border-bottom: 1px solid #ffffff14;
+  border-radius: 0;
+  background: #09090beb;
+  backdrop-filter: blur(16px);
+}
+.native-tour-navigation [data-slot='tabs-trigger'] {
+  position: relative;
+  flex: 1 1 0;
+  height: 84px;
+  min-width: 0;
+  justify-content: flex-start;
+  padding: 0 10px;
+  gap: 14px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #aaa6a0;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: color 180ms;
+}
+.native-tour-navigation [data-slot='tabs-trigger'] > svg {
+  width: 18px;
+  height: 18px;
+}
+.tour-tab-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+}
+.tour-tab-copy small {
+  color: #99948e;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.native-tour-navigation [data-active] .tour-tab-copy small {
+  color: #c5b397;
+}
+.native-tour-navigation [data-slot='tabs-trigger'][data-active] {
+  color: #f0b766;
+  background: transparent;
+}
+.native-tour-navigation [data-slot='tabs-trigger']::after {
+  inset: auto 0 -1px;
+  height: 2px;
+  background: #f0b766;
+}
+.native-tour-navigation [data-slot='tabs-trigger']:focus-visible {
+  outline: 2px solid #f0b766;
+  outline-offset: -5px;
+  box-shadow: none;
+}
+.native-tour-navigation [data-slot='tabs-trigger']:hover {
+  color: #f4f1ec;
+}
+.native-tour-panel {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  align-items: center;
+  gap: 56px;
+  min-height: 700px;
+  padding: 40px 0 22px;
+}
+.native-tour-panel[hidden] {
+  display: none;
+}
+.tour-story {
+  max-width: 450px;
+  animation: tour-arrive 320ms var(--ease);
+}
+.tour-chapter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #b9b4ac;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.tour-chapter > span {
+  width: 28px;
+  height: 1px;
+  background: #706456;
+}
+.tour-story h3 {
+  margin-top: 28px;
+  font-size: clamp(36px, 3.5vw, 48px);
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -1.6px;
+  white-space: pre-line;
+  text-wrap: balance;
+}
+.tour-story > p {
+  margin-top: 24px;
+  max-width: 350px;
+  color: #b7b3ad;
+  font-size: 18px;
+  line-height: 1.65;
+}
+.tour-detail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 40px;
+  color: #d6c4aa;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.tour-detail > span {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 5px;
+  border-radius: 50%;
+  background: #f0b766;
+}
+.tour-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  margin-top: 20px;
+  color: #f4f1ec;
+  font-size: 14px;
+}
+.native-screen-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+.native-screen-stage::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: -30px -36px;
+  background: radial-gradient(ellipse at center, #68607726 0%, transparent 65%);
+  pointer-events: none;
+}
+.native-screen-stage-library::before {
+  background: radial-gradient(ellipse at center, #a9763624, transparent 65%);
+}
+.native-screen-stage-schedule::before {
+  background: radial-gradient(ellipse at center, #50657424, transparent 65%);
+}
+.native-screen-button {
+  display: block;
+  position: relative;
+  width: 276px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 32px;
+  background: transparent;
+  text-align: left;
+}
+.native-screen {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1179/2556;
+  object-fit: contain;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 1px #ffffff18,
+    0 24px 65px #0007;
+}
+.screen-enlarge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  min-height: 44px;
+  margin: 10px auto 0;
+  padding: 0 12px;
+  color: #aaa6a0;
+  font-size: 12px;
+  transition: color 180ms;
+}
+.native-screen-button:is(:hover, :focus-visible) .screen-enlarge {
+  color: #f0b766;
+}
+.native-screen-button:focus-visible {
+  outline: 2px solid #f0b766;
+  outline-offset: 7px;
+}
+.tour-footnote {
+  margin-top: 20px;
+  text-align: center;
+  color: #95918c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.screen-dialog[data-slot='dialog-content'] {
+  width: min(520px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  max-height: calc(100svh - 16px);
+  overflow-y: auto;
+  padding: 22px;
+  gap: 12px;
+  background: #171719;
+  border-radius: 22px;
+  color: #f4f1ec;
+}
+.screen-dialog [data-slot='dialog-title'] {
+  padding-right: 40px;
+  font-size: 18px;
+  line-height: 1.4;
+}
+.screen-dialog [data-slot='dialog-description'] {
+  max-width: 320px;
+  font-size: 13px;
+  color: #aaa6a0;
+  line-height: 1.5;
+}
+.screen-dialog > img {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: 16px;
+  margin-inline: auto;
+}
+.screen-dialog [data-slot='dialog-close'] {
+  width: 44px;
+  height: 44px;
+}
+@keyframes tour-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (max-width: 1100px) {
+  .native-screen-stage::before {
+    inset-inline: -20px;
+  }
+  .native-tour-panel {
+    gap: 35px;
+  }
+  .tour-heading h2 {
+    font-size: 27px;
+  }
+  .tour-story h3 {
+    font-size: 40px;
+  }
+}
+@media (max-width: 900px) {
+  .tour-tab-copy small {
+    display: none;
+  }
+  .native-tour-navigation [data-slot='tabs-trigger'] {
+    height: 64px;
+  }
+}
+@media (max-width: 760px) {
+  .screen-dialog[data-slot='dialog-content'] {
+    padding: 12px;
+  }
+  .product-tour {
+    padding-top: 12px;
+    padding-bottom: 38px;
+  }
+  .tour-heading {
+    display: block;
+    margin-bottom: 18px;
+  }
+  .tour-heading h2 {
+    font-size: 26px;
+    letter-spacing: -0.6px;
+  }
+  .tour-heading > span {
+    display: block;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+  .native-tour-navigation[data-slot='tabs-list'] {
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .native-tour-navigation [data-slot='tabs-trigger'] {
+    flex: 0 0 auto;
+    min-width: 0;
+    height: 54px;
+    gap: 7px;
+    padding: 0 4px;
+    font-size: 13px;
+  }
+  .native-tour-navigation [data-slot='tabs-trigger'] > svg {
+    width: 16px;
+    height: 16px;
+  }
+  .native-tour-panel {
+    grid-template-columns: 1fr;
+    gap: 30px;
+    padding: 30px 4px 14px;
+    min-height: 0;
+  }
+  .tour-story {
+    max-width: 100%;
+  }
+  .tour-chapter {
+    display: none;
+  }
+  .tour-story h3 {
+    margin: 0;
+    font-size: clamp(30px, 8vw, 40px);
+    letter-spacing: -1px;
+  }
+  .tour-story > p {
+    margin-top: 16px;
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 440px;
+  }
+  .tour-detail {
+    margin-top: 20px;
+    font-size: 13px;
+  }
+  .native-screen-button {
+    width: 280px;
+    border-radius: 30px;
+  }
+  .native-screen-stage::before {
+    inset: -20px -10px;
+  }
+  .tour-footnote {
+    margin-top: 20px;
+    max-width: 270px;
+    margin-inline: auto;
+  }
+}
+@media (max-width: 360px) {
+  .native-tour-navigation[data-slot='tabs-list'] {
+    gap: 4px;
+  }
+  .native-tour-navigation [data-slot='tabs-trigger'] {
+    gap: 5px;
+    font-size: 12px;
+  }
+  .native-tour-navigation [data-slot='tabs-trigger'] > svg {
+    width: 14px;
+    height: 14px;
+  }
+  .tour-story h3 {
+    font-size: 30px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-story,
+  .screen-dialog,
+  [data-slot='dialog-overlay'] {
+    animation: none !important;
+  }
+  .screen-enlarge,
+  .native-tour-navigation [data-slot='tabs-trigger'] {
+    transition: none;
+  }
+}
