@@ -1,0 +1,120 @@
+{
+  "retrievedAt": "2026-09-05",
+  "purpose": "Previously entertainment landing reference artwork candidates",
+  "rights": "Catalogue provenance only; no commercial-use license asserted.",
+  "selected": [
+    {
+      "title": "Stranger Things",
+      "localPath": "public/images/stranger-things.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/66732-stranger-things/images/posters?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/uOOtwVbSr4QDjAGIifLDwpb2Pdl.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/uOOtwVbSr4QDjAGIifLDwpb2Pdl.jpg",
+      "originalDimensions": [
+        1000,
+        1500
+      ],
+      "visual": "Four children on bicycles beneath crimson storm clouds; very large red title"
+    },
+    {
+      "title": "Arcane",
+      "localPath": "public/images/arcane.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/94605-arcane?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/fqldf2t8ztc9aiwn3k6mlX3tvRT.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/fqldf2t8ztc9aiwn3k6mlX3tvRT.jpg",
+      "visual": "Jinx, Vi and ensemble against white field with blue, pink, gold accents"
+    },
+    {
+      "title": "Succession",
+      "localPath": "public/images/succession.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/76331-succession/images/posters?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/vyYObGGEc0QHe3cRasBCp9O2zdJ.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/vyYObGGEc0QHe3cRasBCp9O2zdJ.jpg",
+      "originalDimensions": [
+        2000,
+        3000
+      ],
+      "visual": "Roy family around fractured dining table; warm gold/cream/black palette"
+    },
+    {
+      "title": "Attack on Titan",
+      "localPath": "public/images/attack-on-titan-2x3.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/1429/images/posters?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/hqRb1wyIVsaMukZElPBUXoJPqrR.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/hqRb1wyIVsaMukZElPBUXoJPqrR.jpg",
+      "originalDimensions": [
+        1000,
+        1500
+      ],
+      "visual": "Original burning-city key art: Eren seen from behind, Colossal Titan over wall; large English title"
+    },
+    {
+      "title": "Breaking Bad",
+      "localPath": "public/images/breaking-bad.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/1396-breaking-bad/images/posters?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/ineLOBPG8AZsluYwnkMpHRyu7L.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/ineLOBPG8AZsluYwnkMpHRyu7L.jpg",
+      "originalDimensions": [
+        1000,
+        1500
+      ],
+      "visual": "Walter and Jesse wearing yellow hazmat suits in grayscale desert; large green chemical-element title"
+    },
+    {
+      "title": "Silo",
+      "localPath": "public/images/silo.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/125988-silo?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/c2OijvbFEXBW1onbzuvENr4CGQB.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/c2OijvbFEXBW1onbzuvENr4CGQB.jpg",
+      "visual": "Juliette in side profile above ensemble, teal and amber palette, large Silo title"
+    },
+    {
+      "title": "The Last of Us",
+      "localPath": "public/images/the-last-of-us.jpg",
+      "dimensions": [
+        500,
+        750
+      ],
+      "catalogueUrl": "https://www.themoviedb.org/tv/100088-the-last-of-us?language=en-US",
+      "imageUrl": "https://image.tmdb.org/t/p/w500/dmo6TYuuJgaYinXBPjrgG9mB5od.jpg",
+      "originalUrl": "https://image.tmdb.org/t/p/original/dmo6TYuuJgaYinXBPjrgG9mB5od.jpg",
+      "visual": "Joel face and Ellie full-length with ruined city, green/black, large white stacked title"
+    }
+  ],
+  "alternates": [
+    {
+      "title": "Attack on Titan",
+      "localPath": "/private/tmp/previously-reference-artwork/attack-on-titan.jpg",
+      "dimensions": [
+        500,
+        709
+      ],
+      "imageUrl": "https://image.tmdb.org/t/p/w500/hTP1DtLGFamjfu8WqjnuQdP1n4i.jpg",
+      "visual": "Blue-green Eren shattering-portrait key art; current TMDB primary",
+      "note": "Not exact 2:3; can use object-fit cover with mild side crop."
+    }
+  ]
+}
