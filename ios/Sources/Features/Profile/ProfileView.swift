@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
 // Profile (spec board 08): the modal where trust is inspectable — who is signed in, whether the
 // library is actually saved, every failed change with a way to fix it, and the two account actions
@@ -22,7 +23,7 @@ import UIKit
 //    bordered 44-pt control, Discard change is a 44-pt destructive text action — and the failure's
 //    subject, verb, reason and time each get their own slot instead of wrapping into each other.
 //  • M1 — THE OPAQUE TOOLBAR GUILLOTINED THE CONTENT. `.toolbarBackground(canvas)` overrode the
-//    `.scrollEdgeEffectStyle(.hard)` requested one line above it, so "SETTINGS" was bisected
+//    `.chromeScrollEdgeHard(.top)` requested one line above it, so "SETTINGS" was bisected
 //    horizontally through its x-height by a hard line. The system effect owns that edge now.
 //  • M4 — THE OFFLINE STATE CLAIMED TO BE DOING WHAT IT COULD NOT, with two loading indicators at
 //    once, and it DELETED the account summary rather than degrading it. Offline is now tested
@@ -40,6 +41,8 @@ struct ProfileView: View {
     /// presenter has not wired it: the tiles then stay facts rather than pretending to be controls.
     /// The presenter half is filed as a shared-file request against `TodayView` / `RootView`.
     var onOpenLibrary: ((WatchStatus) -> Void)? = nil
+    /// Dismiss the sheet and open a show — the Watching shelf's route.
+    var onOpenDetail: ((String) -> Void)? = nil
 
     @Environment(AppModel.self) private var appModel
     @Environment(AuthManager.self) private var auth
@@ -49,6 +52,9 @@ struct ProfileView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var hapticsOn = FeedbackCoordinator.enabled
+    #if DEBUG
+    @State private var demoBusy = UserDefaults.standard.bool(forKey: "demoBusy")
+    #endif
     @State private var confirmSignOut = false
     @State private var confirmDelete = false
     @State private var discardTarget: UUID?
@@ -56,15 +62,26 @@ struct ProfileView: View {
     @State private var deleting = false
     /// The one failure this screen has to report itself: the account deletion that did not happen.
     @State private var deleteFailure: String?
+    @State private var signOutFailed = false
+    /// `nil` until asked, and while the system has never been asked (nothing to report yet).
+    @State private var notificationsOn: Bool?
     /// Resolved here rather than read off `PaletteCache` synchronously: nothing else on this screen
     /// primes the cache on a cold open, so the wash would fall back to neutral.
     @State private var washTint: Color?
     /// Drives the wash out. Read from scroll geometry rather than a `GeometryReader` sentinel so
-    /// nothing in the content tree has to know the wash exists.
-    @State private var scrollOffset: CGFloat = 0
-    /// Screen-space y of the stats plate's top edge, measured at rest. The wash's ramp finishes
-    /// here, so no container on this screen ever contains the END of a gradient (M2, M6).
-    @State private var statsTop: CGFloat = 0
+    /// nothing in the content tree has to know the wash exists. A `ScrollOffset`, not a bare
+    /// `@State` (5 Sep): as screen state every scroll sample re-ran this whole body — the
+    /// library counts, the shelf, the plates — and the sheet stuttered under the finger
+    /// (sampled: `ProfileView.body` and `Franchise.resumePart` under the scroll). Only the
+    /// wash's travel reads it.
+    @State private var scroll: ScrollOffset = {
+        let s = ScrollOffset()
+        s.ceiling = 720
+        return s
+    }()
+    /// Screen-space y of the shelf's top edge, measured at rest. The wash's ramp finishes here,
+    /// so no container on this screen ever contains the END of a gradient (M2, M6).
+    @State private var shelfTop: CGFloat = 0
     /// What the account looked like the last time the library actually loaded. The screen renders
     /// from this when the network is gone, instead of deleting the summary (M4).
     @State private var snapshot = ProfileSnapshot.load()
@@ -80,35 +97,21 @@ struct ProfileView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .top) {
-                ProfileWash(tint: washTint, fadeEnd: washFadeEnd)
-                    // The field TRAVELS WITH THE IDENTITY BLOCK it belongs to. Painted fixed to the
-                    // screen it stayed where it was while the plates slid through it, so the SETTINGS
-                    // plate was warm at the top of the scroll and the ACCOUNT plate neutral grey
-                    // further down — one component, two hues, decided by scroll position (M6).
-                    // Masking alone cannot fix that: "ends above the stats plate" is only true at
-                    // rest. Anchoring it to the content is.
-                    .offset(y: -max(0, scrollOffset))
-                    .ignoresSafeArea(edges: .top)
+                // The field TRAVELS WITH THE IDENTITY BLOCK it belongs to. Painted fixed to the
+                // screen it stayed where it was while the plates slid through it, so the SETTINGS
+                // plate was warm at the top of the scroll and the ACCOUNT plate neutral grey
+                // further down — one component, two hues, decided by scroll position (M6).
+                // Masking alone cannot fix that: "ends above the stats plate" is only true at
+                // rest. Anchoring it to the content is.
+                ProfileWashTravel(scroll: scroll) {
+                    ProfileWash(tint: washTint, fadeEnd: washFadeEnd)
+                }
+                .ignoresSafeArea(edges: .top)
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        identity
-                        stats.padding(.top, ThemeMetrics.heroClearance)
-                        syncSection.padding(.top, ThemeMetrics.sectionGap)
-                        settings.padding(.top, ThemeMetrics.sectionGap)
-                        accountSection.padding(.top, ThemeMetrics.sectionGap)
-                        signOutSection.padding(.top, ThemeMetrics.sectionGap)
-                        colophon.padding(.top, ThemeSpace.x10)
-                        // Delete account below the colophon, not 10 pt under Sign out. The two were
-                        // fully saturated red plates of equal weight — the brightest objects on the
-                        // screen — for one routine action and one irreversible one, presented as a
-                        // pair of equal choices (M8). This is where iOS Settings puts it too.
-                        deleteSection.padding(.top, ThemeSpace.x8)
-                    }
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                    // Generous under the bar: the identity is the hero of this screen and 16 pt
-                    // put the disc's shadow within a hair of the bar's edge.
-                    .padding(.top, ThemeSpace.x6)
+                    sheetContent
+                        .padding(.horizontal, ThemeMetrics.gutter)
+                        .padding(.top, ThemeSpace.x4)
                 }
                 .scrollIndicators(.hidden)
                 // The sheet had no bottom inset, so the last line of the colophon ended flush
@@ -119,11 +122,11 @@ struct ProfileView: View {
                 // instead of blurring: "SETTINGS" was cut horizontally through its x-height by a
                 // sharp line under the title (M1). `.hard` is the correct variant for art-backed
                 // content and it is what iOS 26 ships for exactly this case.
-                .scrollEdgeEffectStyle(.hard, for: .top)
+                .chromeScrollEdgeHard(.top)
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     geo.contentOffset.y + geo.contentInsets.top
                 } action: { _, y in
-                    scrollOffset = y
+                    scroll.set(y)
                 }
             }
             .background(ThemeColor.canvas.ignoresSafeArea())
@@ -150,12 +153,14 @@ struct ProfileView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     // Plain text where iOS puts plain text. On this SDK the capsule is the
                     // toolbar's own shared glass, so `buttonStyle` alone does not remove it.
+                    // The app's one toolbar-action recipe: confirm = `bodyEmphasis` + interactive.
+                    // This was the one Done set in raw SF outside the ramp.
                     Button(Copy.Action.done) { dismiss() }
                         .buttonStyle(.plain)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(ThemeColor.accent)
+                        .type(ThemeType.bodyEmphasis)
+                        .foregroundStyle(ThemeColor.interactive)
                 }
-                .sharedBackgroundVisibility(.hidden)
+                .chromeSharedBackgroundHidden()
             }
         }
         .onAppear { sync.profileIsOpen = true }
@@ -187,6 +192,11 @@ struct ProfileView: View {
         } message: {
             Text(deleteFailure ?? "")
         }
+        .alert(Copy.Account.signOutFailedTitle, isPresented: $signOutFailed) {
+            Button(Copy.Action.done, role: .cancel) { signOutFailed = false }
+        } message: {
+            Text(Copy.Account.signOutFailedMessage)
+        }
         // Discard permanently throws away a write the user made. It names the change it is about to
         // destroy — "Discard" alone beside a show name is genuinely ambiguous about its object.
         .alert(Copy.Confirm.discardChangeTitle,
@@ -204,42 +214,83 @@ struct ProfileView: View {
 
     /// Where the wash has to be gone by: the top edge of the stats plate. Measured at rest; the
     /// fallback covers the first frame before any geometry has been reported.
-    private var washFadeEnd: CGFloat { statsTop > 120 ? statsTop : 520 }
+    private var washFadeEnd: CGFloat { shelfTop > 120 ? shelfTop : 260 }
+
+    /// Reading order: who, what they are watching, then the controls — the App Store account
+    /// sheet's order. A plate of three display numerals sat between the name and the shelf and
+    /// read as a dashboard; the counts are one quiet line under the name now.
+    @ViewBuilder
+    private var sheetContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            identity
+            watchingShelf.padding(.top, ThemeSpace.x6)
+            if !sync.failedChanges.isEmpty {
+                syncSection.padding(.top, ThemeMetrics.sectionGap)
+            }
+            settings.padding(.top, ThemeMetrics.sectionGap)
+            if sync.failedChanges.isEmpty {
+                syncFootnote.padding(.top, ThemeSpace.x2)
+            }
+            accountSection.padding(.top, ThemeMetrics.sectionGap)
+            signOutSection.padding(.top, ThemeMetrics.sectionGap)
+            colophon.padding(.top, ThemeSpace.x10)
+            // Delete account below the colophon, not 10 pt under Sign out: one of these is
+            // routine and reversible, the other is not, and the layout should never let a thumb
+            // confuse them. This is where iOS Settings puts it too.
+            deleteSection.padding(.top, ThemeSpace.x8)
+        }
+    }
 
     // MARK: - Identity
 
-    /// The account's own artwork, the disc, the name, and how this device is signed in. The sync
-    /// line is NOT one of them: it lives in the Sync section, once.
+    /// Who: the disc, the name, how this device is signed in, and the library in one line — a
+    /// leading row, the way the App Store's and Settings' account rows are built. The centred
+    /// 72-pt disc under a display-size name was a template's opening, not an account's.
     private var identity: some View {
-        VStack(spacing: 0) {
-            // The disc used to be laid ON the fan with an opaque canvas circle punched through the
-            // artwork behind it — the one identity element on the identity screen cutting a hole in
-            // the one piece of art on the identity screen, straight through a logotype (B2). They
-            // are two objects now, stacked, with an 8-pt ring of canvas between them.
-            if !fanCovers.isEmpty { posterFan }
-            avatar.padding(.top, fanCovers.isEmpty ? 0 : ThemeSpace.x2)
-            Text(accountName)
-                .type(ThemeType.heroTitle)
-                .foregroundStyle(ThemeColor.textPrimary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                // An account name is an identity title: it scales down before it truncates, and an
-                // email address is long enough that this matters on the first screen.
-                .minimumScaleFactor(0.55)
-                .padding(.top, ThemeSpace.x3)
-            Text(provenance)
-                .type(ThemeType.heroMeta)
-                .foregroundStyle(ThemeColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, ThemeMetrics.titleGap)
+        HStack(alignment: .center, spacing: ThemeSpace.x4) {
+            avatar
+            VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
+                Text(accountName)
+                    .type(ThemeType.showTitleL)
+                    .foregroundStyle(ThemeColor.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                // "Signed in" under an email address said nothing (review, 5 Sep); the line is
+                // drawn only when it names something.
+                if !provenance.isEmpty {
+                    Text(provenance)
+                        .type(ThemeType.metadata)
+                        .foregroundStyle(ThemeColor.textSecondary)
+                        .lineLimit(1)
+                }
+                if let librarySummary {
+                    Text(librarySummary)
+                        .type(ThemeType.metadata)
+                        .foregroundStyle(ThemeColor.textTertiary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .padding(.top, ThemeSpace.x0_5)
+                }
+            }
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
-        // One spoken element that actually answers "which account is this". The disc is decoration
-        // and the two lines are one fact; read separately they were "Y", a title and an orphan.
+        .padding(.horizontal, ThemeSpace.x1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Signed in as \(accountName)")
-        .accessibilityValue(provenance)
+        .accessibilityValue([provenance, librarySummary].compactMap { $0 }.joined(separator: ", "))
         .accessibilityAddTraits(.isHeader)
+    }
+
+    /// "635 episodes · 5 watching · 13 watched": the plate's three numerals as one fact.
+    private var librarySummary: String? {
+        var parts: [String] = []
+        if let n = episodesWatched { parts.append(Copy.episodes(n)) }
+        for status in [WatchStatus.watching, .completed] {
+            if let n = count(of: status), n > 0 { parts.append("\(n) \(Copy.Status(status).lowercased())") }
+        }
+        // Three numerals, one line. The minor statuses wrapped "6 planned" onto a line of its
+        // own (review, 5 Sep); they are the shelf's, not the identity's.
+        return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
     /// Three of the account's own covers, fanned. The screen's subject is a library and it drew no
@@ -281,7 +332,7 @@ struct ProfileView: View {
 
     /// Covers loaded right now, in the order Today ranks them.
     private var liveCovers: [String] {
-        let covers = orderedLibrary.compactMap(\.cover)
+        let covers = orderedLibrary.compactMap(\.portraitArt)
         if covers.count >= 3 { return Array(covers.prefix(3)) }
         return Array(covers.prefix(1))
     }
@@ -300,7 +351,7 @@ struct ProfileView: View {
     /// own fallback label): one user, two meaningless letters, one tap apart. It never draws
     /// `person.fill`; with nothing nameable it draws the brand mark.
     private var avatar: some View {
-        AccountDisc(identity: auth.identity, diameter: 72)
+        AccountDisc(identity: auth.identity, diameter: 56)
             // A ring of canvas, not a hole in the artwork. The disc no longer overlaps the fan, so
             // there is nothing to punch through — the ring is what separates it from the wash.
             .overlay(Circle().strokeBorder(ThemeColor.hairline, lineWidth: 1).padding(-5))
@@ -310,23 +361,12 @@ struct ProfileView: View {
 
     // MARK: - Library counts
 
-    private struct LibraryStat: Identifiable {
-        let status: WatchStatus
-        /// `nil` when the library has never loaded on this device and cannot be loaded now.
-        let count: Int?
-        var id: String { status.rawValue }
-        var label: String { Copy.Status(status) }
-        var value: String { count.map(String.init) ?? "\u{2014}" }
-    }
-
-    /// The three headline counts. Live when the library is loaded; the last known values when it is
-    /// not; an em dash when it never was. Removing the plate outright — which is what the shipped
-    /// build did — took away the only summary of the account exactly when the user could not verify
-    /// it anywhere else (M4).
-    private var libraryStats: [LibraryStat] {
-        [WatchStatus.watching, .completed, .planned].map { status in
-            LibraryStat(status: status, count: count(of: status))
+    /// Every episode the account has marked, across every part of every show.
+    private var episodesWatched: Int? {
+        if !appModel.library.isEmpty {
+            return appModel.library.reduce(0) { $0 + $1.parts.reduce(0) { $0 + $1.progress } }
         }
+        return sync.lastSyncedAt == nil ? nil : 0
     }
 
     private func count(of status: WatchStatus) -> Int? {
@@ -344,152 +384,144 @@ struct ProfileView: View {
     /// nothing appear anywhere (M13). It gets a line here whenever it is non-zero, which keeps the
     /// three-up strip (the best-composed object on the screen) intact.
     private var minorStatusLine: String? {
-        let parts = [WatchStatus.paused, .dropped].compactMap { status -> String? in
+        // Planned joins the line (2 Sep): the plate's third tile is the episodes total now, and a
+        // plan is a smaller fact about a library than what has actually been watched.
+        let parts = [WatchStatus.planned, .paused, .dropped].compactMap { status -> String? in
             guard let n = count(of: status), n > 0 else { return nil }
             return "\(n) \(Copy.Status(status).lowercased())"
         }
         return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
-    /// Three counts on one plate — the one designed block on a settings surface, so it stays
-    /// designed at accessibility sizes.
-    ///
-    /// At AX1 the strip collapsed into a left-aligned column inside a plate whose right 70 % was
-    /// empty and whose dividers vanished (M2). Each stat is now a full-width row — numeral leading,
-    /// caps label trailing, `separatorQuiet` between — so the numbers stay the hero AND the plate
-    /// is composed. Reflowing to `label:value` rows would have made this the fourth identical
-    /// label/value plate on the screen, which is the one thing it exists not to be.
-    private var stats: some View {
-        VStack(spacing: 0) {
-            if isAX {
-                ForEach(Array(libraryStats.enumerated()), id: \.element.id) { i, stat in
-                    if i > 0 {
-                        Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
-                    }
-                    statCell(stat) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(stat.value)
-                                .type(ThemeType.numberXL)
-                                .foregroundStyle(ThemeColor.textPrimary)
-                                .numericFact(stat.count ?? 0)
-                            Spacer(minLength: ThemeSpace.x4)
-                            Text(stat.label)
-                                .type(ThemeType.sectionLabel)
-                                .textCase(.uppercase)
-                                .foregroundStyle(ThemeColor.textTertiary)
-                                .multilineTextAlignment(.trailing)
-                        }
-                        .padding(.horizontal, ThemeSpace.x4)
-                        .padding(.vertical, ThemeSpace.x3)
-                    }
-                }
-            } else {
-                HStack(spacing: 0) {
-                    ForEach(Array(libraryStats.enumerated()), id: \.element.id) { i, stat in
-                        if i > 0 {
-                            Rectangle().fill(ThemeColor.separatorQuiet).frame(width: 1, height: 30)
-                        }
-                        statCell(stat) {
-                            VStack(spacing: ThemeSpace.x1) {
-                                Text(stat.value)
-                                    .type(ThemeType.numberXL)
-                                    .foregroundStyle(ThemeColor.textPrimary)
-                                    // Not `.contentTransition(.numericText())` raw: SwiftUI does not
-                                    // disable a numeric roll under Reduce Motion, and the check
-                                    // lives in `numericFact` once, for exactly these numbers.
-                                    .numericFact(stat.count ?? 0)
-                                Text(stat.label)
-                                    .type(ThemeType.sectionLabel)
-                                    .textCase(.uppercase)
-                                    .foregroundStyle(ThemeColor.textTertiary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, ThemeSpace.x4)
-                        }
-                    }
-                }
-            }
-            if let minorStatusLine {
-                Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
-                Text(minorStatusLine)
-                    .type(ThemeType.metadata)
-                    .foregroundStyle(ThemeColor.textTertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, ThemeSpace.x3)
-            }
+    // MARK: - Watching (the person's television, as art)
+
+    /// The shows the account is watching, in the order Today ranks them: what has a new episode,
+    /// then what is mid-season, then the rest. This is the one thing a profile in a TV app should
+    /// show that a settings screen cannot — the screen used to go straight from three numbers to
+    /// a sync row. Netflix's own profile tab opens on the person's list for the same reason.
+    private var shelfItems: [Franchise] {
+        let live = appModel.watchingShelf
+        if live.count >= 3 { return Array(live.prefix(12)) }
+        var seen = Set(live.map(\.id))
+        var wider = live
+        for f in appModel.library where f.effectiveStatus == .watching && seen.insert(f.id).inserted {
+            wider.append(f)
         }
-        .surface(.plate, radius: ThemeRadius.row)
-        // Measured, not guessed: the wash's ramp has to finish above this edge or the plate ends up
-        // containing the end of a gradient — a visible horizontal tone step across its own ground.
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
-            if scrollOffset <= 1 { statsTop = y }
-        }
-        .accessibilityElement(children: .contain)
+        return Array(wider.prefix(12))
     }
 
-    /// One cell. A Button when the presenter can act on it, a plain fact when it cannot — the
-    /// tiles were the three most obvious navigation targets in the product and did nothing (M7).
     @ViewBuilder
-    private func statCell<Content: View>(_ stat: LibraryStat,
-                                         @ViewBuilder content: () -> Content) -> some View {
-        let spoken = "\(stat.count.map { "\($0)" } ?? "Unavailable") \(stat.label.lowercased())"
-        if let onOpenLibrary, stat.count != nil {
-            Button { dismiss(); onOpenLibrary(stat.status) } label: { content() }
-                .buttonStyle(GroupedRowPressStyle())
-                .accessibilityLabel(spoken)
-                .accessibilityHint("Opens all titles filtered to \(stat.label.lowercased())")
-        } else {
-            content()
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(spoken)
+    private var watchingShelf: some View {
+        let items = shelfItems
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
+                SectionHeaderRow(Copy.Label.watching,
+                                 actionLabel: onOpenLibrary == nil ? nil : Copy.Action.seeAll,
+                                 action: onOpenLibrary.map { open in { dismiss(); open(.watching) } })
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
+                        ForEach(items) { f in
+                            let caption = shelfCaption(f)
+                            ShelfCard(title: f.title,
+                                      caption: caption?.text,
+                                      captionIsLead: caption?.lead ?? false,
+                                      poster: f.portraitArt,
+                                      slot: .todayShelf) {
+                                if let onOpenDetail { dismiss(); onOpenDetail(f.id) }
+                            }
+                            .accessibilityHint(onOpenDetail == nil ? "" : Copy.Accessibility.opensTheShowHint)
+                        }
+                    }
+                    .padding(.leading, ThemeMetrics.gutter)
+
+                }
+                .scrollIndicators(.hidden)
+                .scrollClipDisabled()
+                // Art may run off the trailing edge; TYPE may not. See `shelfScroller`.
+                .shelfScroller()
+                // The section sits inside the page gutter; the shelf runs edge to edge.
+                .padding(.horizontal, -ThemeMetrics.gutter)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
+                // At REST only, and only when it moved: `<= 1` was also true through a
+                // rubber-band pull, where the shelf's global edge changes every frame — and each
+                // write re-ran this whole body under the finger (sampled 5 Sep: 500-ms stalls on
+                // a pull at the top). `shelfTop` is the resting edge; it is measured once.
+                if scroll.y == 0, abs(y - shelfTop) > 0.5 { shelfTop = y }
+            }
+        }
+    }
+
+    /// Today's shelf-caption grammar, verbatim: a forward-looking fact is amber, a state is grey.
+    private func shelfCaption(_ f: Franchise) -> (text: String, lead: Bool)? {
+        switch appModel.shelfState(of: f) {
+        case .newEpisode:
+            // The count Today's badge carries at the same minute (review, 5 Sep: "New
+            // episode" here, "3 EPISODES BEHIND" there).
+            let behind = f.releasingPart.map { $0.behind(now: now, anchor: f.timeAnchor) } ?? 0
+            // Amber only while the drop is today's fact (review i4): the Up next card prints the
+            // same count in grey, and one screen may not read one number two ways.
+            let struck = f.lastAired(now: now).map { Formatting.dayDiff(ts: $0, now: now, anchor: f.timeAnchor) == 0 } ?? false
+            return behind > 1 ? (Copy.Progress.behind(behind), struck) : (Copy.Label.newEpisode, true)
+        case .backlog:
+            guard let p = f.resumePart else { return nil }
+            return (Copy.Progress.episodeNext(p.progress + 1), false)
+        case .airingWait:
+            if let at = f.nextAiring(now: now) {
+                return (TemporalCopy.airsCompact(at: at, now: now, source: f.source), true)
+            }
+            return (Copy.Progress.caughtUp, false)
+        case .premiereSoon:
+            return (TemporalCopy.returns(at: appModel.nextPremiere(of: f), now: now, source: f.source), true)
+        case nil: return (Copy.Progress.caughtUp, false)
         }
     }
 
     // MARK: - Sync
 
+    /// Drawn only while something failed: the summary row is a heading, not a button, because
+    /// the plate below it carries real controls and a row cannot be two things.
     private var syncSection: some View {
-        ProfileSection(label: "Sync") {
-            if sync.failedChanges.isEmpty {
-                ProfileRowLabel(symbol: syncGlyph,
-                                symbolTint: syncTint,
-                                title: syncTitle,
-                                subtitle: syncStamp,
-                                separator: false) {
-                    // While a check is in flight the glyph column holds the ONE indicator (see
-                    // `ProfileRowLabel`) and nothing is drawn here: the shipped row showed a
-                    // rotating-arrows symbol AND a `ProgressView` for one wait (M4).
-                    if syncCanRefresh {
-                        // 13-pt `listAction`, not 17-pt semibold: a subordinate control may not be
-                        // set at the same size and weight as the row title it modifies (M9).
-                        Button(AccountCopy.syncNow) { Task { await appModel.reload() } }
-                            .buttonStyle(InlineLinkButtonStyle())
-                    }
-                }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(syncStamp.map { "\(syncTitle). \($0)" } ?? syncTitle)
-            } else {
-                // Failing: the summary row is a heading, not a button, because the plate below it
-                // carries real controls and a row cannot be two things.
-                ProfileRowLabel(symbol: syncGlyph,
-                                symbolTint: syncTint,
-                                title: syncTitle,
-                                separator: true) {
-                    if sync.canRetryAny && sync.failedChanges.count > 1 {
-                        Button(AccountCopy.retryAll) { sync.retryAll() }
-                            .buttonStyle(InlineLinkButtonStyle())
-                    }
-                }
-
-                // No glyph on the detail rows: the section's state is declared ONCE, above them. A
-                // stack of identical triangles down one plate is the same defect as a column of
-                // grey check discs — the alarm stops being an alarm.
-                ForEach(Array(sync.failedChanges.enumerated()), id: \.element.id) { i, change in
-                    failureRow(change, isLast: i == sync.failedChanges.count - 1)
+        GroupedList(header: "Sync") {
+            ProfileRowLabel(symbol: syncGlyph,
+                            symbolTint: syncTint,
+                            title: syncTitle,
+                            separator: true) {
+                if sync.canRetryAny && sync.failedChanges.count > 1 {
+                    Button(AccountCopy.retryAll) { sync.retryAll() }
+                        .buttonStyle(InlineLinkButtonStyle())
                 }
             }
+
+            // No glyph on the detail rows: the section's state is declared ONCE, above them. A
+            // stack of identical triangles down one plate is the same defect as a column of
+            // grey check discs — the alarm stops being an alarm.
+            ForEach(Array(sync.failedChanges.enumerated()), id: \.element.id) { i, change in
+                failureRow(change, isLast: i == sync.failedChanges.count - 1)
+            }
         }
+    }
+
+    /// The calm state, as the footnote iOS prints under a group ("Last backup: …"): one line,
+    /// no plate, no button. A "Sync" plate with its own control beside a check mark was the most
+    /// SaaS object on the screen for a fact that needs no action while it is true.
+    private var syncFootnote: some View {
+        HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+            if let glyph = syncGlyph {
+                Image(systemName: glyph)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(syncTint)
+                    .accessibilityHidden(true)
+            } else {
+                ProgressView().controlSize(.mini).tint(ThemeColor.textTertiary)
+            }
+            Text([syncTitle, syncStamp].compactMap { $0 }.joined(separator: " \u{00B7} "))
+                .type(ThemeType.caption)
+                .foregroundStyle(ThemeColor.textTertiary)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, ThemeSpace.x4)
+        .accessibilityElement(children: .combine)
     }
 
     /// One failed write, with the two things a user can actually do about it.
@@ -615,8 +647,7 @@ struct ProfileView: View {
         // twice. Three slots, three words, same information: `Up to date` / `Checked just now` /
         // `Sync` (M12). Mapped here rather than in `Copy.swift`, which this track does not own; the
         // string change is filed as a shared request, and this becomes a no-op when it lands.
-        return Copy.State.everythingSynced == "Everything synced"
-            ? AccountCopy.upToDate : Copy.State.everythingSynced
+        return AccountCopy.upToDate
     }
 
     /// Just the WHEN — and never a stamp of the last successful check underneath "1 change couldn't
@@ -679,66 +710,86 @@ struct ProfileView: View {
     // MARK: - Settings
 
     private var settings: some View {
-        ProfileSection(label: "Settings") {
-            // A PUSH, not a menu.
-            //
-            // The row has always drawn `chevron.forward` and always opened a `Menu`, and the menu
-            // anchored itself OVER the row that raised it — so the one control the user had just
-            // touched was the one thing hidden while they chose (m12) — while both items wrapped to
-            // two lines inside a ~180-pt popover, because a format plus what it is for does not fit
-            // on a menu row. A pushed screen is what the chevron already promised, gives each
-            // format a title and a real support line, and covers nothing.
-            NavigationLink {
-                ExportOptionsView(appModel: appModel, indicatorSize: indicatorSize)
-            } label: {
-                ProfileRowLabel(symbol: "square.and.arrow.up",
-                                title: AccountCopy.export,
-                                subtitle: AccountCopy.exportSubtitle) {
-                    // `chevron.up.chevron.down` is the value-picker glyph — it implies a value the
-                    // user can change. Up/down is reserved for real pickers such as Sort by.
-                    trailingGlyph("chevron.forward", tint: ThemeColor.textDisabled, scale: 0.86)
-                }
-            }
-            .buttonStyle(GroupedRowPressStyle())
-
+        GroupedList(header: "Settings") {
             ProfileRow(symbol: "bell",
                        title: "Notifications",
-                       // "the Live Activity" presumed knowledge of a capitalised Apple product
-                       // term, and there is more than one of them.
-                       subtitle: "Episode alerts and Live Activities",
-                       action: { open(URL(string: UIApplication.openSettingsURLString)) }) {
-                // This row leaves the app. An external arrow says so; a chevron would not — and an
-                // arrow glyph contributes nothing to VoiceOver, which announced this identically to
-                // the in-app Export row (m1).
-                trailingGlyph("arrow.up.forward", tint: ThemeColor.textTertiary)
+                       action: { notificationsTapped() }) {
+                HStack(spacing: ThemeSpace.x2) {
+                    // The row said nothing about the one thing it is for. A user who declined
+                    // the system prompt had no way to learn, here, that alerts are off.
+                    // The state, always (interactive review: the row carried no value and threw
+                    // the user out to Settings on a not-yet-asked account).
+                    Text(notificationsOn.map { $0 ? Copy.State.on : Copy.State.off } ?? Copy.State.ask)
+                        .type(ThemeType.metadata)
+                        .foregroundStyle(ThemeColor.textTertiary)
+                    // This row leaves the app. An external arrow says so; a chevron would not —
+                    // and an arrow glyph contributes nothing to VoiceOver, which announced this
+                    // identically to the in-app Export row (m1).
+                    trailingGlyph("arrow.up.forward", tint: ThemeColor.textTertiary)
+                }
             }
+            .accessibilityValue(notificationsOn.map { $0 ? Copy.State.on : Copy.State.off } ?? "")
             .accessibilityHint("Opens Settings")
+            .task { await refreshNotificationsOn() }
+            // Back from Settings: the sheet is still up, so the row re-reads the answer.
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                Task { await refreshNotificationsOn() }
+            }
 
             ProfileRowLabel(symbol: "hand.tap",
-                            title: "Haptics",
-                            // One line, and it names what the switch actually governs: the app
-                            // fires selection and confirmation feedback too, not only marks (m4, m9).
-                            subtitle: "Vibration on marks and confirmations",
-                            separator: false) {
+                            title: "Haptics") {
                 // `.fixedSize()` is the whole fix for the stretched switch: without it the row's
                 // layout stretched the track to ~61×29 against the native 51×31 and rendered the
-                // knob as a rounded pill instead of a circle — the most immediate "this is not a
-                // real iOS app" tell there is. It is a real `Toggle`, not inside a `Button`'s
-                // label, so VoiceOver announces the switch trait and its On/Off value.
-                //
-                // Amber, not system green: a switch reports selection, and selection in this app is
-                // one colour. The `alignmentGuide` keeps it on the row's first line at AX sizes,
-                // where a `labelsHidden` toggle carries no text baseline of its own.
+                // knob as a rounded pill instead of a circle. It is a real `Toggle`, not inside a
+                // `Button`'s label, so VoiceOver announces the switch trait and its On/Off value.
+                // Amber, not system green: a switch reports selection, and selection in this app
+                // is one colour.
                 Toggle("Haptics", isOn: $hapticsOn)
                     .labelsHidden()
                     .fixedSize()
                     .tint(ThemeColor.accent)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             }
+
+            #if DEBUG
+            // DEBUG ONLY. The QA account is permanently caught up, so the states Today exists to
+            // serve cannot be reached on a real device by tapping the icon — and a launch
+            // argument (`-demoBusy 1`) is not something you can pass from the Home screen. This
+            // row is the same fixture behind a switch, so the busy screen can be FELT on a phone
+            // rather than judged from a video (user, 6 Sep: "I need to see it visually man on my
+            // phone to get a feel of it"). Compiled out of Release entirely.
+            ProfileRowLabel(symbol: "ladybug",
+                            title: "Demo: episode waiting") {
+                Toggle("Demo: episode waiting", isOn: $demoBusy)
+                    .labelsHidden()
+                    .fixedSize()
+                    .tint(ThemeColor.accent)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
+            }
+            .onChange(of: demoBusy) { _, on in
+                UserDefaults.standard.set(on, forKey: "demoBusy")
+                // The fixture is applied as the payload decodes, so the library has to come
+                // round again for the switch to mean anything.
+                Task { await appModel.reload() }
+            }
+            #endif
+
+            // A PUSH, not a menu: the pushed screen gives each format a title and a real support
+            // line, and covers nothing (the menu anchored itself over the row that raised it).
+            NavigationLink {
+                ExportOptionsView(appModel: appModel, indicatorSize: indicatorSize)
+            } label: {
+                ProfileRowLabel(symbol: "square.and.arrow.up",
+                                title: AccountCopy.export,
+                                separator: false) {
+                    trailingGlyph("chevron.forward", tint: ThemeColor.textDisabled, scale: 0.86)
+                }
+            }
+            .buttonStyle(GroupedRowPressStyle())
         }
         .onChange(of: hapticsOn) { _, on in
             FeedbackCoordinator.enabled = on
-            if on { FeedbackCoordinator.fire(.selection) }
+            // The system switch already plays its own click; a second one was a double tap.
         }
     }
 
@@ -756,7 +807,7 @@ struct ProfileView: View {
     /// this screen is a verb phrase in sentence case, including "Contact support", which is an
     /// action and not the name of a document. Two conventions, one rule, no exceptions.
     private var accountSection: some View {
-        ProfileSection(label: "Account") {
+        GroupedList(header: "Account") {
             legalRow(symbol: "hand.raised", title: AccountCopy.privacy, url: AppConfig.privacyURL,
                      hint: "Opens in Safari", isLink: true)
             legalRow(symbol: "doc.text", title: AccountCopy.terms, url: AppConfig.termsURL,
@@ -791,7 +842,7 @@ struct ProfileView: View {
     /// a fully saturated destructive icon on a routine, reversible action made Sign out and Delete
     /// account read as a pair of equal choices (M8).
     private var signOutSection: some View {
-        ProfileSection {
+        GroupedList {
             ProfileRow(symbol: "rectangle.portrait.and.arrow.right",
                        symbolTint: ThemeColor.textSecondary,
                        title: AccountCopy.signOut,
@@ -814,7 +865,7 @@ struct ProfileView: View {
     /// Its own plate, below the colophon: one of these two rows is reversible and the other is not,
     /// and the layout should never let a thumb confuse them.
     private var deleteSection: some View {
-        ProfileSection {
+        GroupedList {
             ProfileRow(symbol: "trash",
                        symbolTint: ThemeColor.destructive,
                        title: AccountCopy.delete,
@@ -841,8 +892,11 @@ struct ProfileView: View {
         guard pending > 0 else {
             return "Your library stays in your account \u{2014} sign back in any time."
         }
-        return "Your library stays in your account. \(Copy.changes(pending)) hasn\u{2019}t synced yet — "
-            + "it stays on this device and uploads the next time you sign in."
+        // "3 changes hasn't" — the one verb in the app that has to agree with its count.
+        let verb = pending == 1 ? "hasn\u{2019}t" : "haven\u{2019}t"
+        let pronoun = pending == 1 ? "it stays" : "they stay"
+        return "Your library stays in your account. \(Copy.changes(pending)) \(verb) synced yet — "
+            + "\(pronoun) on this device and upload the next time you sign in."
     }
 
     /// The blast radius, in the user's own numbers. The strongest copy in the app; not shortened.
@@ -853,14 +907,37 @@ struct ProfileView: View {
             + ". It can\u{2019}t be undone."
     }
 
+    /// Not asked yet → the system prompt here, then the row reads its answer; asked → Settings.
+    private func notificationsTapped() {
+        if notificationsOn == nil {
+            Task { @MainActor in
+                _ = await EpisodeNotifications.shared.requestPermissionIfNeeded()
+                await refreshNotificationsOn()
+            }
+        } else {
+            open(URL(string: UIApplication.openSettingsURLString))
+        }
+    }
+
+    private func refreshNotificationsOn() async {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        switch status {
+        case .authorized, .provisional, .ephemeral: notificationsOn = true
+        case .denied: notificationsOn = false
+        default: notificationsOn = nil
+        }
+    }
+
     private func performSignOut() {
         FeedbackCoordinator.fire(.destructive)
         withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) {
             signingOut = true
         }
         Task {
-            await auth.signOut()
+            let signedOut = await auth.signOut()
             signingOut = false
+            // Deletion had a failure alert; sign-out had none. Same moment, same answer.
+            if !signedOut { signOutFailed = true }
         }
     }
 
@@ -892,16 +969,10 @@ struct ProfileView: View {
     /// set as fine print, because that is what it is.
     private var colophon: some View {
         VStack(spacing: ThemeSpace.x2) {
-            HStack(spacing: 7) {
-                PreviouslyMark(width: 11, detail: .none)
-                // The terminal period is ACCENT, here as on Today. It rendered white in the footer
-                // and accent in the header, so the logo had two versions inside one app (m2). The
-                // lockup is filed as a shared request to hoist `Wordmark` out of `TodayView`; until
-                // it lands the spelling is identical, not merely similar.
-                Text("Previously\(Text(".").foregroundStyle(ThemeColor.accent))")
-                    .type(ThemeType.brandWordmark)
-                    .foregroundStyle(ThemeColor.textSecondary)
-            }
+            // The shared lockup (the filed hoist landed with the cohesion pass): one drawing of
+            // the logo for the whole app — this footer had drifted into an accent-period variant
+            // while Today's header drew the period in text ink.
+            Wordmark(colophon: true)
             Text(version)
                 .type(ThemeType.caption)
                 .foregroundStyle(ThemeColor.textTertiary)
@@ -964,10 +1035,10 @@ struct ProfileView: View {
             #if DEBUG
             return "Developer session"
             #else
-            return AccountCopy.signedIn
+            return ""
             #endif
         default:
-            return AccountCopy.signedIn
+            return ""
         }
     }
 
@@ -1046,7 +1117,7 @@ private struct ExportOptionsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ProfileSection {
+                GroupedList {
                     exportRow(format: .json,
                               title: AccountCopy.exportJSON,
                               subtitle: AccountCopy.exportJSONSub,
@@ -1172,6 +1243,17 @@ private struct ProfileSnapshot: Equatable {
 ///  • It ENDS. The field used to run the whole scroll, so the SETTINGS plate was warm brown at the
 ///    top of the scroll and the ACCOUNT plate neutral grey further down — one component, two hues,
 ///    depending on scroll position. Its ramp now completes above the stats plate.
+/// The wash, travelling with the content: the ONE view on this screen that reads the scroll
+/// offset, so a scroll sample invalidates it and nothing else.
+private struct ProfileWashTravel<Content: View>: View {
+    let scroll: ScrollOffset
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content().offset(y: -max(0, scroll.y))
+    }
+}
+
 private struct ProfileWash: View {
     var tint: Color?
     /// Screen-space y where the field must be fully gone.
@@ -1251,30 +1333,9 @@ private struct ProfileWash: View {
 
 // MARK: - Section
 
-/// A labelled plate. It is deliberately not `GroupedList`: that primitive indents its header by a
-/// further 16 pt in the iOS grouped-table tradition. Everything else — the plate, the radius, the
-/// label gap — is the design system's.
-private struct ProfileSection<Content: View>: View {
-    var label: String? = nil
-    @ViewBuilder var content: () -> Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-            if let label {
-                SectionLabel(text: label)
-                    // The eyebrow aligns to the leading edge of the ROW CONTENT inside the plate it
-                    // labels — the same relationship the Arrange sheet has.
-                    .padding(.leading, ThemeSpace.x4)
-                    // VoiceOver's heading rotor is how a settings screen is skimmed. Only the
-                    // account name carried `.isHeader`, so a five-section screen had one stop.
-                    // Filed as a shared request against `SectionLabel` itself.
-                    .accessibilityAddTraits(.isHeader)
-            }
-            VStack(spacing: 0) { content() }
-                .surface(.plate, radius: ThemeRadius.row)
-        }
-    }
-}
+// `ProfileSection` folded back into `GroupedList` (cohesion pass, 30 Aug): the two had
+// converged to identical geometry, and the one thing this copy added — the `.isHeader` trait on
+// the label — now lives on the shared primitive.
 
 // MARK: - Rows
 
