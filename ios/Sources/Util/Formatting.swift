@@ -356,7 +356,10 @@ enum Formatting {
     /// "September 2026" — the month NAMED, for a calendar's own header, where the month is the one
     /// fact the panel exists to state. `fmtMonthYear`'s "SEP 2026" is a caption's abbreviation.
     static func fmtMonthNameYear(_ ts: Int64, anchor: TimeAnchor = .local) -> String {
-        string(ts, "MMMMyyyy", anchor)
+        // "MMMMy", matching Android: ICU's best-pattern lookup there answers the four-y skeleton
+        // with a pattern that has no separator ("September2026"), and one skeleton across the two
+        // platforms is the only way that stays true.
+        string(ts, "MMMMy", anchor)
     }
 
     /// Prettify a curated release string from FranchiseUpcoming. A bare ISO date or year-month

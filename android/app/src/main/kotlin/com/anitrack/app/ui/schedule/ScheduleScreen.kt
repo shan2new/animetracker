@@ -142,6 +142,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import com.anitrack.app.data.ReceiptHost
+import androidx.compose.foundation.border
+import com.anitrack.app.design.shadowToken
+import androidx.compose.ui.draw.clip
+import com.anitrack.app.ui.chrome.chromeGlass
 
 // =====================================================================================
 // SCHEDULE — the agenda.
@@ -261,6 +265,16 @@ object ScheduleReminders {
 data class ScheduleDebugState(
     val typeFilter: MediaFilter = MediaFilter.ALL,
     val hideWatched: Boolean = false,
+    /** `--ez scheduleMonthOpen true` — open with the calendar already down, for a capture. */
+    val monthOpen: Boolean = false,
+    /**
+     * `--ez scheduleDemoStates true` — the test account has no AIRED-AND-UNWATCHED airing (both
+     * past slots are watched, and Mushoku is `planned`, so its four are correctly off the
+     * calendar), so the state ladder cannot be photographed with all three rungs on real data.
+     * This draws the most recent aired airing as though it were still waiting. It changes what is
+     * DRAWN, never what is stored.
+     */
+    val demoStates: Boolean = false,
 )
 
 /** `--ez` gives a real boolean; `--es` is accepted too so one capture script can use either. */
@@ -282,6 +296,8 @@ private fun rememberScheduleDebugState(): ScheduleDebugState {
                 else -> MediaFilter.ALL
             },
             hideWatched = flag("scheduleHideWatched"),
+            monthOpen = flag("scheduleMonthOpen"),
+            demoStates = flag("scheduleDemoStates"),
         )
     }
 }
@@ -303,34 +319,18 @@ private fun Context.findActivity(): Activity? {
 /** Nothing here is a token candidate: every value belongs to this screen and to nothing else. */
 private object ScheduleMetrics {
 
-    /**
-     * "Seven and a bit fit the width, which is what says 'this scrolls'." — which is the app's
-     * minimum target, not a coincidence: [minimumTapTarget], never a second spelling of 44.
-     */
-    val cellWidth = minimumTapTarget
-
-    val cellGap = 6.dp
-
-    /** The ticker numeral's minimum box — and its disc's diameter. */
-    val numeralMin = 34.dp
-
-    /** Between two cards on one day. */
-    val cardGap = ThemeSpace.x5
-
-    /** Inside a ticker cell, between the weekday letter, the numeral and the dot. */
-    val cellStack = 3.dp
+    /** Between two airings on one day. */
+    val rowGap = ThemeSpace.x4
 
     /**
-     * The "something airs here" dot's base size. Scaled by `fontScale` at the call site, which is
-     * the Android reading of iOS's `@ScaledMetric(relativeTo: .caption)`.
+     * Between one day and the next. NOT [ThemeMetrics.sectionGap] (30): a schedule is sparse —
+     * measured on the test library ten of the window's twenty-two days carry an episode and none
+     * carries more than one — so at the section gap a feed of one-row days was half header by area,
+     * and the eyebrow floated between two rows belonging to neither.
      */
-    val dot = 5.dp
+    val dayGap = ThemeSpace.x6
 
-    /**
-     * How many cells the ticker shows. A constant, not a measurement: 44 + 6 per cell over a 393-dp
-     * screen with 16-dp gutters gives 7.2 cells, "which is what says 'this scrolls'".
-     */
-    const val TICKER_VISIBLE = 7
+
 
     /** The past recedes as a group — never the selected cell. */
     const val PAST_DIM = 0.55f
@@ -356,9 +356,6 @@ private object ScheduleMetrics {
     /** The inner gap between the day word and its date, and between the Earlier label and its meta. */
     val labelInnerGap = 5.dp
 
-
-    /** iOS `.minimumScaleFactor(0.7)` on the ticker numeral. */
-    const val NUMERAL_MIN_SCALE = 0.7f
 
     /** With Hide watched on, the departure is held long enough to be legible, not instantaneous. */
     const val HIDE_WATCHED_HOLD_MILLIS = 650L
@@ -638,7 +635,12 @@ private fun buildFeed(
         out.add(FeedItem.DayHeader(day, previousIsEmpty = i > 0 && days[i - 1].isEmpty))
         if (day.isEmpty) {
             // At reading sizes the statement lives in the header's count slot, on its own baseline.
-            if (isAX) out.add(FeedItem.EmptyDay(day))
+            // A ROW, at every size (6 Sep). Today is the day the reader is standing on, and as a
+            // fragment in the header's trailing slot it was the thinnest, emptiest thing on the
+            // screen — the one day with a header and no body. The rule that put it in the header
+            // came from the card era, when a grey line cost a third of a screen; at row density it
+            // costs 32 dp and buys today the same shape every other day has.
+            out.add(FeedItem.EmptyDay(day))
         } else {
             day.rows.forEachIndexed { i, r ->
                 out.add(FeedItem.Card(day.id, r, last = i == day.rows.lastIndex))
@@ -703,18 +705,19 @@ fun ScheduleScreen(
     /** Row ids whose mark is animating. */
     var committed by remember { mutableStateOf(emptySet<String>()) }
     var prompt by remember { mutableStateOf<WritePrompt?>(null) }
-    /** The day at the top of the feed — what the ticker highlights. Never a scroll offset. */
+    /** The day at the top of the feed — what the calendar highlights. Never a scroll offset. */
     var selectedDay by rememberSaveable { mutableStateOf(0) }
+    /**
+     * Whether the calendar is down. At rest it is NOT: the screen's whole point is that it has no
+     * date chrome until the reader asks for one.
+     */
+    var calendarOpen by rememberSaveable { mutableStateOf(debug.monthOpen) }
+    /** Any day inside the month the calendar is showing, as an offset from today. */
+    var monthAnchor by rememberSaveable { mutableStateOf(0) }
     /** Once a finger has moved the feed, the landing stops correcting. */
     var userScrolled by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
-    // Hoisted above the ticker on purpose: the ticker COLLAPSES out of the tree with the rest of the
-    // chrome when a whole-screen state settles, and iOS's rule — "collapse by height, never by a
-    // conditional: taking a scroll view out of the tree and putting it back re-creates it, and a
-    // re-created `.scrollPosition(id:)` does not re-apply" — is answered here rather than by keeping
-    // an invisible scroll container mounted and measuring.
-    val tickerState = rememberLazyListState()
 
     val filterActive = typeFilter != MediaFilter.ALL || unwatchedOnly
     val now = appModel.nowMinute
@@ -739,10 +742,14 @@ fun ScheduleScreen(
         derived.allEmpty ||
         (derived.shownEmpty && filterActive)
 
-    // "The day strip stays up while the first library loads — its days come from the clock, not the
-    // data — so the feed lands under it instead of shoving everything down 60 dp the instant the
-    // response arrives. Only a settled whole-screen state folds it away, animated."
-    val tickerCollapsed = showsWholeScreenState && phase != SchedulePhase.LOADING
+    // The demo's target: the most recent aired row. A DRAWING override — nothing is written.
+    val demoUnwatchedId = if (debug.demoStates) {
+        derived.earlier.lastOrNull()?.rows?.lastOrNull()?.id
+    } else {
+        null
+    }
+
+
 
     val staleSince = appModel.staleSince(SyncCenter.DataClass.EXACT_AIRING)
     val hasFreshness = phase == SchedulePhase.CONTENT && (appModel.sectionFailed || staleSince != null)
@@ -760,24 +767,12 @@ fun ScheduleScreen(
 
     // ---- Scrolling -------------------------------------------------------------------
 
-    fun keepTickerVisible(day: Int) {
-        val first = tickerState.firstVisibleItemIndex + AppModel.SCHEDULE_BACK
-        val target = when {
-            day < first -> day
-            day > first + ScheduleMetrics.TICKER_VISIBLE - 1 ->
-                day - ScheduleMetrics.TICKER_VISIBLE + 1
-            // "It moves only when the selected day would fall outside them, and then by the least
-            // it can."
-            else -> return
-        }
-        val clamped = target.coerceIn(AppModel.SCHEDULE_BACK, AppModel.SCHEDULE_AHEAD)
-        scope.launch { tickerState.animateScrollToItem(clamped - AppModel.SCHEDULE_BACK) }
-    }
-
     fun scrollTo(key: String, day: Int) {
         userScrolled = true
         selectedDay = day
-        keepTickerVisible(day)
+        // The calendar follows an explicit move as well as a scroll, so pressing Today with the
+        // grid open does not leave it on a month the feed has left.
+        monthAnchor = day
         val index = feed.indexOfFirst { it.key == key }
         if (index >= 0) scope.launch { listState.animateScrollToItem(index) }
     }
@@ -800,7 +795,9 @@ fun ScheduleScreen(
                 val day = reported ?: 0
                 if (day != selectedDay) {
                     selectedDay = day
-                    keepTickerVisible(day)
+                    // The calendar follows the feed across a month boundary, so opening it never
+                    // shows a month the reader has scrolled away from.
+                    monthAnchor = day
                 }
             }
     }
@@ -814,10 +811,9 @@ fun ScheduleScreen(
     }
 
     // The landing: the feed opens on TODAY — no longer its first item, now that the past sits above
-    // it — un-animated, with the ticker's first visible cell today and the past off the leading edge.
+    // it — un-animated.
     LaunchedEffect(derived.feedKey, showsWholeScreenState, feed) {
         if (userScrolled || library.isEmpty() || showsWholeScreenState) return@LaunchedEffect
-        tickerState.scrollToItem(-AppModel.SCHEDULE_BACK)
         val index = feed.indexOfFirst { it.key == "${PREFIX_DAY}0" }
         if (index >= 0) listState.scrollToItem(index)
         if (selectedDay != 0) selectedDay = 0
@@ -894,28 +890,15 @@ fun ScheduleScreen(
             Column(Modifier.fillMaxSize()) {
                 ChromeBand(
                     washCover = derived.washCover,
-                    tickerState = tickerState,
-                    tickerCollapsed = tickerCollapsed,
                     awayFromToday = awayFromToday,
                     typeFilter = typeFilter,
                     unwatchedOnly = unwatchedOnly,
                     filterActive = filterActive,
-                    selectedDay = selectedDay,
-                    counts = derived.counts,
-                    live = derived.live,
-                    todayNoon = appModel.scheduleTodayNoon,
+                    calendarOpen = calendarOpen,
                     onToday = { goToToday() },
-                    onPickDay = { offset ->
+                    onToggleCalendar = {
                         FeedbackCoordinator.fire(FeedbackToken.SELECTION)
-                        // Every cell is a target: a day with a section lands on it; an empty one
-                        // gets a section pinned for it first.
-                        val key = "$PREFIX_DAY$offset"
-                        if (feed.any { it.key == key }) {
-                            scrollTo(key, day = offset)
-                        } else {
-                            pinnedEmptyDay = offset
-                            pendingPick = offset
-                        }
+                        calendarOpen = !calendarOpen
                     },
                     // The haptic fires from the MUTATION, not from an observer, so one transaction
                     // is one haptic.
@@ -923,12 +906,13 @@ fun ScheduleScreen(
                     onHideWatched = { unwatchedOnly = it },
                 )
 
+                Box(Modifier.weight(1f)) {
                 PreviouslyPullToRefresh(
                     onRefresh = { appModel.reload() },
                     // Schedule draws no bar spinner — the day strip is what says the screen is
                     // alive — so there is nothing for the pull to stand down for.
                     onDrivingChange = {},
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxSize(),
                 ) {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
                         val viewportHeight = maxHeight
@@ -957,6 +941,7 @@ fun ScheduleScreen(
                                     isAX = isAX,
                                     reduceMotion = reduceMotion,
                                     committed = committed,
+                                    demoUnwatchedId = demoUnwatchedId,
                                     // One spec set for every row: `uiSnappy` placement is the feed's
                                     // own re-layout animation, and `uiGentle` is the fade the stale
                                     // strip needs so it does not snap in and shove the rows down.
@@ -983,8 +968,45 @@ fun ScheduleScreen(
                         }
                     }
                 }
+
+                // The calendar OVERLAYS the feed (Google Calendar's month dropdown), it does not
+                // push it: 500 dp of grid inserted above a lazy list threw the reader's place three
+                // screens down and back again on every toggle. It lives INSIDE the feed's own box,
+                // below the chrome band, so it hangs from the bar by construction rather than by an
+                // arithmetic top inset — as a child of the screen's root it was drawn over the word
+                // "Schedule". Mounted only while it is down, because a held-at-zero-alpha overlay
+                // over a scrolling list is a composited layer per frame.
+                CalendarOverlay(
+                visible = calendarOpen,
+                todayNoon = appModel.scheduleTodayNoon,
+                counts = derived.counts,
+                live = derived.live,
+                selected = selectedDay,
+                monthAnchor = monthAnchor,
+                onMonthAnchor = { monthAnchor = it },
+                onDismiss = {
+                    FeedbackCoordinator.fire(FeedbackToken.SELECTION)
+                    calendarOpen = false
+                },
+                onPick = { offset ->
+                    FeedbackCoordinator.fire(FeedbackToken.SELECTION)
+                    // A pick closes the calendar. Leaving it down over the day it just took you to
+                    // means the answer is hidden behind the question.
+                    calendarOpen = false
+                    // Every cell is a target: a day with a section lands on it; an empty one gets
+                    // a section pinned for it first.
+                    val key = "$PREFIX_DAY$offset"
+                    if (feed.any { it.key == key }) {
+                        scrollTo(key, day = offset)
+                    } else {
+                        pinnedEmptyDay = offset
+                        pendingPick = offset
+                    }
+                },
+                )
             }
         }
+    }
     }
 
     prompt?.let { p ->
@@ -1052,18 +1074,13 @@ private fun topAgendaDay(state: LazyListState): Int? {
 @Composable
 private fun ChromeBand(
     washCover: String?,
-    tickerState: LazyListState,
-    tickerCollapsed: Boolean,
     awayFromToday: Boolean,
     typeFilter: MediaFilter,
     unwatchedOnly: Boolean,
     filterActive: Boolean,
-    selectedDay: Int,
-    counts: Map<Int, Int>,
-    live: Set<Int>,
-    todayNoon: Long,
+    calendarOpen: Boolean,
     onToday: () -> Unit,
-    onPickDay: (Int) -> Unit,
+    onToggleCalendar: () -> Unit,
     onTypeFilter: (MediaFilter) -> Unit,
     onHideWatched: (Boolean) -> Unit,
 ) {
@@ -1087,7 +1104,8 @@ private fun ChromeBand(
                     val h = with(density) { size.height.toDp() }
                     if (h != measured) measured = h
                 }
-                .padding(bottom = if (tickerCollapsed) 0.dp else ThemeSpace.x2),
+                // Only the filter chips can give this band height, so only they earn its padding.
+                .padding(bottom = if (filterActive) ThemeSpace.x2 else 0.dp),
         ) {
             // Inline, never a large title: "a large title collapses on the first scroll and moves
             // the top safe area ~50 pt mid-flight, under a ticker that has to hold still."
@@ -1103,6 +1121,11 @@ private fun ChromeBand(
                     }
                 },
                 trailing = {
+                    // The calendar's switch. A TAP, not a pull — Fantastical pulls its DayTicker
+                    // down into a month, but this screen already owns the pull gesture for refresh.
+                    // ONE glyph in both states, tinted when the grid is down: a control that
+                    // changes its symbol on press reads as a different control.
+                    CalendarButton(open = calendarOpen, onToggle = onToggleCalendar)
                     FilterMenuButton(
                         typeFilter = typeFilter,
                         unwatchedOnly = unwatchedOnly,
@@ -1112,23 +1135,6 @@ private fun ChromeBand(
                     )
                 },
             )
-
-            // Collapse by HEIGHT, animated — never a bare `if`. The ticker's scroll position lives
-            // above this composable for the same reason.
-            AnimatedVisibility(
-                visible = !tickerCollapsed,
-                enter = fadeIn(ThemeMotion.uiGentle()) + expandVertically(ThemeMotion.uiGentle()),
-                exit = fadeOut(ThemeMotion.uiGentle()) + shrinkVertically(ThemeMotion.uiGentle()),
-            ) {
-                Ticker(
-                    state = tickerState,
-                    selectedDay = selectedDay,
-                    counts = counts,
-                    live = live,
-                    todayNoon = todayNoon,
-                    onPickDay = onPickDay,
-                )
-            }
 
             // Drawn in the CHROME, not in the feed — "so a reader who filters, leaves and comes back
             // is never shown a schedule that merely looks thin."
@@ -1175,6 +1181,119 @@ private fun TodayButton(onToday: () -> Unit) {
             onClick(label = Copy.Schedule.scrollToTodayHint) { onToday(); true }
         },
     )
+}
+
+/** The bar control that brings the month grid down over the feed. */
+@Composable
+private fun CalendarButton(open: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(minimumTapTarget)
+            .clickable(
+                interactionSource = null,
+                indication = PressStyle.control,
+                role = Role.Button,
+                onClick = onToggle,
+            )
+            .semantics(mergeDescendants = true) {
+                contentDescription = Copy.Schedule.calendar
+                stateDescription =
+                    if (open) Copy.Schedule.calendarShown else Copy.Schedule.calendarHidden
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(ScheduleMetrics.filterDisc)
+                .background(
+                    color = if (open) ThemeColor.accentSoft else Color.Transparent,
+                    shape = CircleShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                imageVector = rememberSymbol(PreviouslyIcons.CalendarMonth),
+                contentDescription = null,
+                modifier = Modifier.size(materialGlyphBox(ScheduleMetrics.filterGlyph)),
+                colorFilter = ColorFilter.tint(
+                    if (open) ThemeColor.accent else ThemeColor.textPrimary,
+                ),
+            )
+        }
+    }
+}
+
+/**
+ * The calendar, its scrim, and the rules for getting out of it.
+ *
+ * Anywhere off the grid closes it, as a menu does. There is no dimming of the feed: the grid has
+ * its own surface and a tap-to-dismiss, and a scrim over a schedule the reader is trying to read
+ * against is theatre.
+ */
+@Composable
+private fun CalendarOverlay(
+    visible: Boolean,
+    todayNoon: Long,
+    counts: Map<Int, Int>,
+    live: Set<Int>,
+    selected: Int,
+    monthAnchor: Int,
+    onMonthAnchor: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    onPick: (Int) -> Unit,
+) {
+    // The transition lives HERE rather than at the call site: nested inside the screen's `Column`,
+    // Kotlin resolved `AnimatedVisibility` to the `ColumnScope` overload through the outer implicit
+    // receiver and refused the call. In its own composable there is no such receiver.
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(ThemeMotion.uiSnappy()) + expandVertically(ThemeMotion.uiSnappy()),
+        exit = fadeOut(ThemeMotion.uiSnappy()) + shrinkVertically(ThemeMotion.uiSnappy()),
+    ) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = null,
+                indication = null,
+                onClick = onDismiss,
+            ),
+    ) {
+        val available = maxHeight - ThemeMetrics.tabBarClearance
+        val shape = ContinuousCornerShape(ThemeRadius.card)
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = ThemeSpace.x1)
+                .padding(horizontal = ThemeSpace.x3)
+                // GLASS over the feed, not a flat grey slab — the panel is chrome that floats,
+                // which is what every other floating surface in the app is made of. `chromeGlass`
+                // is the app's one sanctioned entry to it (and its Reduce-Transparency branch is an
+                // opaque `surfaceFloating`, which is exactly what a calendar wants when the device
+                // cannot blur). The canvas veil UNDER it is what keeps the numerals legible over
+                // busy art, the same pairing the bars use.
+                .shadowToken(ShadowToken.Card, shape)
+                .clip(shape)
+                .background(ThemeColor.canvas.copy(alpha = 0.72f))
+                .chromeGlass(shape)
+                .border(1.dp, ThemeColor.stroke, shape)
+                // The panel eats its own taps so a miss inside it does not dismiss.
+                .clickable(interactionSource = null, indication = null, onClick = {}),
+        ) {
+            ScheduleMonthGrid(
+                todayNoon = todayNoon,
+                counts = counts,
+                live = live,
+                selected = selected,
+                window = AppModel.SCHEDULE_BACK..AppModel.SCHEDULE_AHEAD,
+                monthAnchor = monthAnchor,
+                maxHeight = available,
+                onMonthAnchor = onMonthAnchor,
+                onPick = onPick,
+            )
+        }
+    }
+    }
 }
 
 /**
@@ -1375,210 +1494,6 @@ private fun FilterChips(
 // The ticker
 // -------------------------------------------------------------------------------------
 
-/**
- * Twenty-two cells, always all of them, whether or not the feed carries that day.
- *
- * iOS needs two nested-scroll defences here — a horizontal scroll view inside a `safeAreaInset` is
- * greedy on its cross axis, and it inherits the feed's tab-bar content margins through the
- * environment. Neither exists in Compose: a `LazyRow` in a `Column` wraps its own height and
- * inherits no padding from a sibling, so both are dropped rather than translated.
- */
-@Composable
-private fun Ticker(
-    state: LazyListState,
-    selectedDay: Int,
-    counts: Map<Int, Int>,
-    live: Set<Int>,
-    todayNoon: Long,
-    onPickDay: (Int) -> Unit,
-) {
-    val offsets = remember { (AppModel.SCHEDULE_BACK..AppModel.SCHEDULE_AHEAD).toList() }
-    LazyRow(
-        state = state,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = ThemeSpace.x1)
-            .semantics { contentDescription = Copy.Schedule.ticker },
-        contentPadding = PaddingValues(horizontal = ThemeMetrics.gutter),
-        horizontalArrangement = Arrangement.spacedBy(ScheduleMetrics.cellGap),
-    ) {
-        items(items = offsets, key = { it }) { offset ->
-            TickerCell(
-                offset = offset,
-                todayNoon = todayNoon,
-                count = counts[offset] ?: 0,
-                live = live.contains(offset),
-                selected = offset == selectedDay,
-                onPick = { onPickDay(offset) },
-            )
-        }
-    }
-}
-
-/**
- * One day in the strip.
- *
- * Three decisions here, each quoted from the source:
- *
- *  * **The disc.** "Calendar's own grammar: today is the filled disc, the selected day a quiet one.
- *    A stroked rounded square read as a form control." Amber is today's alone in this control, so
- *    the selected cell gets a neutral `surfaceRaised` disc — the app's one exception to "amber
- *    selection is legal STATE".
- *  * **The ink.** "A day with nothing on it is not a target and looks like one: primary ink only for
- *    the days the feed can land on. Every cell used to wear the same white, and a tap on '5' that
- *    did nothing read as a broken control rather than as an empty Saturday."
- *  * **The top line.** "The first of a month names the month where its weekday letter would go — the
- *    numerals alone cannot say that '2' comes after '31'."
- */
-/** The selected ticker cell's ring — the day at the top of the feed. */
-private val ringColor = ThemeColor.strokeStrong
-private val ringWidth = 1.5.dp
-
-@Composable
-private fun TickerCell(
-    offset: Int,
-    todayNoon: Long,
-    count: Int,
-    live: Boolean,
-    selected: Boolean,
-    onPick: () -> Unit,
-) {
-    val ts = todayNoon + offset * Formatting.D
-    val parts = remember(ts) { Formatting.localParts(ts) }
-    val isToday = offset == 0
-    val past = offset < 0
-    // The day you are LOOKING AT is a ring; today is the filled disc. Every cell is a target.
-    val ring = selected && !isToday
-
-    val top = remember(ts) {
-        if (parts.d == 1) {
-            monthWord(ts)
-        } else {
-            // Three letters (i2-13): a rolling window from today opened "S S M T W T F S".
-            Formatting.weekdayShortMonFirst(Formatting.localMondayCol(ts)).uppercase()
-        }
-    }
-
-    val fade = animateFloatAsState(
-        targetValue = if (past && !selected) ScheduleMetrics.PAST_DIM else 1f,
-        animationSpec = motion(MotionToken.UI_MICRO),
-        label = "tickerCellFade",
-    )
-    val disc = animateColorAsState(
-        targetValue = if (isToday) ThemeColor.accent else Color.Transparent,
-        animationSpec = motion(MotionToken.UI_MICRO),
-        label = "tickerCellDisc",
-    )
-
-    // "Thursday 3 September" — the locale's own full weekday + month + day skeleton, never a
-    // hand-assembled date.
-    val spokenLabel = remember(ts) { Formatting.fmtTodayDate(ts) }
-    val spokenValue = listOfNotNull(
-        Copy.Schedule.selected.takeIf { selected },
-        Copy.Schedule.today.takeIf { isToday },
-        if (count > 0) Copy.episodes(count) else Copy.Schedule.noEpisodes,
-    ).joinToString(", ")
-
-    val dotSize = ScheduleMetrics.dot * LocalDensity.current.fontScale
-    val highContrast = rememberHighTextContrast()
-
-    Column(
-        modifier = Modifier
-            .width(ScheduleMetrics.cellWidth)
-            .defaultMinSize(minHeight = minimumTapTarget)
-            .graphicsLayer { alpha = fade.value }
-            .clickable(
-                interactionSource = null,
-                // The app's one press language for a control with a ground of its own. iOS's
-                // `TickerCellPressStyle` also dims to 0.7; the compression is the half that carries
-                // the feedback, and a second press feel for one control is what this token prevents.
-                indication = PressStyle.control,
-                role = Role.Button,
-                onClick = onPick,
-            )
-            .semantics(mergeDescendants = true) {
-                contentDescription = spokenLabel
-                stateDescription = spokenValue
-            },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(ScheduleMetrics.cellStack),
-    ) {
-        BasicText(
-            text = top,
-            style = ThemeType.caption,
-            maxLines = 1,
-            color = ColorProducer { if (isToday) ThemeColor.accent else ThemeColor.textTertiary },
-        )
-
-        Box(
-            Modifier
-                .size(ScheduleMetrics.numeralMin)
-                // Read in the DRAW phase: a selection change costs one node's draw, not the strip's
-                // recomposition.
-                .drawBehind {
-                    drawCircle(disc.value)
-                    if (ring) drawCircle(color = ringColor, style = Stroke(width = ringWidth.toPx()))
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            AutoSizeText(
-                text = parts.d.toString(),
-                style = ThemeType.time.copy(
-                    color = if (isToday) ThemeColor.onAccent else ThemeColor.textPrimary,
-                ),
-                minScale = ScheduleMetrics.NUMERAL_MIN_SCALE,
-                maxLines = 1,
-            )
-        }
-
-        // Hidden from the accessibility tree: the cell's value already says how many episodes there
-        // are, and a dot spoken as well would be a second sentence for one fact.
-        Spacer(
-            Modifier
-                .size(dotSize)
-                .background(
-                    color = when {
-                        count <= 0 -> Color.Transparent
-                        live -> ThemeColor.accent
-                        else -> ThemeColor.textTertiary
-                    },
-                    shape = CircleShape,
-                )
-                .clearAndSetSemantics {},
-        )
-
-        // Android has no Differentiate Without Colour flag; high-contrast text is the closest signal
-        // the platform exposes, and `spec/schedule.md` §19 names it as the second choice. Under it
-        // today's cell gains a 2-dp accent capsule, so "today" is not carried by a hue alone. Absent
-        // otherwise — exactly as on iOS.
-        if (isToday && highContrast) {
-            Spacer(
-                Modifier
-                    .padding(horizontal = ThemeSpace.x1)
-                    .fillMaxWidth()
-                    .height(differentiatingUnderlineHeight)
-                    .background(ThemeColor.accent, CircleShape),
-            )
-        }
-    }
-}
-
-/** iOS `differentiatingUnderline`: a 2-pt accent capsule under the cell. */
-private val differentiatingUnderlineHeight = 2.dp
-
-/**
- * The month word for the first of a month, in the locale's own short standalone form.
- *
- * iOS extracts it from the locale-ordered "MMMd" string by taking the first space-separated
- * component that is not an integer, so both `Sep 1` and `1 Sep` yield `SEP`. Android can ask for the
- * month alone, which is the honest version of the same rule; only the rule ports.
- */
-private fun monthWord(ts: Long): String {
-    val locale = Locale.getDefault()
-    return Month.of(Formatting.localParts(ts).mo)
-        .getDisplayName(java.time.format.TextStyle.SHORT_STANDALONE, locale)
-        .uppercase(locale)
-}
 
 // -------------------------------------------------------------------------------------
 // The feed's rows
@@ -1596,6 +1511,7 @@ private fun FeedRow(
     isAX: Boolean,
     reduceMotion: Boolean,
     committed: Set<String>,
+    demoUnwatchedId: String?,
     modifier: Modifier,
     onOpen: (ScheduleRow) -> Unit,
     onMark: (ScheduleRow, Boolean) -> Unit,
@@ -1653,7 +1569,7 @@ private fun FeedRow(
             style = ThemeType.rowMeta,
             modifier = modifier
                 .fillMaxWidth()
-                .defaultMinSize(minHeight = minimumTapTarget)
+                .defaultMinSize(minHeight = 32.dp)
                 .padding(horizontal = ThemeMetrics.gutter),
             color = ColorProducer { ThemeColor.textTertiary },
         )
@@ -1663,6 +1579,7 @@ private fun FeedRow(
             last = item.last,
             appModel = appModel,
             committed = committed,
+            demoUnwatchedId = demoUnwatchedId,
             reduceMotion = reduceMotion,
             onOpen = onOpen,
             onMark = onMark,
@@ -1697,15 +1614,27 @@ private fun CardRow(
     last: Boolean,
     appModel: AppModel,
     committed: Set<String>,
+    demoUnwatchedId: String?,
     reduceMotion: Boolean,
     onOpen: (ScheduleRow) -> Unit,
     onMark: (ScheduleRow, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isCommitted = committed.contains(row.id)
-    val watched = row.watched || isCommitted
+    // `scheduleDemoStates`: one aired row is drawn as though it were still waiting, so the ladder
+    // can be photographed with all three rungs on one screen.
+    val demoUnseen = demoUnwatchedId == row.id && !isCommitted
+    val watched = (row.watched && !demoUnseen) || isCommitted
     val inLibrary = appModel.isInLibrary(row.franchise.id)
-    val showsAction = row.aired && !row.watched && inLibrary
+    val showsAction = row.aired && !watched && inLibrary
+    // THE state, decided once and read by every part of the row that shows it — the ladder's
+    // control, the clock's ink and the tile's exposure. It used to be three unrelated booleans
+    // computed at three different depths, which is why the three states never lined up.
+    val state = when {
+        !row.aired -> AiringState.Upcoming
+        watched -> AiringState.Watched
+        else -> AiringState.ToWatch
+    }
     // Marking this row would skip at least one episode, so it confirms with the exact count.
     val batch = row.aired && row.episode > row.part.progress + 1
     // `fmtTime` returns "" for a date-only anchor; the guard makes that explicit and passes null, so
@@ -1714,56 +1643,32 @@ private fun CardRow(
     val hasReminder = !row.aired && ScheduleReminders.has(row.part.mediaId, row.episode)
 
     val card: @Composable (Modifier) -> Unit = { slot ->
-        AiringCard(
+        ScheduleAiringRow(
             franchise = row.franchise,
             meta = metaLine(row),
             time = time,
-            aired = row.aired,
-            watched = watched,
+            state = state,
             hasReminder = hasReminder,
             onOpen = { onOpen(row) },
             modifier = slot,
             receiptHost = ReceiptHost.schedule(row.part.mediaId, row.episode),
         ) {
-            // The optimistic write lands in the same update as the commit, so the observed behaviour
-            // on a mark is the REMOVAL branch: the ring fades out over 160 ms while the tick badge
-            // appears on the art and the card dims.
-            AnimatedVisibility(
-                visible = showsAction,
-                enter = ThemeMotion.handoffEnter(reduceMotion),
-                exit = ThemeMotion.handoffExit(reduceMotion),
-            ) {
-                MarkRing(
-                    marked = watched,
-                    onMark = { if (!watched) onMark(row, batch) },
-                    // Quiet, never filled: twenty filled amber discs down one column turn a rhythm
-                    // into a scoreboard. With its numeral, as Today's queue draws it: a bare ring
-                    // beside a title was "unexplained" (user, 4 Sep).
-                    style = MarkRingStyle.Quiet,
-                    episode = row.episode,
-                    // The table owns this label, and `MarkRing` reads the same entry for the
-                    // identical control on every other screen: one control, one name. It used to be
-                    // assembled from typed English here, so the ring was "Mark Episode 21 of
-                    // Mushoku Tensei as watched" on Schedule and "Mark episode 21 watched, Mushoku
-                    // Tensei" everywhere else.
-                    label = if (batch) {
-                        Copy.Action.markThrough(
-                            from = row.part.progress + 1,
-                            to = row.episode,
-                            title = row.franchise.title,
-                        )
-                    } else {
-                        Copy.Action.markEpisodeWatched(row.episode, row.franchise.title)
-                    },
-                    markedLabel = Copy.Progress.episodeWatched(row.episode),
-                )
-            }
+            AiringStateControl(
+                state = state,
+                episode = row.episode,
+                committing = isCommitted,
+                title = row.franchise.title,
+                batch = batch,
+                count = row.episode - row.part.progress,
+                canMark = showsAction,
+                onMark = { if (!isCommitted) onMark(row, batch) },
+            )
         }
     }
 
     val frame = modifier
         .padding(horizontal = ThemeMetrics.gutter)
-        .padding(bottom = if (last) 0.dp else ScheduleMetrics.cardGap)
+        .padding(bottom = if (last) 0.dp else ScheduleMetrics.rowGap)
 
     if (inLibrary) {
         FranchiseQuickActions(
@@ -1830,14 +1735,13 @@ private fun DayHeader(
     }
     val text = "$word · $detail"
 
-    // The count slot, in order: an empty day says so HERE, on its own baseline; a day with more than
-    // one card states the count; a single card says nothing, because "1 episode" over one card
-    // restates the card.
-    val countText = when {
-        day.isEmpty && !isAX -> emptyText
-        day.count > 1 -> Copy.episodes(day.count)
-        else -> null
-    }
+    // The count, INLINE, on the same separator the date uses. Only when it says something:
+    // "1 episode" over a single row restates the row. It hung at the TRAILING edge until 6 Sep —
+    // the only right-aligned text on the screen — which on an empty today put "TODAY · SUN 6 SEP"
+    // and "NOTHING SCHEDULED" at opposite ends of a bare line with 200 dp of nothing between them,
+    // four small-caps fragments reading as a table header rather than a day ("Today row looks weird
+    // visually", user). An empty day now states itself in a ROW beneath, like every other day.
+    val countText = if (day.count > 1) Copy.episodes(day.count) else null
     // "'0 episodes' is a count, not a state. An empty today speaks the same words the line under it
     // prints, so VoiceOver and the screen agree."
     val spoken = "$text, ${if (day.isEmpty) emptyText else Copy.episodes(day.count)}"
@@ -1847,8 +1751,8 @@ private fun DayHeader(
             .fillMaxWidth()
             .padding(horizontal = ThemeMetrics.gutter)
             .padding(
-                top = if (previousIsEmpty) ThemeSpace.x4 else ThemeMetrics.sectionGap,
-                bottom = if (day.isEmpty) 0.dp else ThemeMetrics.labelGap,
+                top = if (previousIsEmpty) ThemeSpace.x4 else ScheduleMetrics.dayGap,
+                bottom = ThemeMetrics.labelGap,
             )
             // Children ignored: the header is one element carrying one sentence, marked as a heading
             // so the heading rotor can skim the agenda a day at a time.
@@ -1856,7 +1760,7 @@ private fun DayHeader(
                 contentDescription = spoken
                 heading()
             },
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top,
     ) {
         Row(
@@ -1883,9 +1787,9 @@ private fun DayHeader(
             )
         }
         if (countText != null) {
-            Spacer(Modifier.width(ThemeSpace.x2))
+            Spacer(Modifier.width(ScheduleMetrics.labelInnerGap))
             SectionLabel(
-                text = countText,
+                text = "· $countText",
                 modifier = Modifier.alignByBaseline(),
                 tint = ThemeColor.textTertiary,
             )

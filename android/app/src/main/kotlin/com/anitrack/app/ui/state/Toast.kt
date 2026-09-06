@@ -613,6 +613,20 @@ sealed class LaneItem {
  * The receipt IN the control: one line under the capsule or the row that was pressed. Drawn only
  * while the live undo is placed at [host] (and, on a row, is about [episode]).
  */
+/**
+ * Is a receipt live for [host] right now? The port of iOS's `ReceiptLine.isLive`, and the reason it
+ * exists: a caller that must SWAP its own line for the receipt (Schedule's airing row gives the
+ * receipt the caption's second line rather than growing the row) has to know before it lays out.
+ * [ReceiptLine] itself still self-hides, so a caller that only wants to mount it need not ask.
+ */
+@Composable
+fun receiptIsLive(host: String, episode: Int? = null): Boolean {
+    val undo = LocalAppModel.current.undo
+    return undo != null &&
+        undo.placement == ReceiptPlacement.InPlace(host) &&
+        (episode == null || undo.episode == episode)
+}
+
 @Composable
 fun ReceiptLine(
     host: String,

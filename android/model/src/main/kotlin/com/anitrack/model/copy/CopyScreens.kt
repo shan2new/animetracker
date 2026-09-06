@@ -207,6 +207,24 @@ object CopySchedule {
     const val noEpisodes = "No episodes"
 
     /**
+     * The bar control that brings the month grid down over the feed. ONE label in both states —
+     * the state is its `stateDescription`, so TalkBack announces a toggle rather than two
+     * different buttons.
+     */
+    const val calendar = "Calendar"
+
+    const val calendarShown = "Shown"
+    const val calendarHidden = "Hidden"
+    const val previousMonth = "Previous month"
+    const val nextMonth = "Next month"
+
+    /**
+     * A day in the grid past the end of the feed's window. NOT "no episodes" — the app does not
+     * know yet, and saying it does is a different claim.
+     */
+    const val beyondHorizon = "Not scheduled yet"
+
+    /**
      * The collapsed block of aired days above today — "the last seven days" without saying so
      * twice: its value line counts them.
      */

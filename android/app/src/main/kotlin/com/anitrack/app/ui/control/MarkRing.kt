@@ -185,9 +185,11 @@ enum class MarkRingStyle {
     Quiet,
 
     /**
-     * The marked state is a bare tertiary check and the ring is gone. For the episode list, where
-     * [Quiet] still put eleven amber rings down one column: **history is quiet, and amber goes to
-     * the ONE ring that is a next step** (`lead`).
+     * The list form (6 Sep): a WATCHED item is a DISC in a quiet colour ([fill]) with the check on
+     * it — Reminders fills the circle with the list's colour — the NEXT one is the single accent
+     * ring (`lead`), and the rest are idle rings. The marked state used to be a bare 12-dp
+     * tertiary check with no body in a 44-dp column ("the tick mark feels cheap", user); before
+     * that, eleven amber rings down one column.
      */
     Settled,
 }
@@ -219,13 +221,23 @@ fun MarkRing(
     style: MarkRingStyle = MarkRingStyle.Filled,
     lead: Boolean = false,
     episode: Int? = null,
+    /**
+     * [MarkRingStyle.Settled] only: the watched disc's colour — the show's quiet tint on the
+     * episode list, `surfaceFloating` where a page has none (Schedule).
+     */
+    fill: Color? = null,
     label: String = Copy.Action.markAsWatched,
     markedLabel: String? = null,
     stateDescription: String? = null,
     actionHint: String? = null,
     enabled: Boolean = true,
 ) {
-    val fill = if (marked && style == MarkRingStyle.Filled) ThemeColor.accent else Color.Transparent
+    val disc = when {
+        !marked -> Color.Transparent
+        style == MarkRingStyle.Filled -> ThemeColor.accent
+        style == MarkRingStyle.Settled -> fill ?: ThemeColor.surfaceFloating
+        else -> Color.Transparent
+    }
     val ring = when {
         !marked -> if (lead) ThemeColor.accent else ThemeColor.markRingIdle
         style == MarkRingStyle.Quiet -> ThemeColor.accent
@@ -234,11 +246,12 @@ fun MarkRing(
     val ink = when (style) {
         MarkRingStyle.Filled -> ThemeColor.onAccent
         MarkRingStyle.Quiet -> ThemeColor.accent
-        MarkRingStyle.Settled -> ThemeColor.textTertiary
+        // On a disc, not on the canvas: the check is the page's ink, as it is on iOS.
+        MarkRingStyle.Settled -> ThemeColor.textPrimary
     }
 
     val fillColor = animateColorAsState(
-        targetValue = fill,
+        targetValue = disc,
         animationSpec = motion(MotionToken.UI_MICRO),
         label = "markRingFill",
     )

@@ -100,6 +100,10 @@ object JvmDateTimePatterns : DateTimePatterns {
             "MMMd" -> if (dayFirst) "d MMM" else "MMM d"
             "MMMdyyyy" -> if (dayFirst) "d MMM y" else "MMM d, y"
             "MMMyyyy" -> "MMM y"
+            // The calendar's own header. Without this entry the skeleton fell through to the
+            // `else` branch, which treats an unknown skeleton AS a pattern — so "MMMMy" formatted
+            // as "September2026", with no separator at all (caught on the emulator, 6 Sep).
+            "MMMMy" -> "MMMM y"
             "EEEEMMMMd" -> if (dayFirst) "EEEE d MMMM" else "EEEE, MMMM d"
             "EEEEMMMd" -> if (dayFirst) "EEEE d MMM" else "EEEE, MMM d"
             // An unknown skeleton is already a pattern by the time it reaches here; ICU would
@@ -543,6 +547,15 @@ object Formatting {
     /** "Oct 2026" — a month-precision date: Library's Returning captions and its month headers. */
     fun fmtMonthYear(ts: Long, anchor: TimeAnchor = TimeAnchor.LOCAL): String =
         string(ts, "MMMyyyy", anchor)
+
+    /**
+     * "September 2026" — the month NAMED, for a calendar's own header, where the month is the one
+     * fact the panel exists to state. [fmtMonthYear]'s "Sep 2026" is a caption's abbreviation.
+     */
+    fun fmtMonthNameYear(ts: Long, anchor: TimeAnchor = TimeAnchor.LOCAL): String =
+        // "MMMMy", not "MMMMyyyy": ICU's best-pattern lookup answers the four-y skeleton with a
+        // pattern that has no separator, and the calendar's header read "September2026".
+        string(ts, "MMMMy", anchor)
 
     /**
      * Prettify a curated release string from FranchiseUpcoming. A bare ISO date or year-month
