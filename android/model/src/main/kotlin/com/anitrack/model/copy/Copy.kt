@@ -159,6 +159,9 @@ object Copy {
 
     fun episodes(n: Int): String = plural(n, "episode", "episodes")
 
+    /** A runtime, in an episode row's opened details: "55 min". */
+    fun minutes(n: Int): String = "$n min"
+
     /**
      * A count of episodes the USER has watched, predicated so it cannot be read as the work's
      * length. "Watched once - 95 episodes" (the show) and "2 watch sessions - 50 episodes" (the
@@ -223,6 +226,13 @@ object Copy {
      */
     object Label {
         const val nextUp = "Next up"
+
+        /**
+         * The newest AIRED episode you have not watched, on the show page's episode list — the
+         * streaming apps' NEW on a tile. Amber is STATE here, never an action; it rides the row's
+         * eyebrow beside the episode number.
+         */
+        const val newTag = "NEW"
 
         /**
          * The waiting hero's eyebrow. The MOMENT is the fact line under the title, big and in
@@ -338,6 +348,10 @@ object Copy {
 
         /** The link from the show page's episode window to the whole season: "All 24 episodes". */
         fun allEpisodes(n: Int): String = "All ${Copy.episodes(n)}"
+
+        /** The episode list's in-place doors — Mail's "Load Earlier Messages", both directions. */
+        const val showEarlierEpisodes = "Show earlier episodes"
+        const val showMoreEpisodes = "Show more episodes"
 
         const val markAllEpisodes = "Mark all episodes as watched"
 

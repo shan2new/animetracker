@@ -2030,7 +2030,6 @@ private fun EpisodesSection(
     val seasons = franchise.seasonPartsInOrder
     val part = focusSeason(franchise, state.selectedSeasonId) ?: return
     val total = episodeListCount(part, now)
-    val window = episodeWindow(part.progress, total)
     // Re-keyed on the picker's choice, so a picker change lands on a FRESH list rather than rows
     // morphing their numbers in place.
     val controller = rememberEpisodeListController(part.mediaId, appModel)
@@ -2044,28 +2043,19 @@ private fun EpisodesSection(
             seasons = seasons,
             onSelect = { state.selectedSeasonId = it },
         )
+        // The list owns its own range and grows IN PLACE. The six-row window with an
+        // "All 24 episodes ›" door to a second screen was "a complete tangent… a broken
+        // experience" (user, 6 Sep): a list that began at Episode 19 with the season's first
+        // eighteen on another page was the tangent, not the season. The door is gone.
         EpisodeListColumn(
             franchise = franchise,
             part = part,
-            window = window,
+            total = total,
             now = now,
             inLibrary = inLibrary,
             controller = controller,
             tint = tint,
         )
-        val windowRows = window.last - window.first + 1
-        if (total > windowRows) {
-            InlineLinkButton(
-                // Ink is `interactive`, never amber.
-                label = Copy.Action.allEpisodes(total),
-                onClick = { push(DetailPush.Episodes(franchise.id, part.mediaId, null)) },
-                modifier = Modifier.negativePadding(
-                    start = InlineLink.sideOverhang,
-                    top = InlineLink.readingLift,
-                    bottom = InlineLink.readingLift,
-                ),
-            )
-        }
     }
     WritePromptDialog(prompt = controller.prompt) { controller.prompt = null }
 }

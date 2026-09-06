@@ -226,6 +226,12 @@ fun MarkRing(
      * episode list, `surfaceFloating` where a page has none (Schedule).
      */
     fill: Color? = null,
+    /**
+     * The beat right after THIS control committed a mark: accent fill, the check drawing in
+     * `onAccent`, one pulse — then the disc settles into [fill] when the parent lets go (~0.55 s).
+     * **The control is the receipt**; nothing under the row says "Episode 7 watched" again.
+     */
+    committing: Boolean = false,
     label: String = Copy.Action.markAsWatched,
     markedLabel: String? = null,
     stateDescription: String? = null,
@@ -233,21 +239,24 @@ fun MarkRing(
     enabled: Boolean = true,
 ) {
     val disc = when {
+        committing -> ThemeColor.accent
         !marked -> Color.Transparent
         style == MarkRingStyle.Filled -> ThemeColor.accent
         style == MarkRingStyle.Settled -> fill ?: ThemeColor.surfaceFloating
         else -> Color.Transparent
     }
     val ring = when {
+        committing -> Color.Transparent
         !marked -> if (lead) ThemeColor.accent else ThemeColor.markRingIdle
         style == MarkRingStyle.Quiet -> ThemeColor.accent
         else -> Color.Transparent
     }
-    val ink = when (style) {
-        MarkRingStyle.Filled -> ThemeColor.onAccent
-        MarkRingStyle.Quiet -> ThemeColor.accent
+    val ink = when {
+        committing -> ThemeColor.onAccent
+        style == MarkRingStyle.Filled -> ThemeColor.onAccent
+        style == MarkRingStyle.Quiet -> ThemeColor.accent
         // On a disc, not on the canvas: the check is the page's ink, as it is on iOS.
-        MarkRingStyle.Settled -> ThemeColor.textPrimary
+        else -> ThemeColor.textPrimary
     }
 
     val fillColor = animateColorAsState(

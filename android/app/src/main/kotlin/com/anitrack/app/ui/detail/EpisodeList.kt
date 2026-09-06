@@ -87,6 +87,24 @@ import kotlin.math.max
 import kotlin.math.min
 import com.anitrack.app.data.ReceiptHost
 import com.anitrack.app.ui.state.ReceiptLine
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.ceil
+import com.anitrack.model.lastAired
+import com.anitrack.app.design.LocalReduceMotion
+import com.anitrack.app.design.ThemeMotion
+import com.anitrack.app.ui.control.InlineLinkButton
+import com.anitrack.model.Formatting
 
 /*
  * DETAIL SUPPORT — the port of `ios/Sources/Features/FranchiseDetail/DetailSupport.swift`.
@@ -534,22 +552,64 @@ fun episodeListCount(part: FranchisePart, now: Long): Int = max(
 )
 
 /**
- * The six-row window the show page draws: **the NEXT episode first, then what follows.** A finished
- * season shows its tail; an unstarted one its head. It used to open on the last episode watched, and
- * beside the header's "18 of 24" a list that began at Episode 18 read as "showing 18 of 24" (4 Sep).
+ * **The list OPENS WHERE YOU ARE** (6 Sep, chosen on iOS from three photographed directions after
+ * "what about the most recent episode? … otherwise it's a bigger scroll", user).
  *
- * | progress | total | window |
- * |---|---|---|
- * | 0 | 24 | 1…6 |
- * | 11 | 24 | 12…17 |
- * | 24 | 24 | 19…24 |
- * | 0 | 3 | 1…3 |
+ * A season of [WHOLE_BELOW] rows or fewer is drawn WHOLE — six to twelve rows is a screen and a
+ * half, and folding three of Thrones' six to save half a screen is a fold for its own sake. A
+ * longer one opens on the NEXT episode with [WINDOW_BEFORE] watched rows above it for context and
+ * [WINDOW_AFTER] ahead; everything earlier is one in-place tap up, and the list grows by [GROW_BY]
+ * a tap — Mail's "Load Earlier Messages": the list gets longer where it is, nothing is pushed.
+ *
+ * Measured before the change: Slime S4 (21 of 24 watched) put the next episode 1,842 pt down the
+ * list. Plex users file the same thing as a bug when a long season fails to advance to the on-deck
+ * episode (plex-media-player #914). Two directions were built, photographed and REJECTED: a whole
+ * season from Episode 1 with an in-page "Jump to episode 22" link (the season's first twenty rows
+ * are still what the screen opens on), and newest-first (Apple Podcasts' EPISODIC order — but
+ * Apple itself puts the first episode at the top for SERIAL shows, and a TV season is serial).
+ *
+ * A finished season anchors at Episode 1: nothing to continue, so it is a browse.
  */
-fun episodeWindow(progress: Int, total: Int): IntRange {
-    val n = max(1, total)
-    val start = min(max(1, progress + 1), max(1, n - 5))
-    return start..min(n, start + 5)
+const val WHOLE_BELOW = 12
+const val WINDOW_BEFORE = 3
+const val WINDOW_AFTER = 8
+const val GROW_BY = 12
+
+/** The episode the list is ABOUT: the one a route asked for, else the next to watch, else the head. */
+fun episodeAnchor(progress: Int, total: Int, focus: Int? = null): Int =
+    focus ?: if (progress < total) progress + 1 else 1
+
+/** The window a long run opens on, clamped into `1..total`. */
+fun episodeWindow(anchor: Int, total: Int): IntRange {
+    val a = min(max(1, anchor), max(1, total))
+    return clampEpisodes((a - WINDOW_BEFORE)..(a + WINDOW_AFTER), total)
 }
+
+fun clampEpisodes(range: IntRange, total: Int): IntRange {
+    val n = max(1, total)
+    val lower = min(max(1, range.first), n)
+    return lower..min(n, max(lower, range.last))
+}
+
+/**
+ * The row that wears NEW: the newest AIRED episode, while it is still unwatched, on a season that
+ * is actually RUNNING and whose latest drop is recent. All three conditions are load-bearing —
+ * without the last two, The Witcher's finished 2023 season tagged its Episode 8 "NEW", which is a
+ * label for news, not for the end of a list.
+ */
+fun freshEpisode(part: FranchisePart, total: Int, now: Long, anchor: TimeAnchor): Int? {
+    if (!part.isReleasing) return null
+    val aired = min(max(part.provenAiredCount(now), part.airedEpisodes), total)
+    if (aired <= part.progress || aired < 1) return null
+    val at = part.lastAired(now, anchor) ?: return null
+    return if (now - at <= FRESH_WINDOW_MS) aired else null
+}
+
+/**
+ * How long a drop stays news: a fortnight, so a weekly show's newest episode carries the tag until
+ * the one after it lands, and a show that stopped mid-cour does not wear NEW for months.
+ */
+const val FRESH_WINDOW_MS: Long = 14L * 24 * 60 * 60 * 1000
 
 /**
  * One week per episode, anchored on whichever real instant the part carries.
@@ -595,8 +655,104 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
 
     var prompt: WritePrompt? by mutableStateOf(null)
 
+    /** The one row whose details are open. Opening a row closes the last. */
+    var expanded: Int? by mutableStateOf(null)
+        private set
+
+    /** The row whose ring is in its commit beat (accent, the check drawing) before it settles. */
+    var committing: Int? by mutableStateOf(null)
+        private set
+
+    /**
+     * A batch mark plays its discs in order: rows above this number are drawn UNMARKED until the
+     * cascade reaches them (the model has already moved).
+     */
+    var cascadeThrough: Int? by mutableStateOf(null)
+        private set
+
+    /** The rows a long run shows; null until an expander is tapped. */
+    var shown: IntRange? by mutableStateOf(null)
+        private set
+
+    private var commitJob: Job? = null
+    private var cascadeJob: Job? = null
+
     fun reveal(episode: Int) {
         revealed = revealed + episode
+    }
+
+    /**
+     * **The row OPENS, the ring MARKS.** Tapping a row never writes progress — Apple TV's tile
+     * plays and its description opens the episode, Podcasts keeps "Mark as Played" off the row,
+     * Reminders completes on the circle alone ("people sometimes are curious to see what the
+     * episode details are and unintentionally might mark it as completed", user, 6 Sep).
+     */
+    fun open(episode: Int, canReveal: Boolean, hasOverview: Boolean) {
+        if (canReveal) reveal(episode)
+        if (!hasOverview) return
+        expanded = if (expanded == episode) null else episode
+    }
+
+    /** The list grows in place, in either direction, by [GROW_BY]. */
+    fun grow(current: IntRange, total: Int, earlier: Boolean) {
+        val next = if (earlier) {
+            (current.first - GROW_BY)..current.last
+        } else {
+            current.first..(current.last + GROW_BY)
+        }
+        shown = clampEpisodes(next, total)
+    }
+
+    /**
+     * The commit beat: THIS ring is accent with its check drawing for ~0.55 s, then settles into
+     * the show's colour. **The control is the receipt** — no line under the row says it again.
+     */
+    private fun beginCommit(scope: CoroutineScope, episode: Int, reduceMotion: Boolean) {
+        commitJob?.cancel()
+        committing = episode
+        commitJob = scope.launch {
+            delay(if (reduceMotion) 250 else 550)
+            committing = null
+        }
+    }
+
+    fun endCommit() {
+        commitJob?.cancel()
+        committing = null
+    }
+
+    /**
+     * A batch plays its discs in order — a row every ~42 ms, at most 14 beats, the accent beat
+     * travelling down the column — so twelve checks read as twelve marks made, not a list
+     * re-rendered.
+     */
+    private fun cascade(scope: CoroutineScope, from: Int, through: Int, reduceMotion: Boolean) {
+        cascadeJob?.cancel()
+        commitJob?.cancel()
+        if (through < from || reduceMotion) {
+            cascadeThrough = null
+            committing = null
+            return
+        }
+        val step = max(1, ceil((through - from + 1) / 14.0).toInt())
+        cascadeThrough = from - 1
+        cascadeJob = scope.launch {
+            var n = from - 1
+            while (n < through) {
+                delay(42)
+                n = min(through, n + step)
+                cascadeThrough = n
+                committing = n
+            }
+            delay(450)
+            cascadeThrough = null
+            committing = null
+        }
+    }
+
+    fun dispose() {
+        commitJob?.cancel()
+        cascadeJob?.cancel()
     }
 
     /**
@@ -608,33 +764,30 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
      * once. The staged timeline belongs to the state block's capsule, which is the control the eye
      * is already on when it fires.
      */
-    fun tapped(franchise: Franchise, part: FranchisePart, episode: Int, watched: Boolean) {
+    fun tapped(
+        franchise: Franchise,
+        part: FranchisePart,
+        episode: Int,
+        watched: Boolean,
+        scope: CoroutineScope,
+        reduceMotion: Boolean,
+    ) {
         val now = appModel.now
         val progress = part.progress
         when {
             // Un-marking the newest watched episode: immediate, with Undo. No confirmation — it
             // moves progress by exactly one and the toast puts it back.
+            // The ring's OWN undo: the last watched episode toggles back — the disc opens into
+            // the accent ring again. No confirmation, and no receipt: the control said it.
             watched && episode == progress -> {
+                endCommit()
                 appModel.setProgress(franchise.id, part.mediaId, episode - 1)
-                appModel.presentUndo(
-                    UndoState(
-                        mediaId = part.mediaId,
-                        franchiseId = franchise.id,
-                        prevProgress = progress,
-                        title = franchise.title,
-                        episode = episode,
-                        customMessage = Copy.Detail.markedUnwatched(episode),
-                        undoAction = {
-                            appModel.setProgress(franchise.id, part.mediaId, progress, haptic = false)
-                        },
-                    ),
-                    host = ReceiptHost.episodes(part.mediaId),
-                )
             }
 
             // Un-marking BACK to a mid point discards more than one episode of progress, so it
             // states its exact blast radius first.
             watched -> {
+                endCommit()
                 val target = episode - 1
                 val count = max(1, abs(progress - target))
                 prompt = WritePrompt(
@@ -659,7 +812,6 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                             customMessage = Copy.Detail.batchMarkedUnwatched(state.count),
                             undoAction = state.undoAction,
                         ),
-                        host = ReceiptHost.episodes(part.mediaId),
                     )
                 }
             }
@@ -675,7 +827,10 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                     mediaId = part.mediaId,
                     haptic = if (completes) FeedbackToken.SUCCESS else FeedbackToken.COMMIT_LIGHT,
                 ) ?: return
-                appModel.presentUndo(undo, host = ReceiptHost.episodes(part.mediaId))
+                beginCommit(scope, episode, reduceMotion)
+                // The ONE receipt a single mark still earns: the series finishing ("Series
+                // finished · Moved to Watched") — a milestone, said once, in the LANE.
+                if (undo.customMessage != null) appModel.presentUndo(undo)
             }
 
             // Marking FORWARD past the next episode is a batch, and a batch confirms.
@@ -687,8 +842,11 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                     message = Copy.Confirm.batchMarkMessage(from = progress + 1, to = target),
                     confirm = Copy.Confirm.batchMarkConfirm(count),
                 ) {
+                    val from = progress + 1
                     appModel.markThrough(franchise.id, part.mediaId, target, present = false)
-                        ?.let { appModel.presentUndo(it, host = ReceiptHost.episodes(part.mediaId)) }
+                        // A batch's Undo rides the LANE: the rows are busy being the receipt.
+                        ?.let { appModel.presentUndo(it) }
+                    cascade(scope, from = from, through = target, reduceMotion = reduceMotion)
                 }
             }
         }
@@ -743,10 +901,17 @@ fun EpisodeRow(
     isLast: Boolean,
     modifier: Modifier = Modifier,
     revealAll: Boolean = false,
+    /** The newest aired episode still unwatched, or null. It wears the amber NEW tag. */
+    fresh: Int? = null,
 ) {
+    val scope = rememberCoroutineScope()
+    val reduceMotion = LocalReduceMotion.current
     val anchor = franchise.timeAnchor
     val episode: Episode? = part.episodes.firstOrNull { it.number == number }
     val watched = number <= part.progress
+    // A batch plays its discs one after another; a row the cascade has not reached is still drawn
+    // unmarked (the model has already moved).
+    val drawnWatched = watched && (controller.cascadeThrough?.let { number <= it } ?: true)
     val aired = !part.isReleasing ||
         number <= part.provenAiredCount(now) ||
         number <= part.airedEpisodes
@@ -763,9 +928,24 @@ fun EpisodeRow(
     // line ("melting the episode number with the title looks shitty", user, 4 Sep).
     val eyebrow = if (spoilerSafe && cleanTitle != null) Copy.episode(number) else null
     val title = if (spoilerSafe && cleanTitle != null) cleanTitle else Copy.episode(number)
-    val subtitle = episodeSubtitle(franchise, part, number, episode, aired, isNext, now, anchor)
+    // A WATCHED row says nothing on its second line: the disc says it, and the air date is a fact
+    // about the past (it returns in the row's details).
+    val subtitle = if (drawnWatched) {
+        null
+    } else {
+        episodeSubtitle(franchise, part, number, episode, aired, isNext, now, anchor)
+    }
+    val overview = Formatting.stripHtml(episode?.overview).orEmpty()
+    // A row OPENS when it has something to show: an overview to read, or a withheld title to
+    // reveal. A bare "Episode 12" row is INERT — a tap that does nothing is honest; a tap that
+    // marks is a trap.
+    val opens = overview.isNotEmpty() || canReveal
+    val isOpen = controller.expanded == number && spoilerSafe && overview.isNotEmpty()
 
-    Row(
+    // A COLUMN, since 6 Sep: the row proper, and under it the details it opens to. It was a Row,
+    // and the details laid out BESIDE the row rather than beneath it — the list collapsed to a
+    // single row on the first tap (caught on the emulator).
+    Column(
         modifier = modifier
             .fillMaxWidth()
             // The receding is ONE opacity on the whole group; the rule is drawn after it, so a
@@ -784,8 +964,12 @@ fun EpisodeRow(
                     )
                 }
             }
-            .heightIn(min = ThemeMetrics.rowEpisode)
             .padding(vertical = DetailMetrics.episodeRowInset),
+    ) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = ThemeMetrics.rowEpisode),
         horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -795,9 +979,10 @@ fun EpisodeRow(
                 .clickable(
                     interactionSource = null,
                     indication = PressStyle.row(ThemeRadius.row),
-                    enabled = interactive,
+                    // The row opens; it never writes. An inert row takes no press at all.
+                    enabled = opens,
                     role = Role.Button,
-                    onClick = { controller.tapped(franchise, part, number, watched) },
+                    onClick = { controller.open(number, canReveal, overview.isNotEmpty()) },
                 )
                 .semantics(mergeDescendants = true) {
                     contentDescription = listOfNotNull(title, subtitle?.text).joinToString(", ")
@@ -819,11 +1004,17 @@ fun EpisodeRow(
                 verticalArrangement = Arrangement.spacedBy(ThemeMetrics.titleGap),
             ) {
                 if (eyebrow != null) {
-                    BasicText(
-                        text = eyebrow.uppercase(),
-                        style = ThemeType.sectionLabel.copy(color = ThemeColor.textTertiary),
-                        maxLines = 1,
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x1),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        BasicText(
+                            text = eyebrow.uppercase(),
+                            style = ThemeType.sectionLabel.copy(color = ThemeColor.textTertiary),
+                            maxLines = 1,
+                        )
+                        if (number == fresh) NewTag()
+                    }
                 }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
@@ -832,12 +1023,15 @@ fun EpisodeRow(
                     AutoSizeText(
                         text = title,
                         style = ThemeType.rowTitle.copy(
-                            color = if (watched) ThemeColor.textSecondary else ThemeColor.textPrimary,
+                            color = if (drawnWatched) ThemeColor.textSecondary else ThemeColor.textPrimary,
                         ),
                         minScale = EPISODE_TITLE_MIN_SCALE,
-                        maxLines = 2,
+                        maxLines = if (isOpen) Int.MAX_VALUE else 2,
                         modifier = Modifier.weight(1f, fill = false),
                     )
+                    // A row with no title of its own wears the tag beside its number: the title
+                    // keeps its characters, and the tag gives way ("Episo… NEW", 6 Sep).
+                    if (eyebrow == null && number == fresh) NewTag()
                     // On the title's baseline, inside the title row — **a row has one control
                     // column, not a toolbar.**
                     if (canReveal) RevealGlyph(onClick = { controller.reveal(number) })
@@ -859,15 +1053,25 @@ fun EpisodeRow(
         // An unaired row has NO ring at all.
         if (aired) {
             MarkRing(
-                marked = watched,
-                onMark = { if (interactive) controller.tapped(franchise, part, number, watched) },
+                marked = drawnWatched,
+                onMark = {
+                    if (interactive) {
+                        controller.tapped(franchise, part, number, watched, scope, reduceMotion)
+                    }
+                },
                 style = MarkRingStyle.Settled,
+                // The show's own colour under the check — Reminders fills the circle with the
+                // list's colour. The page's palette, not a grey.
+                fill = tint,
+                committing = controller.committing == number,
                 // Down one column: a watched episode is a bare tertiary check with no ring; the
                 // NEXT episode is the ONE accent ring, carrying its numeral; every other unwatched
                 // aired episode is a quiet idle ring. `.quiet` still put eleven amber rings down one
                 // column — history is quiet, and amber goes to the ring that is a next step.
                 lead = isNext,
-                episode = if (isNext) number else null,
+                // NO numeral: the row states the episode 14 dp away ("why does it need to show the
+                // episode number on the CTA?", user, 6 Sep). Schedule's and Today's rings keep theirs.
+                episode = null,
                 label = Copy.episode(number),
                 markedLabel = Copy.episode(number),
                 stateDescription = if (watched) Copy.Detail.watched else Copy.Detail.notWatched,
@@ -879,6 +1083,63 @@ fun EpisodeRow(
                 enabled = interactive,
             )
         }
+    }
+    // What a row opens to: the runtime and — on a watched row, whose second line is empty by rule
+    // — the air date, then the overview. Set under the title column, clear of the ring.
+    AnimatedVisibility(
+        visible = isOpen,
+        enter = fadeIn(ThemeMotion.uiSnappy()) + expandVertically(ThemeMotion.uiSnappy()),
+        exit = fadeOut(ThemeMotion.uiSnappy()) + shrinkVertically(ThemeMotion.uiSnappy()),
+    ) {
+        EpisodeDetails(episode = episode, overview = overview, watched = watched)
+    }
+    }
+}
+
+/**
+ * The newest aired episode's tag: amber, the app's one colour for STATE, at the eyebrow's size. A
+ * tag rather than a coloured title — the row's ink means watched / not watched.
+ */
+@Composable
+private fun NewTag() {
+    BasicText(
+        text = Copy.Label.newTag,
+        style = ThemeType.sectionLabel.copy(color = ThemeColor.onAccent),
+        modifier = Modifier
+            .background(ThemeColor.accent, ContinuousCornerShape(3.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+        maxLines = 1,
+    )
+}
+
+@Composable
+private fun EpisodeDetails(episode: Episode?, overview: String, watched: Boolean) {
+    val facts = buildList {
+        episode?.runtime?.takeIf { it > 0 }?.let { add(Copy.minutes(it)) }
+        // Only on a WATCHED row, whose second line is empty by rule — the date is a fact about
+        // the past, and this is where it returns.
+        if (watched) episode?.airDate?.let { add(Formatting.fmtFullDate(it)) }
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = EpisodeArtworkDefaults.slot.width + ThemeMetrics.artGap,
+                end = 44.dp + ThemeSpace.x2,
+                bottom = ThemeSpace.x3,
+            ),
+        verticalArrangement = Arrangement.spacedBy(ThemeSpace.x1),
+    ) {
+        if (facts.isNotEmpty()) {
+            BasicText(
+                text = facts.joinToString(" \u00B7 "),
+                style = ThemeType.metadata.copy(color = ThemeColor.textTertiary),
+            )
+        }
+        BasicText(
+            text = overview,
+            style = ThemeType.prose.copy(color = ThemeColor.textSecondary),
+        )
     }
 }
 
@@ -1020,15 +1281,31 @@ private fun episodeSubtitle(
 fun EpisodeListColumn(
     franchise: Franchise,
     part: FranchisePart,
-    window: IntRange,
+    total: Int,
     now: Long,
     inLibrary: Boolean,
     controller: EpisodeListController,
     tint: Color?,
     modifier: Modifier = Modifier,
+    /** The episode a route asked for (a Schedule card): the window opens on it. */
+    focusEpisode: Int? = null,
 ) {
+    val reduceMotion = LocalReduceMotion.current
+    val range = controller.shown?.let { clampEpisodes(it, total) }
+        ?: if (total <= WHOLE_BELOW) {
+            1..total
+        } else {
+            episodeWindow(episodeAnchor(part.progress, total, focusEpisode), total)
+        }
+    val fresh = freshEpisode(part, total, now, franchise.timeAnchor)
+
     Column(modifier.fillMaxWidth()) {
-        for (n in window) {
+        if (range.first > 1) {
+            EpisodeExpander(Copy.Action.showEarlierEpisodes, up = true) {
+                controller.grow(range, total, earlier = true)
+            }
+        }
+        for (n in range) {
             EpisodeRow(
                 franchise = franchise,
                 part = part,
@@ -1037,16 +1314,27 @@ fun EpisodeListColumn(
                 inLibrary = inLibrary,
                 controller = controller,
                 tint = tint,
-                isLast = n == window.last,
-            )
-            // The ring's receipt, in place under the row it marked (5 Sep).
-            ReceiptLine(
-                host = ReceiptHost.episodes(part.mediaId),
-                episode = n,
-                compact = true,
-                modifier = Modifier.padding(start = EpisodeArtworkDefaults.slot.width + ThemeSpace.x3),
+                isLast = n == range.last,
+                fresh = fresh,
             )
         }
+        if (range.last < total) {
+            EpisodeExpander(Copy.Action.showMoreEpisodes, up = false) {
+                controller.grow(range, total, earlier = false)
+            }
+        }
+    }
+    // There is NO `ReceiptLine` under a row any more (6 Sep): the ring IS the receipt. "It shows an
+    // inline response again showing Episode 7 … what is this trashy UX?" (user).
+    LaunchedEffect(reduceMotion) { }
+    DisposableEffect(controller) { onDispose { controller.dispose() } }
+}
+
+/** A long run's in-place door: a quiet centred link in `interactive` ink, like "Read more". */
+@Composable
+private fun EpisodeExpander(label: String, @Suppress("UNUSED_PARAMETER") up: Boolean, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        InlineLinkButton(label = label, onClick = onClick)
     }
 }
 
@@ -1070,6 +1358,7 @@ fun LazyListScope.episodeListItems(
     revealAll: Boolean,
     itemModifier: Modifier = Modifier,
 ) {
+    val fresh = freshEpisode(part, range.last, now, franchise.timeAnchor)
     items(
         count = (range.last - range.first + 1).coerceAtLeast(0),
         key = { "ep-${range.first + it}" },
@@ -1085,13 +1374,8 @@ fun LazyListScope.episodeListItems(
             tint = tint,
             isLast = n == range.last,
             revealAll = revealAll,
+            fresh = fresh,
             modifier = itemModifier,
-        )
-        ReceiptLine(
-            host = ReceiptHost.episodes(part.mediaId),
-            episode = n,
-            compact = true,
-            modifier = itemModifier.padding(start = EpisodeArtworkDefaults.slot.width + ThemeSpace.x3),
         )
     }
 }
