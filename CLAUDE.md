@@ -263,7 +263,9 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   should have the theme color veil over the entire screen to make the experience more
   immersive", user; a blurred wash behind the header was tried on 30 Aug and stepped 14 levels at
   the seam because the scrim landed on canvas over it). Android has NOT mirrored the 6 Sep
-  Episodes rebuild (Android is paused). Detail's toolbar Add is a bare `plus` glyph (17 semibold,
+  Episodes rebuild (it DID mirror the same day's Schedule rebuild — see that bullet — so the
+  remaining iOS-only work is this list, Today's 6 Sep pass and the iOS-specific keyboard
+  warm-up). Detail's toolbar Add is a bare `plus` glyph (17 semibold,
   `interactive`, 44 pt) — no word in the bar. EVERY episode row carries a 120×68 tile
   (`EpisodeArtwork.slot`): the still, else a TRUE 16:9 landscape (the season's, else the show's —
   `FranchisePart.stillLandscape(within:)`, which skips `ultraWide` AniList banners: a 4.75:1
@@ -516,6 +518,14 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   becomes vertically scrollable). The feed walks `FranchisePart.airings` (every dated episode in the
   window) via `AppModel.scheduleDays`; `scheduleAirings` falls back to the next/last slots against a
   server that predates the field, which shows each weekly show once.
+  **Android mirrors all of it** (6 Sep): `ui/schedule/ScheduleParts.kt` (`AiringState`,
+  `AiringStateControl`, `ScheduleAiringRow`, `ScheduleMonthGrid`), the ticker and `AiringCard.kt`
+  deleted, `MarkRingStyle.Settled` moved to the disc-with-`fill` form, `receiptIsLive` added beside
+  `ReceiptLine` (which self-hides there, so a caller that must SWAP its own line has to ask), the
+  overlay mounted inside the feed's box rather than the screen root (as a root child it drew over
+  the word "Schedule"), and `JvmDateTimePatterns.best` given an `"MMMMy"` entry — it treats an
+  unknown skeleton AS a pattern, so the header read "September2026". Both platforms pass the same
+  skeleton now so they cannot drift.
   DEBUG launch arguments: `-scheduleFilter anime|tv`, `-scheduleHideWatched 1`, `-scheduleMonthOpen 1`
   (open with the calendar down) and `-scheduleDemoStates 1` (draw the most recent aired airing as
   unwatched — the test account has no aired-and-unwatched slot, so the ladder cannot otherwise be
