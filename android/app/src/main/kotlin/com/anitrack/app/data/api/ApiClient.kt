@@ -826,7 +826,11 @@ public class ApiClient internal constructor(
             }
 
             return try {
-                AniTrackJson.decodeFromString(serializer, bytes.toString(Charsets.UTF_8))
+                // `--ez demoBusy true`: the library payload is rewritten on the way IN, so the
+                // screens render the fixture exactly as they render the real thing. No-op in a
+                // release build and for every other path.
+                val text = DemoLibrary.rewriteIfNeeded(path, bytes.toString(Charsets.UTF_8))
+                AniTrackJson.decodeFromString(serializer, text)
             } catch (e: IllegalArgumentException) {
                 // Covers SerializationException, which extends it — kotlinx raises the bare
                 // IllegalArgumentException for structurally valid JSON a serializer rejects.

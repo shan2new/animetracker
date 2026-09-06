@@ -248,6 +248,13 @@ object Copy {
 
         const val watching = "Watching"
 
+        /**
+         * Today's shelf, since 6 Sep. **"Continue watching", not "Watching"**: the shelf is shows
+         * you are part-way through with nothing airing — a caught-up show has nothing to continue,
+         * which is what made the old shelf four posters saying the same two words.
+         */
+        const val continueWatching = "Continue watching"
+
         /** The SERIES' production state - never the user's list state, which is "Watched". */
         const val complete = "Complete"
 

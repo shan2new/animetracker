@@ -65,6 +65,8 @@ import com.anitrack.app.ui.state.ReceiptLine
 @Composable
 fun HeroLockup(
     badge: String,
+    /** A drop that is OUT NOW and unwatched: the badge arrives and keeps catching the light. */
+    badgeAttention: Boolean = false,
     title: String,
     name: BillboardName,
     moment: String?,
@@ -110,7 +112,7 @@ fun HeroLockup(
             // back as the headline; the rest of the page keeps its left axis.
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            HeroBadge(text = badge)
+            HeroBadge(text = badge, attention = badgeAttention)
 
             HeroTitle(
                 text = title,

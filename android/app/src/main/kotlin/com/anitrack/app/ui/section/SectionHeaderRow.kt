@@ -44,6 +44,35 @@ import com.anitrack.app.ui.control.SymbolIcon
 import com.anitrack.app.ui.control.minimumTapTarget
 import com.anitrack.model.copy.Copy
 import java.util.Locale
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import com.anitrack.app.design.LocalReduceMotion
+import com.anitrack.app.design.MotionToken
+import com.anitrack.app.design.ShadowToken
+import com.anitrack.app.design.motion
+import com.anitrack.app.design.shadowToken
+import kotlinx.coroutines.delay
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
 
 /*
  * SECTION FURNITURE — the port of `SectionHeaderRow` / `SectionHeaderPressStyle`
@@ -406,12 +435,137 @@ fun OverArtLabel(
  *
  * The height is a hard 20 dp, like [OverArtLabel]'s 24: a tag, not a line of copy.
  */
+/**
+ * @param attention a drop that is OUT NOW and unwatched — the badge ARRIVES instead of merely
+ *   appearing, and a band of light keeps crossing it.
+ */
 @Composable
-fun HeroBadge(text: String, modifier: Modifier = Modifier) {
+fun HeroBadge(text: String, modifier: Modifier = Modifier, attention: Boolean = false) {
+    val reduceMotion = LocalReduceMotion.current
+    val shape = RoundedCornerShape(HeroBadgeCorner)
+    val animate = attention && !reduceMotion
+
+    var lifted by remember(attention) { mutableStateOf(!animate) }
+    var ringOut by remember(attention) { mutableStateOf(false) }
+    // NOT VERIFIED MOVING ON THE EMULATOR (7 Sep). A band pinned mid-sweep DRAWS — 461 light
+    // pixels over a resting chip, so the paint and the modifier order are right — but neither a
+    // hand-rolled `Animatable` loop nor this transition advanced the value: fourteen frames across
+    // ~3.5 cycles held the chip's mean brightness to 0.4/255. The resting form below is what
+    // carries the prominence either way (that is iOS's own rule — "motion cannot be the carrier,
+    // because motion has to stop"), so this ships as the correct idiom with the sweep unproven.
+    // Next thing to test: whether `attention` is actually reaching this composable.
+    //
+    // An INFINITE TRANSITION, not a hand-rolled `LaunchedEffect` loop: the loop's `animateTo`
+    // never advanced the value on the emulator (the draw path was proven with a pinned probe, so
+    // it was the loop, not the paint), and a transition is also immune to the hero subtree
+    // re-entering composition under the billboard's drift. The keyframes carry the sweep and the
+    // rest in one cycle: light crosses the chip, then the chip is a still object until the next.
+    val transition = rememberInfiniteTransition(label = "heroBadgeSheen")
+    val sweep by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = HeroBadgeSweepMillis + HeroBadgeRestMillis
+                0f at 0 using FastOutSlowInEasing
+                1f at HeroBadgeSweepMillis
+                1f at HeroBadgeSweepMillis + HeroBadgeRestMillis
+            },
+        ),
+        label = "heroBadgeSheenValue",
+    )
+
+    val scale by animateFloatAsState(
+        targetValue = if (lifted) 1f else 0.9f,
+        animationSpec = motion(MotionToken.UI_MILESTONE),
+        label = "heroBadgeLift",
+    )
+    val ringScale by animateFloatAsState(
+        targetValue = if (ringOut) 1.55f else 1f,
+        animationSpec = tween(850, easing = LinearOutSlowInEasing),
+        label = "heroBadgeRingScale",
+    )
+    val ringAlpha by animateFloatAsState(
+        targetValue = if (ringOut) 0f else 0.9f,
+        animationSpec = tween(850, easing = LinearOutSlowInEasing),
+        label = "heroBadgeRingAlpha",
+    )
+
+    // The arrival, then a slow shimmer that keeps coming back. Two passes and stop was the first
+    // cut and the user's verdict was the brief for this one: "it shimmered just once and too fast.
+    // That doesn't draw attention" (6 Sep).
+    //
+    // ACCESSIBILITY. Motion running past five seconds beside other content is the case WCAG 2.2.2
+    // asks to be stoppable, and this runs for as long as the badge is on screen. The stop is
+    // REDUCE MOTION, honoured whole: no sweep, no ring, no settle, and the chip's resting form
+    // (gradient, rim, glow) carries the prominence on its own. `LaunchedEffect` dies with the
+    // composable, so the loop never outlives what it decorates, and the sweep is one clipped
+    // gradient over a 20-dp tag — never an offscreen pass over anything billboard-sized.
+    LaunchedEffect(animate) {
+        if (!animate) { lifted = true; return@LaunchedEffect }
+        delay(90)
+        lifted = true
+        ringOut = true
+    }
+
     Box(
         modifier = modifier
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            // The amber glow beneath. Permanent while the drop is news, and it costs no motion.
+            .then(
+                if (attention) {
+                    Modifier.shadowToken(ShadowToken.Card, shape)
+                } else {
+                    Modifier
+                },
+            )
             .height(HeroBadgeHeight)
-            .background(ThemeColor.accent, RoundedCornerShape(HeroBadgeCorner))
+            .clip(shape)
+            // A CHIP, not a swatch: a top-lit fill and a hairline rim, so the tag reads as a
+            // STRUCK OBJECT at rest. This is where the prominence lives — motion cannot be the
+            // carrier, because motion has to stop.
+            .background(
+                Brush.verticalGradient(listOf(ThemeColor.accent, ThemeColor.accentPressed)),
+            )
+            .drawWithContent {
+                drawContent()
+                if (!animate) return@drawWithContent
+                // The sheen rides ON the tag, clipped to it: one band of light crossing a
+                // metallic surface, brightening rather than washing.
+                val band = size.width * 0.8f
+                val x = -band + sweep * (size.width + band * 2f)
+                drawRect(
+                    brush = Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        0.34f to Color.White.copy(alpha = 0.22f),
+                        0.5f to Color.White.copy(alpha = 0.62f),
+                        0.66f to Color.White.copy(alpha = 0.22f),
+                        1f to Color.Transparent,
+                        startX = x,
+                        endX = x + band,
+                    ),
+                    topLeft = Offset(x, 0f),
+                    size = Size(band, size.height),
+                    // SrcOver, not `BlendMode.Plus`: an additive blend needs the destination in a
+                    // compositing layer, and without one it drew NOTHING on the emulator — ten
+                    // frames across two and a half sweep cycles moved the chip's mean brightness
+                    // by 0.2/255 (measured 7 Sep). White over an opaque amber chip reads as the
+                    // same light and needs no layer.
+                )
+                // One ring LEAVING the tag — an edge, not a wash. An amber glow behind an amber
+                // tag moved no pixels on film (6 Sep); an expanding stroke has its own contrast.
+                if (ringAlpha > 0.01f) {
+                    val grow = (ringScale - 1f) * size.minDimension / 2f
+                    drawRoundRect(
+                        color = ThemeColor.accent.copy(alpha = ringAlpha),
+                        topLeft = Offset(-grow, -grow),
+                        size = Size(size.width + grow * 2f, size.height + grow * 2f),
+                        cornerRadius = CornerRadius(HeroBadgeCorner.toPx() + grow),
+                        style = Stroke(2.dp.toPx()),
+                    )
+                }
+            }
+            .border(0.5.dp, Color.White.copy(alpha = 0.28f), shape)
             .padding(horizontal = HeroBadgeInset),
         contentAlignment = Alignment.Center,
     ) {
@@ -426,6 +580,15 @@ fun HeroBadge(text: String, modifier: Modifier = Modifier) {
 private val HeroBadgeHeight = 20.dp
 private val HeroBadgeCorner = 4.dp
 private val HeroBadgeInset = 7.dp
+
+/** How long the light takes to cross the chip. 0.72 s read as a flicker. */
+private const val HeroBadgeSweepMillis = 1350
+
+/**
+ * The dark between passes. Long enough that the chip is a still object most of the time, short
+ * enough that a glance a few seconds later still catches one.
+ */
+private const val HeroBadgeRestMillis = 2600
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared internals

@@ -421,6 +421,7 @@ object ShellIntents {
      * cannot rot unnoticed.
      */
     const val EXTRA_OPEN_DETAIL = "openDetail"
+    const val EXTRA_DEMO_BUSY = "demoBusy"
 
     const val EXTRA_OPEN_TAB = "openTab"
     const val EXTRA_OPEN_PROFILE = "openProfile"
@@ -469,6 +470,12 @@ data class DebugLaunch(
     val recapDemo: Boolean = false,
     /** Today's focus stack is emptied, so the calm open renders over a library WITH backlog. */
     val calmDemo: Boolean = false,
+    /**
+     * The `/me/library` payload is rewritten into the BUSY fixture — two drops waiting, three runs
+     * half-finished. The QA account is permanently caught up, so the state Today exists to serve
+     * cannot otherwise be photographed. See `DemoLibrary`.
+     */
+    val demoBusy: Boolean = false,
     /** Schedule opens with the Earlier block already unfolded. */
     val scheduleEarlier: Boolean = false,
     /** `anime` | `tv`; anything else is "all". The mapping belongs to Schedule, so this is raw. */
@@ -502,6 +509,7 @@ data class DebugLaunch(
                 openSearchField = intent.flag(ShellIntents.EXTRA_OPEN_SEARCH_FIELD),
                 recapDemo = intent.flag(ShellIntents.EXTRA_RECAP_DEMO),
                 calmDemo = intent.flag(ShellIntents.EXTRA_CALM_DEMO),
+                demoBusy = intent.flag(ShellIntents.EXTRA_DEMO_BUSY),
                 scheduleEarlier = intent.flag(ShellIntents.EXTRA_SCHEDULE_EARLIER),
                 scheduleFilter = intent.getStringExtra(ShellIntents.EXTRA_SCHEDULE_FILTER)
                     ?.trim()?.lowercase()?.takeIf { it.isNotEmpty() },

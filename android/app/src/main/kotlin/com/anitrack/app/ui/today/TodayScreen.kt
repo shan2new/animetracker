@@ -258,27 +258,24 @@ fun TodayScreen(
     val items = marks.pinned ?: feed
     val actionable = items.mapNotNull { f -> focusKind(f, now, justCaught)?.let { f to it } }
 
-    val calmHero = if (actionable.isEmpty() && !appModel.libraryEmpty) {
-        appModel.nextUp ?: appModel.watchingShelf.firstOrNull()
-    } else {
-        null
-    }
-    val heroFranchise = actionable.firstOrNull()?.first ?: calmHero
-    val heroKind = actionable.firstOrNull()?.second ?: calmHero?.let { calmFocusKind(it, now) }
+    // **A show you are caught up on is not a hero** (6 Sep). The billboard is for something you
+    // can press play on; the calendar is a tab. A calm day opens on the CHART instead — see
+    // `showsDiscovery` below.
+    val heroFranchise = actionable.firstOrNull()?.first
+    val heroKind = actionable.firstOrNull()?.second
 
-    val queue = actionable.drop(1).take(QUEUE_COUNT)
-    val stackIds = actionable.take(3).map { it.first.id }.toSet() + setOfNotNull(calmHero?.id)
+    // "Next up" means episodes that are OUT NOW. A show you are part-way through with nothing
+    // airing is not "next up" — it is Continue watching, and letting it into the queue is what
+    // emptied that shelf when the count went to four.
+    val queue = actionable.drop(1).filter { it.second.first is FocusKind.Fresh }.take(QUEUE_COUNT)
+    // What the stack ACTUALLY draws, so Continue watching can exclude exactly that and no more
+    // (the count-based guess claimed backlog shows the queue never showed).
+    val stackIds = queue.map { it.first.id }.toSet() + setOfNotNull(heroFranchise?.id)
     val updateCount = appModel.outNow.size
     val showsViewAll = updateCount > VIEW_ALL_THRESHOLD
 
-    // Three cards on the Up next shelf; as rows (accessibility sizes) one under a busy screen and
-    // three under the calm one, where they are the content.
-    val upcoming = upcomingRows(library, stackIds, now, limit = if (isAX) (if (actionable.isEmpty()) 3 else 1) else 3)
-    // Not the Up next shows either (i3): a show on the shelf under its own Up next card was on
-    // the screen twice.
-    val shelf = watchingShelf(appModel, stackIds + upcoming.map { it.id })
+    val shelf = continueWatchingShelf(appModel, stackIds)
     val shelfIsList = isAX || shelf.size < SHELF_MINIMUM_CARDS
-    val comingNext = appModel.nextUp?.takeIf { !stackIds.contains(it.id) }
 
     // ---------------------------------------------------------------------------------
     // The top-block state machine
@@ -286,6 +283,13 @@ fun TodayScreen(
 
     val isFailed = appModel.loadError && appModel.libraryEmpty
     val isEmptyAccount = !appModel.loading && appModel.libraryEmpty && !appModel.loadError
+    /**
+     * **A caught-up day opens on the chart** (6 Sep). The same machinery the empty account used,
+     * with a wider gate: nothing to act on, so Today shows television rather than a future airing
+     * dressed as a hero. Apple TV's structure — queue first, television under it.
+     */
+    val showsDiscovery = !appModel.libraryEmpty && !isFailed && !appModel.loading &&
+        actionable.isEmpty()
     val showsHero = !appModel.libraryEmpty && !isFailed &&
         (heroFranchise != null || (recap.onStage && recap.digest != null))
     // Measured, never thresholded. `scrollY > 150` was calibrated against a tall library and never
@@ -461,7 +465,7 @@ fun TodayScreen(
                                     onPrimary = { scope.launch { appModel.reload() } },
                                 )
 
-                                isEmptyAccount && trendingLead != null -> TrendingBillboard(
+                                showsDiscovery && trendingLead != null -> TrendingBillboard(
                                     item = trendingLead,
                                     owned = appModel.isInLibrary(trendingLead.id),
                                     heroCopyHeight = heroCopyHeight,
@@ -519,7 +523,15 @@ fun TodayScreen(
                                     onPromptBatch = { batchPrompt = it },
                                 )
 
-                                else -> CalmBlock(comingNext = comingNext, now = now, band = band)
+                                // Nothing to act on and no chart to show it on: the honest
+                                // fallback, not a future airing dressed as a hero.
+                                else -> StateBlock(
+                                    copy = EmptyStateCopy.emptyToday,
+                                    contentHeight = contentHeight,
+                                    band = band,
+                                    onPrimary = onAddShow,
+                                    behind = { EmptyFan(appModel.trending) },
+                                )
                             }
 
                             // ---- below the fold ----
@@ -548,10 +560,9 @@ fun TodayScreen(
                                     queue = queue,
                                     showsViewAll = showsViewAll,
                                     updateCount = updateCount,
-                                    upcoming = upcoming,
                                     shelf = shelf,
                                     shelfIsList = shelfIsList,
-                                    isEmptyAccount = isEmptyAccount,
+                                    showsDiscovery = showsDiscovery,
                                     now = now,
                                     isAX = isAX,
                                     onOpenDetail = onOpenDetail,
@@ -629,44 +640,19 @@ private fun liveItems(appModel: AppModel): List<Franchise> {
 }
 
 /**
- * `Upcoming` — one row under a busy screen, three under a calm one.
+ * **Continue watching** — shows part-way through, with nothing airing (6 Sep).
  *
- * A passed AniList slot is kept alive for the day elsewhere; here it would be announced as future.
- * Date-only TV has no instant to test, so its whole day qualifies.
+ * It was the *Watching* shelf, which was Library's content reprinted: on the live library every
+ * card was captioned "Caught up", because a show you are caught up on has nothing to continue.
+ * `keepWatching` is already the mid-run set; removing what the stack draws is all that is left to
+ * do. The Upcoming rows that used to sit above it are gone with it — they were Schedule's own
+ * first rows, verbatim, and **a future airing is not actionable by definition**.
  */
-private fun upcomingRows(
-    library: List<Franchise>,
-    stackIds: Set<String>,
-    now: Long,
-    limit: Int,
-): List<Franchise> = library
-    .mapNotNull { f ->
-        if (!f.tracksAirings || stackIds.contains(f.id)) return@mapNotNull null
-        val at = f.nextAiring(now) ?: return@mapNotNull null
-        if (!f.timeAnchor.isDateOnly && at <= now) return@mapNotNull null
-        f to at
-    }
-    .sortedBy { it.second }
-    .take(limit)
-    .map { it.first }
-
-/**
- * The Watching shelf, with the honest-count fallback.
- *
- * `watchingShelf` is already narrowed by a live-claim predicate, and removing the stack narrows it
- * again — on a 9-show library that left ONE card in 340 dp of dead black under a "See all", while
- * the loading skeleton four seconds earlier had promised four cards running off the right edge. A
- * horizontal shelf that does not reach its trailing edge gives no reason to swipe and reads as
- * artwork that failed to load.
- */
-private fun watchingShelf(appModel: AppModel, stackIds: Set<String>): List<Franchise> {
-    val claimed = appModel.watchingShelf.filter { !stackIds.contains(it.id) }
-    if (claimed.size >= SHELF_MINIMUM_CARDS) return claimed.take(SHELF_LIMIT)
-    val everything = appModel.library.filter {
-        it.effectiveStatus == WatchStatus.WATCHING && !stackIds.contains(it.id)
-    }
-    return (claimed + everything).distinctBy { it.id }.take(SHELF_LIMIT)
-}
+private fun continueWatchingShelf(appModel: AppModel, stackIds: Set<String>): List<Franchise> =
+    appModel.keepWatching
+        .filter { !stackIds.contains(it.id) }
+        .distinctBy { it.id }
+        .take(SHELF_LIMIT)
 
 // -------------------------------------------------------------------------------------
 // The hero
@@ -831,43 +817,6 @@ private fun TrendingBillboard(
     }
 }
 
-/**
- * The calm block — the residual case, reached only when even a waiting billboard is unavailable
- * (an empty `nextUp` **and** an empty Watching shelf).
- *
- * Three deliberate absences, each recording a defect: **no plate** (it used to be a boxed empty
- * state opening the app with "Nothing changed since you were last here" — an absence in empty-state
- * clothing on a populated screen), **no glyph** (an amber check disc in the wordmark's own column
- * read as a second lockup), and **`heroTitle`, not `showTitleL`** — a full step above the 20-sp
- * section headers under it, so this reads as the page's title and those read as its sections.
- */
-@Composable
-private fun CalmBlock(comingNext: Franchise?, now: Long, band: Dp) {
-    val at = comingNext?.nextAiring(now)
-    // The exact test the Upcoming row's "Today" word comes from, so the two can never disagree.
-    val today = comingNext != null && at != null && comingNext.dayDiff(at, now) == 0
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = band + ThemeSpace.x8)
-            .padding(horizontal = ThemeMetrics.gutter)
-            .semantics(mergeDescendants = true) {},
-        verticalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
-    ) {
-        BasicText(
-            text = if (today) Copy.Progress.newEpisodeToday else Copy.Progress.caughtUp,
-            style = ThemeType.heroTitle,
-            color = ColorProducer { ThemeColor.textPrimary },
-        )
-        if (comingNext == null) {
-            BasicText(
-                text = Copy.Progress.noNewDates,
-                style = ThemeType.metadata,
-                color = ColorProducer { ThemeColor.textSecondary },
-            )
-        }
-    }
-}
 
 // -------------------------------------------------------------------------------------
 // Below the fold
@@ -890,10 +839,9 @@ private fun BelowTheFold(
     queue: List<Pair<Franchise, Pair<FocusKind, FranchisePart>>>,
     showsViewAll: Boolean,
     updateCount: Int,
-    upcoming: List<Franchise>,
     shelf: List<Franchise>,
     shelfIsList: Boolean,
-    isEmptyAccount: Boolean,
+    showsDiscovery: Boolean,
     now: Long,
     isAX: Boolean,
     onOpenDetail: (String) -> Unit,
@@ -941,44 +889,28 @@ private fun BelowTheFold(
         )
     }
 
-    val hasUpNext = hasQueue || upcoming.isNotEmpty()
-    if (hasUpNext) {
+    // The Upcoming rows are GONE (6 Sep): they were Schedule's own first rows, verbatim, and a
+    // future airing is not actionable by definition — so Today prints no date at all, not as a
+    // card and not as a line. The calendar is a tab, and it owns dates.
+    val hasUpNext = hasQueue
+    if (hasQueue) {
         if (isAX) {
             // Rows at accessibility sizes: a 16:9 card gives a grown caption four words.
-            if (hasQueue) {
-                QueueSection(
-                    queue = queue,
-                    marks = marks,
-                    showsViewAll = showsViewAll,
-                    updateCount = updateCount,
-                    now = now,
-                    isAX = isAX,
-                    onOpenDetail = onOpenDetail,
-                    onViewAllUpdates = onViewAllUpdates,
-                    onMarkQueueRow = onMarkQueueRow,
-                    modifier = Modifier.padding(top = if (strip || notice) gap else first),
-                )
-            }
-            if (upcoming.isNotEmpty()) {
-                UpcomingSection(
-                    rows = upcoming,
-                    now = now,
-                    onOpenDetail = onOpenDetail,
-                    modifier = Modifier.padding(
-                        top = when {
-                            hasQueue -> gapAfterRow
-                            strip || notice -> gap
-                            else -> first
-                        },
-                    ),
-                )
-            }
+            QueueSection(
+                queue = queue,
+                marks = marks,
+                showsViewAll = showsViewAll,
+                updateCount = updateCount,
+                now = now,
+                isAX = isAX,
+                onOpenDetail = onOpenDetail,
+                onViewAllUpdates = onViewAllUpdates,
+                onMarkQueueRow = onMarkQueueRow,
+                modifier = Modifier.padding(top = if (strip || notice) gap else first),
+            )
         } else {
-            // One shelf, not two lists (4 Sep): the rest of the queue with its rings, then the
-            // upcoming airings, as 16:9 cards — see `UpNextShelf`.
             UpNextShelf(
                 queue = queue,
-                upcoming = upcoming,
                 committedQueue = marks.committedQueue,
                 showsViewAll = showsViewAll,
                 updateCount = updateCount,
@@ -1014,7 +946,7 @@ private fun BelowTheFold(
 
     // The rest of the chart, under the trending billboard.
     val chart = appModel.trending.drop(1).take(TRENDING_SHELF_LIMIT)
-    if (isEmptyAccount && chart.isNotEmpty()) {
+    if (showsDiscovery && chart.isNotEmpty()) {
         TrendingShelf(
             items = chart,
             onOpenDetail = onOpenDetail,
@@ -1143,46 +1075,6 @@ private fun queueMeta(f: Franchise, kind: FocusKind, part: FranchisePart, isAX: 
     }
 }
 
-/**
- * "Upcoming" — never "Coming next": **never a second "next" on one screen.**
- *
- * The quieter block keeps the smaller slot. Nothing here is actionable, and a 56×84 poster under a
- * 56×84 poster with no control beside it would give an un-actionable row the same weight as the
- * queue above it.
- */
-@Composable
-private fun UpcomingSection(
-    rows: List<Franchise>,
-    now: Long,
-    onOpenDetail: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier.fillMaxWidth()) {
-        SectionHeaderRow(
-            text = Copy.Label.upcoming,
-            modifier = Modifier.padding(horizontal = ThemeMetrics.gutter),
-        )
-        Column(Modifier.padding(top = ThemeMetrics.labelGap - ROW_OWN_INSET)) {
-            rows.forEachIndexed { index, f ->
-                val part = f.releasingPart
-                MediaRow(
-                    title = f.title,
-                    onClick = { onOpenDetail(f.id) },
-                    meta = part?.let {
-                        f.watchContext(it, it.nextEpisodeNumber ?: it.airedEpisodes + 1)
-                    },
-                    lead = f.nextAiring(now)?.let { TemporalCopy.airs(it, now, f.source) },
-                    poster = f.portraitArt,
-                    slot = PosterSize.Queue,
-                    chevron = false,
-                    separator = index < rows.size - 1,
-                    hint = Copy.Accessibility.opensTheShowHint,
-                    modifier = Modifier.padding(horizontal = ThemeMetrics.gutter),
-                )
-            }
-        }
-    }
-}
 
 /** The resting shelf. At accessibility sizes — or under three cards — it is a list instead. */
 @Composable
@@ -1197,7 +1089,7 @@ private fun WatchingShelf(
 ) {
     Column(modifier.fillMaxWidth()) {
         SectionHeaderRow(
-            text = Copy.Label.watching,
+            text = Copy.Label.continueWatching,
             // The title IS the button — there is no "See all" word in a navigating header; the
             // label only feeds the spoken one. In list mode the header drops it, because there is
             // nothing more to see.

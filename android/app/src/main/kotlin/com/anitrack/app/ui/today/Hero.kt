@@ -199,6 +199,12 @@ val FocusKind.outstanding: Int
 @Immutable
 data class HeroSlate(
     val eyebrow: String,
+    /**
+     * The state is a DROP THAT IS OUT NOW and unwatched, so the badge arrives instead of merely
+     * appearing and keeps catching the light. Only `Fresh` earns it: prominence is spent on the
+     * one thing you can act on, not on every state the billboard can print.
+     */
+    val attention: Boolean = false,
     /** What the billboard draws for the show's name (`HeroTitle`). Type for the widget. */
     val name: BillboardName = BillboardName.Type,
     /** "Today at 7:30 PM" · "Aired 29 min ago" · date-only "Friday" — or null for a plain state. */
@@ -311,6 +317,8 @@ fun heroSlate(
     return HeroSlate(
         name = f.billboardName,
         eyebrow = eyebrow,
+        // Only a drop that is out now: prominence is spent on the one thing you can act on.
+        attention = kind is FocusKind.Fresh,
         moment = moment,
         title = f.displayTitle,
         fact = fact,
@@ -678,6 +686,7 @@ fun HeroFocus(
     // action — "Details" beside it duplicated the block's own tap.
     HeroLockup(
         badge = slate.eyebrow,
+        badgeAttention = slate.attention && !committed,
         title = slate.title,
         name = slate.name,
         moment = slate.moment,

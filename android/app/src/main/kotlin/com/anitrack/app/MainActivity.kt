@@ -28,6 +28,7 @@ import com.anitrack.app.ui.shell.DebugLaunch
 import com.anitrack.app.ui.shell.LocalDebugLaunch
 import com.anitrack.app.ui.shell.RootScreen
 import com.anitrack.app.ui.shell.ShellIntents
+import com.anitrack.app.data.api.DemoLibrary
 
 /**
  * The app's one activity.
@@ -135,6 +136,8 @@ class MainActivity : ComponentActivity() {
      */
     private fun consume(intent: Intent?, model: AppModel) {
         debugLaunch = DebugLaunch.from(intent)
+        // Set BEFORE the reload the shell triggers, so the first payload is already the fixture.
+        DemoLibrary.enabled = debugLaunch.demoBusy
 
         val franchiseId = intent
             ?.getStringExtra(ShellIntents.EXTRA_OPEN_DETAIL)

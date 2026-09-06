@@ -89,7 +89,6 @@ private const val MIDDLE_DOT = "·"
 @Composable
 internal fun UpNextShelf(
     queue: List<Pair<Franchise, Pair<FocusKind, FranchisePart>>>,
-    upcoming: List<Franchise>,
     committedQueue: Collection<String>,
     showsViewAll: Boolean,
     updateCount: Int,
@@ -100,15 +99,9 @@ internal fun UpNextShelf(
     onMarkQueueRow: (Franchise) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val cards = remember(queue, upcoming, now) {
-        queue.map { (f, kp) -> UpNextItem(f, kp.first, kp.second) } +
-            upcoming.mapNotNull { f ->
-                val part = f.releasingPart ?: return@mapNotNull null
-                val at = f.nextAiring(now) ?: return@mapNotNull null
-                UpNextItem(f, FocusKind.Waiting(at), part)
-            }
-    }
-    val markable = cards.any { it.kind.isMarkable }
+    // Only what is OUT NOW (6 Sep). The upcoming airings this shelf used to append were
+    // Schedule's own first rows, and a future airing is not actionable by definition.
+    val cards = remember(queue) { queue.map { (f, kp) -> UpNextItem(f, kp.first, kp.second) } }
     val state = rememberLazyListState()
 
     Column(
@@ -116,7 +109,7 @@ internal fun UpNextShelf(
         verticalArrangement = Arrangement.spacedBy(ThemeMetrics.labelGap),
     ) {
         SectionHeaderRow(
-            text = if (markable) Copy.Label.nextUp else Copy.Label.upcoming,
+            text = Copy.Label.nextUp,
             modifier = Modifier.padding(horizontal = ThemeMetrics.gutter),
             actionLabel = if (showsViewAll) Copy.Action.viewAllUpdates(updateCount) else null,
             onAction = if (showsViewAll) onViewAllUpdates else null,
