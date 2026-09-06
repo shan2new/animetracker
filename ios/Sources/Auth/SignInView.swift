@@ -50,7 +50,8 @@ struct SignInView: View {
 
     private var identity: some View {
         VStack(spacing: 0) {
-            PreviouslyMark(width: 58)
+            // The icon's ribbon, lit, then the name with its coral full stop.
+            PreviouslyMark(width: 56, lit: true)
                 .background {
                     // The screen's one light source, centred on the one object it lights.
                     RadialGradient(colors: [ThemeColor.accent.opacity(0.20),
@@ -59,14 +60,13 @@ struct SignInView: View {
                                    center: .center, startRadius: 0, endRadius: 260)
                         .frame(width: 520, height: 520)
                         .blur(radius: 24)
+                        // Rasterised once: a blur left as a layer filter re-runs every frame.
+                        .drawingGroup()
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
-            Text("Previously\(Text(".").foregroundStyle(ThemeColor.accent))")
-                .foregroundStyle(ThemeColor.textPrimary)
-                .type(ThemeType.displayXL)
+            BrandWord(style: ThemeType.displayXL)
                 .padding(.top, ThemeSpace.x5)
-                .accessibilityLabel("Previously")
             Text("Know what changed. Record what you watched.")
                 .type(ThemeType.heroMeta)
                 .foregroundStyle(ThemeColor.textSecondary)

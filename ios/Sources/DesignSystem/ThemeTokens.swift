@@ -38,6 +38,11 @@ enum ThemeColor {
     static let textDisabled = Color(hex: 0x807C77)
     // Brand
     static let accent = Color(hex: 0xF0A24E)
+    /// The full stop. The app icon's coral bead (design/app-icon-v2/glass/x9-final.icon), and the
+    /// period of "Previously." everywhere the name is set — the launch still, the header, the
+    /// sign-in gate, the colophon — so the icon's two objects are the wordmark's two objects. It is
+    /// not amber (amber is a fact or a state) and it is not an action colour: it is the name's.
+    static let brandPeriod = Color(hex: 0xF0563F)
     static let accentPressed = Color(hex: 0xD88D3B)
     static let accentSoft = Color(hex: 0xF0A24E).opacity(0.14)
     /// Immediate ground for an artwork wash before a remote image or its palette is available.
@@ -45,6 +50,34 @@ enum ThemeColor {
     /// look as though the gradient had not rendered, while a cache-warm simulator showed the art.
     static let ambientBackdropFallback = Color(hex: 0x432D21)
     static let onAccent = Color(hex: 0x0B0B0D)
+    /// The ink of a bare interactive word or glyph — "See all", "Read more", "Clear", "Sync now",
+    /// "Details", "Add", "Done", a tertiary button in an empty state.
+    ///
+    /// **Amber is not an action colour.** It is rationed to two readings and neither is "tappable":
+    ///   · MEANING — a real next step ("Returns Oct 2", "Episode 19 next", a future air time);
+    ///   · STATE   — today, owned, selected, an active filter, a committed mark.
+    /// Amber may also be a GROUND (`PrimaryButtonStyle2`'s capsule, `MarkRing`'s fill, `accentSoft`
+    /// discs) — there the amber is the object and the ink on it is `onAccent`, so no amber *word*
+    /// is drawn and nothing competes.
+    ///
+    /// Before this token, twenty tappable words and glyphs wore `accent` and collided head-on with
+    /// the first reading: Detail's toolbar said "+ Add" in amber directly above "Episode 14 next"
+    /// in amber, and a Library section header put an amber "See all" over amber "Returns Oct 2"
+    /// captions. One hue cannot mean "this is a fact about your future" and "this is a button".
+    /// Search's add control had it right all along — the actionable `+` is neutral and only the
+    /// owned `✓` is amber (`SearchComponents.swift`).
+    ///
+    /// A bare action carries its affordance the way iOS lists do: position (a toolbar slot, a
+    /// section header's trailing edge), semibold weight, a 44-pt target, and a chevron where the
+    /// row has one. An alias, not a new colour — if this ever needs its own hue, it changes here.
+    ///
+    /// One clarification the STATE reading needs, settled once (cohesion pass, 30 Aug): a
+    /// selector's SELECTED value is legal amber (it is a state, like an active filter) — *except*
+    /// inside a control where amber already carries another meaning. Schedule's ticker is that
+    /// exception: amber is today's alone there, so its selection is a neutral raised plate.
+    /// Library's root tabs keep the amber selection; the two controls are answering different
+    /// constraints, not disagreeing.
+    static let interactive = textPrimary
     // Semantic
     static let success = Color(hex: 0x30D158)
     static let warning = Color(hex: 0xFFD60A)
@@ -54,6 +87,10 @@ enum ThemeColor {
     static let separator = Color.white.opacity(0.08)
     static let stroke = Color.white.opacity(0.12)
     static let strokeStrong = Color.white.opacity(0.20)
+    /// The unmarked `MarkRing`'s stroke. `strokeStrong` at 1.5 pt over a dark poster read as a
+    /// disabled ghost — the app's core control was the least visible element on its row. The mark's
+    /// idle state is an INVITATION and gets its own, clearly-drawn weight.
+    static let markRingIdle = Color.white.opacity(0.34)
     /// Skeleton fill. At 8 % over the old #09090B canvas the structure was ~4 % above ground and
     /// effectively invisible; it has to read as the shape of what is coming.
     static let skeleton = Color(hex: 0xF4F1EC).opacity(0.11)
@@ -125,9 +162,23 @@ struct ShadowToken {
 }
 
 extension View {
-    /// `.shadow(.card)` — the only sanctioned way to cast a shadow.
+    /// `.shadow(.card)` — the only sanctioned way to cast a shadow on a view that is not a card
+    /// (a toast, the brand mark). A CARD uses `cardShadow`.
     func shadow(_ token: ShadowToken) -> some View {
         shadow(color: token.color, radius: token.radius, y: token.y)
+    }
+
+    /// A card's shadow, drawn by its ground SHAPE and rasterised with it — never `.shadow` on the
+    /// composited card (5 Sep). A layer shadow has no path: the render server draws the whole
+    /// card offscreen to find its silhouette on EVERY frame the card is on screen, one pass per
+    /// poster per scroll frame. The shape's fill knows its own silhouette and is drawn once.
+    /// `fill` is the card's own ground colour, so nothing under the (opaque) card changes.
+    func cardShadow(_ token: ShadowToken, shape: RoundedRectangle, fill: Color = ThemeColor.surfaceRaised) -> some View {
+        background {
+            if token.radius > 0 {
+                shape.fill(fill.shadow(.drop(color: token.color, radius: token.radius, x: 0, y: token.y)))
+            }
+        }
     }
 }
 
@@ -216,7 +267,7 @@ enum ThemeMetrics {
     /// The heavier media row: 56×84 poster, two-line title allowed.
     static let rowMedia: CGFloat = 100
     /// Episode row carrying a 96×54 still.
-    static let rowEpisode: CGFloat = 78
+    static let rowEpisode: CGFloat = 82
 
     // MARK: Chrome edges
     //
@@ -252,6 +303,84 @@ enum ThemeMetrics {
     static let topChromeRamp: CGFloat = 22
     /// Total height of the top chrome, safe area included.
     static var topChromeHeight: CGFloat { topSafeInset + topChromeRamp }
+    /// The system's inline navigation bar, below the status bar.
+    static let inlineBarHeight: CGFloat = 44
+    /// The ramp under a HARDENED top veil — the band in which content scrolling out from under
+    /// an opaque bar goes from hidden to fully lit. Short, like a material bar's own edge.
+    ///
+    /// The veils used to hold opaque canvas through the status bar only and then ramp out over
+    /// 22–150 pt — straight through the title bar, so a row title sat half-lit UNDER "Library"
+    /// and a hero's support line ghosted under Today's handed-over title (captured 2 Sep on both).
+    /// A bar is opaque to its bottom edge and content is either under it or not; the only soft
+    /// part is this edge.
+    static let barEdgeRamp: CGFloat = 28
+    /// The hardened bar's canvas over its material — a BAR, not a slab. What has scrolled under
+    /// the title stays faintly alive through the blur, the way every material bar in iOS keeps
+    /// the content behind it present. At 1.0 the top ~100 pt of every scrolled screen was a flat
+    /// #09090B rectangle with a 28-pt edge ("the top area becomes pure black", user, 3 Sep) —
+    /// and the `.ultraThinMaterial` painted under it was doing nothing at all. Reduce Transparency
+    /// drops the material, so it gets the opaque bar back (`ScrollEdgeChrome.veil`).
+    static let chromeBarOpacity: Double = 0.74
+    /// The hardened bar's veil when it carries a show's COLOUR (`ScrollEdgeChrome(color:)`): a
+    /// coloured ink can sit lighter over the blur than canvas can — the hue does the separating,
+    /// and at 0.74 the show page's bar read as a slab of colour rather than its glass ("better
+    /// but not quite there", user, 4 Sep).
+    static let chromeBarTintedOpacity: Double = 0.62
+    /// The bar's full band: status bar + inline bar. What a root's hardened veil holds through.
+    static var inlineBarBottom: CGFloat { topSafeInset + inlineBarHeight }
+
+    /// The scroll offset a screen's chrome actually NEEDS, for writing back to view state.
+    ///
+    /// Every veil, mask and title handover in the app saturates within the first ~120 pt of
+    /// scroll and the pull-down stretch within ~300 pt; past that the offset changes nothing on
+    /// screen. Writing the raw offset to `@State` on every frame re-evaluated Today's whole body
+    /// — the stack, the queue, the shelf, the upcoming rows, every row diff — at 60–120 Hz for
+    /// the entire length of the scroll, which is the jank the user felt (2 Sep). Clamped and
+    /// rounded to the half-point, the value stops changing once the chrome has settled, so the
+    /// body stops re-running. Callers still guard `if v != scrollY`.
+    static func scrollSample(_ y: CGFloat, floor: CGFloat = -320, ceiling: CGFloat = 240) -> CGFloat {
+        (min(max(y, floor), ceiling) * 2).rounded() / 2
+    }
+
+    nonisolated(unsafe) private static var cachedWindowHeight: CGFloat?
+
+    /// The window's height, read once like `topSafeInset`. Billboard heroes are sized as a
+    /// fraction of the SCREEN (status bar included), which no `GeometryReader` inside a
+    /// navigation stack can report.
+    static var windowHeight: CGFloat {
+        if let cachedWindowHeight { return cachedWindowHeight }
+        guard Thread.isMainThread else { return 852 }
+        let value = MainActor.assumeIsolated { () -> CGFloat in
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+            let h = scene?.windows.first(where: \.isKeyWindow)?.bounds.height
+                ?? scene?.windows.first?.bounds.height ?? 0
+            return h > 0 ? h : 852
+        }
+        if value != 852 { cachedWindowHeight = value }
+        return value
+    }
+
+    nonisolated(unsafe) private static var cachedWindowWidth: CGFloat?
+
+    /// The window's width, read the same way. The billboard's copy runs gutter to gutter, and
+    /// `HeroTitle` decides between a logo and the name in type against that run before the view
+    /// has a frame to measure.
+    static var windowWidth: CGFloat {
+        if let cachedWindowWidth { return cachedWindowWidth }
+        guard Thread.isMainThread else { return 393 }
+        let measured = MainActor.assumeIsolated { () -> CGFloat? in
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+            let w = scene?.windows.first(where: \.isKeyWindow)?.bounds.width
+                ?? scene?.windows.first?.bounds.width ?? 0
+            return w > 0 ? w : nil
+        }
+        if let measured { cachedWindowWidth = measured }
+        return measured ?? 393
+    }
+    /// The billboard copy's run: the window less both gutters.
+    static var billboardCopyWidth: CGFloat { windowWidth - 2 * gutter }
     /// The ramp that carries content out of sight before it reaches the floating tab bar.
     ///
     /// 116 started the ramp ~100 pt above the tab pill's top edge, so half of it did nothing but
@@ -286,10 +415,22 @@ enum ThemeMetrics {
 
     /// The ambient art wash under a TAB ROOT's inline navigation bar — Schedule, Library, Search.
     /// One height and one strength: the three roots shipped with 300/0.3, 380–520/0.5–0.68 and
-    /// 400/0.68, so the same atmosphere was a whisper on one tab and a stain on the next. Today
-    /// carries its own hero and is not a list root.
+    /// 400/0.68, so the same atmosphere was a whisper on one tab and a stain on the next — and by
+    /// the cohesion pass (30 Aug) the tree had re-diverged into seven configurations. The rule from
+    /// here: EVERY ambient wash uses this pair — tab roots, pushed lists (Season episodes, Watch
+    /// history), and Today's no-hero states alike. A screen may not carry a private wash spec;
+    /// Today's full-bleed hero is the one composition that replaces the wash outright.
     static let rootWashHeight: CGFloat = 320
     static let rootWashIntensity: Double = 0.4
+
+    /// The height the system search drawer adds under an inline title (`.navigationBarDrawer`).
+    /// Search and All titles both size their top veil past it; each carried a private 52 and the
+    /// two had already been declared twice when this token was minted.
+    static let searchDrawerHeight: CGFloat = 52
+
+    /// Where a poster row's hairline starts — the title's leading edge. Schedule's day-header rule
+    /// and All titles' letter-header rule both use the same x, and each had computed it privately.
+    static var rowRuleInset: CGFloat { gutter + PosterSize.row.size.width + artGap }
 }
 
 /// Artwork slots, named by CONTEXT rather than by number, so no screen has to remember a size.
@@ -303,6 +444,10 @@ enum ThemeMetrics {
 enum PosterSize {
     /// Detail hero. The largest identity object in the app.
     case hero
+    /// Library's cover-flow carousel card — the root's single art moment. In the slot table so its
+    /// geometry stops living in a per-screen metrics enum (it shipped there at r18, a radius no
+    /// token names).
+    case libraryHero
     /// Today's Focus / Recap card.
     case focus
     /// Library "Returning" shelf, Search trending.
@@ -320,15 +465,13 @@ enum PosterSize {
     /// Today's compact queue rows under the hero.
     case queue
 
-    /// Retired alias for `.row`. Search's rows and Library's AX rows named this slot; the two
-    /// sizes are one now. (Kept so a screen mid-migration still compiles; prefer `.row`.)
-    static var searchRow: PosterSize { .row }
     /// A recap beat — the smallest slot that still reads as a show.
     case beat
 
     var size: CGSize {
         switch self {
         case .hero: return CGSize(width: 112, height: 168)
+        case .libraryHero: return CGSize(width: 192, height: 288)
         case .focus: return CGSize(width: 88, height: 132)
         // Widened so a shelf caption's first line carries a real WORD. At 100 pt "That Time I Got
         // Reincarnated as a Slime" broke as "That Time I / Got Reincarn…" and "Re:ZERO / -Starting
@@ -347,6 +490,7 @@ enum PosterSize {
     /// Radius tracks size: a 10-pt radius on a 34-pt slot is a blob, on a 112-pt slot it is sharp.
     var radius: CGFloat {
         switch self {
+        case .libraryHero: return 14
         case .hero, .shelfLarge, .shelfMedium: return 12
         case .todayShelf: return 11
         case .focus, .row: return 10
@@ -359,15 +503,22 @@ enum PosterSize {
     /// Only art large enough to read as an object earns a contact shadow.
     var shadow: ShadowToken {
         switch self {
-        case .hero: return .artHero
+        case .hero, .libraryHero: return .artHero
         case .focus, .shelfLarge, .shelfMedium, .todayShelf: return .art
         case .row, .todayQueue, .queue, .beat: return .none
         }
     }
 }
 
-/// Type tokens. Outfit carries identity (wordmark, show titles); SF Pro carries information.
+/// Type tokens. Outfit SPEAKS — identity (wordmark, titles) and every word the app says in its
+/// own voice (buttons, row/body copy, facts, link actions). SF Pro ANNOTATES — dense small
+/// metadata, section labels, numerals/times (Outfit has no tabular figures; timers would jiggle),
+/// and the one long-form reading paragraph (`prose`). The old split ("Outfit carries identity,
+/// SF carries information") left Outfit such a thin slice that it read as the anomaly, not the
+/// voice (user, 30 Aug: "paired with some secondary font that isn't going well").
 /// Outfit scales with Dynamic Type through `relativeTo:`; SF tokens are system text styles.
+/// Tracking follows the size ramp of the identity tokens: tighter as the cut gets bigger and
+/// heavier, neutral by 13 pt.
 struct TypeToken {
     let font: Font
     let tracking: CGFloat
@@ -379,16 +530,26 @@ enum ThemeType {
     static let displayL = TypeToken(font: .custom("Outfit-Bold", size: 28, relativeTo: .title), tracking: -0.60)
     static let showTitleL = TypeToken(font: .custom("Outfit-SemiBold", size: 22, relativeTo: .title2), tracking: -0.35)
     static let showTitleM = TypeToken(font: .custom("Outfit-SemiBold", size: 17, relativeTo: .headline), tracking: -0.20)
-    static let showTitleS = TypeToken(font: .custom("Outfit-Medium", size: 15, relativeTo: .subheadline), tracking: -0.10)
-    static let screenTitle = TypeToken(font: .system(.largeTitle, weight: .bold), tracking: -0.50)
-    static let sectionTitle = TypeToken(font: .system(.title3, weight: .semibold), tracking: -0.20)
-    static let body = TypeToken(font: .body, tracking: 0)
-    static let bodyEmphasis = TypeToken(font: .system(.body, weight: .semibold), tracking: 0)
-    static let button = TypeToken(font: .system(.callout, weight: .semibold), tracking: 0)
-    static let callout = TypeToken(font: .callout, tracking: 0)
+    /// THE section header (2 Sep). Every shelf and list section in the app is headed by this —
+    /// mixed case, the app's voice, with a trailing chevron when the header is the way into the
+    /// section. It replaces the 11-pt small-caps `SectionLabel` as the header family: Apple TV,
+    /// Netflix and Apple Music all head a shelf with a bold title the size of a row title plus a
+    /// step, and the small-caps eyebrow read as a footnote above the shows it introduced. Small
+    /// caps stay for EYEBROWS (`OverArtLabel`, a grouped list's header) — the two levels now
+    /// split cleanly instead of one token doing both jobs.
+    /// (`showTitleS` and `screenTitle` are gone, 30 Aug: no call sites.)
+    static let sectionTitle = TypeToken(font: .custom("Outfit-SemiBold", size: 20, relativeTo: .title3), tracking: -0.30)
+    static let body = TypeToken(font: .custom("Outfit-Regular", size: 17, relativeTo: .body), tracking: -0.10)
+    static let bodyEmphasis = TypeToken(font: .custom("Outfit-SemiBold", size: 17, relativeTo: .body), tracking: -0.20)
+    static let button = TypeToken(font: .custom("Outfit-SemiBold", size: 16, relativeTo: .callout), tracking: -0.15)
+    static let callout = TypeToken(font: .custom("Outfit-Regular", size: 16, relativeTo: .callout), tracking: -0.10)
     static let metadata = TypeToken(font: .footnote, tracking: 0)
     static let metadataEmphasis = TypeToken(font: .system(.footnote, weight: .semibold), tracking: 0)
     static let sectionLabel = TypeToken(font: .system(.caption2, weight: .semibold), tracking: 1.0)
+    /// The BILLBOARD's badge — "NEW EPISODE", "4 EPISODES BEHIND", "TRENDING" — the streaming
+    /// apps' filled tag (Prime Video's and Disney+'s "NEW EPISODE"), 11-pt bold caps on an amber
+    /// ground (`HeroBadge`, 4 Sep). A ground, so no amber word is drawn.
+    static let heroBadge = TypeToken(font: .system(.caption2, weight: .bold), tracking: 0.6)
     static let caption = TypeToken(font: .caption2, tracking: 0)
     static let numberXL = TypeToken(font: .system(.largeTitle, weight: .bold).monospacedDigit(), tracking: -0.50)
     static let time = TypeToken(font: .system(.subheadline, weight: .semibold).monospacedDigit(), tracking: 0)
@@ -403,12 +564,13 @@ enum ThemeType {
 //
 //   HERO   (one per screen, the thing the screen is about)
 //     title      heroTitle     Outfit Bold 28 / textPrimary
-//     eyebrow    sectionLabel  SF 11 semibold +1.0 / textTertiary — above the title, never below
-//     meta       heroMeta      SF 15 / textSecondary
+//     badge      heroBadge     SF 11 bold +0.6 / onAccent on an accent ground — the state, above
+//                              the title, never below
+//     meta       heroMeta      Outfit 15 / textSecondary
 //
 //   CARD   (the one card that carries an action)
 //     title      showTitleL    Outfit SemiBold 22 / textPrimary
-//     fact       cardFact      SF 15 semibold / textPrimary  ← the fact is NOT grey
+//     fact       cardFact      Outfit SemiBold 15 / textPrimary  ← the fact is NOT grey
 //     support    metadata      SF 13 / textTertiary
 //
 //   ROW    (repeating, scannable)
@@ -420,18 +582,27 @@ enum ThemeType {
 //     title      shelfTitle    Outfit Medium 15 / textPrimary, exactly 2 reserved lines
 //     caption    shelfCaption  SF 12 medium / textSecondary (accent when it is a next step)
 //
-//   LABEL
-//     section    sectionLabel  SF 11 semibold +1.0 / textTertiary
-//     count      sectionLabel  / textDisabled
-//     action     listAction    SF 13 semibold / accent  ← "See all" is a link, not a button
+//   SECTION
+//     title      sectionTitle  Outfit SemiBold 20 / textPrimary, chevron when it navigates
+//     count      metadata      SF 13 / textTertiary, on the title's baseline
+//     eyebrow    sectionLabel  SF 11 semibold +1.0 — over art (`OverArtLabel`) and grouped lists only
+//     action     listAction    Outfit SemiBold 13 / interactive  ← an inline link ("Clear"); never amber
 extension ThemeType {
     /// Detail hero. Identity gets the biggest cut in the app after the wordmark.
     static let heroTitle = TypeToken(font: .custom("Outfit-Bold", size: 28, relativeTo: .title), tracking: -0.55)
     /// The genre/network/year line under a hero title.
-    static let heroMeta = TypeToken(font: .system(.subheadline), tracking: 0)
+    static let heroMeta = TypeToken(font: .custom("Outfit-Regular", size: 15, relativeTo: .subheadline), tracking: -0.05)
+    /// Long-form reading text — Detail's synopsis, the one paragraph in the app. Subheadline, with
+    /// the call site opening the leading (`lineSpacing(5)`). It was `body`: 17-pt default-leading
+    /// grey — visually an unstyled SwiftUI `Text` — and TWO POINTS LARGER than the hero's own
+    /// `heroMeta` line above it, so the type ladder inverted at exactly the step where it should
+    /// step down (user device, 30 Aug: "the description font looks plain wrong").
+    /// Deliberately still SF under the "Outfit speaks" rule: a synopsis is quoted CONTENT, not
+    /// the app's voice, and SF reads better than a geometric sans over a full paragraph.
+    static let prose = TypeToken(font: .system(.subheadline), tracking: 0)
     /// The single load-bearing fact on a card ("Season 7 · Episode 2"). Primary, not secondary:
     /// a fact the whole card exists to deliver may not be rendered in the same grey as its footnote.
-    static let cardFact = TypeToken(font: .system(.subheadline, weight: .semibold), tracking: 0)
+    static let cardFact = TypeToken(font: .custom("Outfit-SemiBold", size: 15, relativeTo: .subheadline), tracking: -0.10)
     /// Repeating media row title.
     static let rowTitle = TypeToken(font: .custom("Outfit-SemiBold", size: 17, relativeTo: .headline), tracking: -0.20)
     /// Repeating media row metadata.
@@ -442,10 +613,9 @@ extension ThemeType {
     static let shelfTitle = TypeToken(font: .custom("Outfit-Medium", size: 14, relativeTo: .subheadline), tracking: -0.10)
     static let shelfCaption = TypeToken(font: .system(.caption, weight: .medium), tracking: 0)
     /// An inline text action in a section header ("See all", "Clear"). Deliberately smaller than
-    /// `button`: a 16-pt semibold amber word beside an 11-pt grey label wins a fight it should lose.
-    static let listAction = TypeToken(font: .system(.footnote, weight: .semibold), tracking: 0)
-    /// Schedule day headers — a shade larger than `sectionLabel` because they carry the date.
-    static let dayLabel = TypeToken(font: .system(.caption, weight: .semibold), tracking: 0.7)
+    /// `button`: a 16-pt semibold word beside an 11-pt grey label wins a fight it should lose.
+    /// Rendered in `ThemeColor.interactive` — a link is an action, and actions are not amber.
+    static let listAction = TypeToken(font: .custom("Outfit-SemiBold", size: 13, relativeTo: .footnote), tracking: 0)
 }
 
 extension View {
@@ -474,6 +644,15 @@ enum ThemeMotion {
     static let uiMilestone = Animation.spring(response: 0.38, dampingFraction: 0.74, blendDuration: 0)
     /// State fades, stale strips, error notices, NOW movement.
     static let uiGentle = Animation.easeInOut(duration: 0.22)
+    /// Content that moves WITH the keyboard — the launchpad's recents unfolding as the field
+    /// takes focus. The system's own keyboard timing: its duration as last reported by
+    /// `keyboardWillShowNotification` (0.38 s on iOS 26, `KeyboardMotion.duration`) on the
+    /// keyboard's curve, so what makes room for the keyboard lands in the frame the keyboard
+    /// does. On `uiGentle` (0.22 s) the recents had settled while the keyboard was still
+    /// rising — one tap, two beats (filmed 6 Sep).
+    static var keyboard: Animation {
+        Animation.timingCurve(0.38, 0.70, 0.125, 1.00, duration: KeyboardMotion.duration)
+    }
     /// Initial content reveal.
     static let uiReveal = Animation.timingCurve(0.22, 1.00, 0.36, 1.00, duration: 0.28)
     /// Poster tint to final image.
@@ -535,6 +714,28 @@ extension AnyTransition {
     }
 }
 
+/// The system keyboard's animation duration, read from its own notifications so
+/// `ThemeMotion.keyboard` matches the keyboard on the OS it is running on. `install()` once at
+/// launch; the unseen warm-up keyboard (`KeyboardWarmup`) delivers the first reading before any
+/// field has been tapped.
+enum KeyboardMotion {
+    /// iOS 26's reported keyboard duration; older systems report 0.25 and update this on the
+    /// first presentation. Written on the main thread only (the observer's queue); read from
+    /// `ThemeMotion.keyboard`, which is not isolated — like the other cached tokens here.
+    nonisolated(unsafe) private(set) static var duration: Double = 0.38
+    nonisolated(unsafe) private static var installed = false
+
+    @MainActor
+    static func install() {
+        guard !installed else { return }
+        installed = true
+        NotificationCenter.default.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { n in
+            guard let d = n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double, d > 0.1, d < 1 else { return }
+            duration = d
+        }
+    }
+}
+
 /// Every haptic in the app goes through here. One-sentence justification per token (board 11).
 enum FeedbackToken {
     case selection      // a discrete selected value changed
@@ -548,7 +749,10 @@ enum FeedbackToken {
 
 @MainActor
 enum FeedbackCoordinator {
-    private static var lastFire: TimeInterval = 0
+    /// Per token, as the floor is: one shared stamp meant adding two shows in quick succession
+    /// buzzed once, an error inside 300 ms of the commit it belonged to was swallowed, and Undo
+    /// tapped straight after a mark gave no selection tick at all.
+    private static var lastFire: [FeedbackToken: TimeInterval] = [:]
 
     /// The minimum gap between two feedback events, **per token**.
     ///
@@ -575,8 +779,8 @@ enum FeedbackCoordinator {
     static func fire(_ token: FeedbackToken) {
         guard enabled, UIApplication.shared.applicationState == .active else { return }
         let now = Date().timeIntervalSinceReferenceDate
-        guard now - lastFire >= floor(for: token) else { return }
-        lastFire = now
+        guard now - (lastFire[token] ?? 0) >= floor(for: token) else { return }
+        lastFire[token] = now
         switch token {
         case .selection: select.selectionChanged(); select.prepare()
         case .commitLight: light.impactOccurred(intensity: 0.65); light.prepare()

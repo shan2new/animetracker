@@ -1,0 +1,106 @@
+{
+  "fill": {
+    "automatic-gradient": "display-p3:0.09020,0.08627,0.08235,1.00000"
+  },
+  "groups": [
+    {
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.18
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.08
+      },
+      "layers": [
+        {
+          "name": "Your place",
+          "image-name": "marker.svg",
+          "glass": true,
+          "fill": {
+            "automatic-gradient": "display-p3:0.94118,0.33725,0.24706,1.00000"
+          }
+        },
+        {
+          "name": "Plain matte feet",
+          "image-name": "feet.svg",
+          "glass": false
+        }
+      ]
+    },
+    {
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.2
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.06
+      },
+      "layers": [
+        {
+          "name": "Watched portion",
+          "image-name": "progress.svg",
+          "glass": true,
+          "fill": {
+            "automatic-gradient": "display-p3:0.94118,0.63529,0.30588,1.00000"
+          }
+        }
+      ]
+    },
+    {
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.18
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.5
+      },
+      "layers": [
+        {
+          "name": "Television progress track",
+          "image-name": "track.svg",
+          "glass": true,
+          "fill": {
+            "automatic-gradient": "display-p3:0.72157,0.66667,0.54510,1.00000"
+          }
+        }
+      ]
+    },
+    {
+      "lighting": "individual",
+      "specular": false,
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      },
+      "layers": [
+        {
+          "name": "Smoked screen",
+          "image-name": "screen.svg",
+          "glass": false,
+          "fill": {
+            "automatic-gradient": "display-p3:0.18039,0.15686,0.14118,1.00000"
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

@@ -58,7 +58,7 @@ import com.anitrack.app.ui.art.PosterSlot
 import com.anitrack.app.ui.control.PressStyle
 import com.anitrack.app.ui.control.materialGlyphBox
 import com.anitrack.app.ui.control.minimumTapTarget
-import com.anitrack.app.ui.section.OverArtLabel
+import com.anitrack.app.ui.section.HeroBadge
 import com.anitrack.model.Formatting
 import com.anitrack.model.Franchise
 import com.anitrack.model.MediaSource
@@ -655,7 +655,7 @@ fun RecapArrival(
 
     Column(modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            OverArtLabel(text = Copy.Recap.whileYouWereAway)
+            HeroBadge(text = Copy.Recap.whileYouWereAway)
             Spacer(Modifier.width(ThemeSpace.x3))
             Spacer(Modifier.weight(1f))
             DismissDisc(onDismiss)

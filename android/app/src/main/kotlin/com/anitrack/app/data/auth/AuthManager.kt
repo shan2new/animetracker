@@ -184,11 +184,13 @@ data class AccountIdentity(
      * screenshot, so it is gated. A Release build that somehow reaches dev mode says the true
      * thing instead of the embarrassing one."
      */
-    val provenanceLabel: String
+    val provenanceLabel: String?
         get() = if (provenance == Provenance.Developer && BuildConfig.DEBUG) {
             DEVELOPER_SESSION
         } else {
-            Copy.Account.signedInWithClerk
+            // "Signed in" under a name on the account sheet names nothing the sheet does not
+            // already say (i1): the line is drawn only for the developer session.
+            null
         }
 
     companion object {

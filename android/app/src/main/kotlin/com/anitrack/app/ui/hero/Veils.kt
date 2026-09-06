@@ -97,6 +97,8 @@ fun HeroTopVeil(
     val mark = if (total > 0.dp) band / total else 0f
     val brush = remember(mark) {
         Brush.verticalGradient(
+            // 0.82 / 0.76 / 0.62 (i2-6): a poster's own logotype in its top quarter read at 47 %
+            // under the wordmark — "Previously.ZERO".
             0f to Color.Black.copy(alpha = 0.72f),
             mark * 0.72f to Color.Black.copy(alpha = 0.66f),
             mark to Color.Black.copy(alpha = 0.52f),
@@ -147,17 +149,36 @@ fun HeroCopyScrim(
     lead: Dp = heroCopyScrimLead,
 ) {
     val h = (copyHeight + lead + ThemeSpace.x2).coerceAtLeast(1.dp)
-    val leadFraction = lead / h
-    val bodyFraction = (lead + heroCopyScrimBodyReach) / h
-    val brush = remember(leadFraction, bodyFraction) {
-        Brush.verticalGradient(
-            0f to Color.Transparent,
-            minOf(0.99f, leadFraction * 0.4f) to ThemeColor.canvas.copy(alpha = 0.16f),
-            minOf(0.99f, leadFraction * 0.7f) to ThemeColor.canvas.copy(alpha = 0.44f),
-            minOf(0.99f, leadFraction) to ThemeColor.canvas.copy(alpha = 0.72f),
-            minOf(0.995f, bodyFraction) to ThemeColor.canvas.copy(alpha = 0.90f),
-            1f to ThemeColor.canvas,
+    // The stops as DISTANCES down the scrim, clamped monotonic (iOS, 4 Sep): 0.56 where the
+    // badge sits, 0.72 at the title's first line, 0.86 where the line ends, and full canvas 40 dp
+    // above the frame's bottom whatever the copy's height — the last 5 % of the art's ground had
+    // shown as a faint dithered band under the capsule. The copy sits ON the picture, not in a
+    // void; the frame still LANDS on canvas.
+    val brush = remember(h, lead) {
+        // Where the veil must be full canvas: 40 dp above the frame's bottom. Every ramp mark is
+        // bounded by a share of that distance, so a SHORT copy compresses the ramp instead of
+        // pushing the landing off the end (iOS, 5 Sep: with the marks clamped only to `h`, a
+        // one-line copy put 0.72 at 92 % and 0.86 at the last pixel and never reached canvas —
+        // Re:ZERO's copyright line printed through and the hero ended on a hard step). A tall copy
+        // is unchanged.
+        val land = (h - 40.dp).coerceAtLeast(1.dp)
+        val marks = listOf(
+            0.dp to 0f,
+            minOf(lead * 0.35f, land * 0.25f) to 0.08f,
+            minOf(lead * 0.70f, land * 0.50f) to 0.28f,
+            minOf(lead, land * 0.72f) to 0.56f,
+            minOf(lead + 28.dp, land * 0.84f) to 0.72f,
+            minOf(lead + 72.dp, land * 0.95f) to 0.86f,
+            minOf(lead + 128.dp, land) to 0.95f,
+            land to 1f,
+            h to 1f,
         )
+        var last = 0.dp
+        val stops = marks.map { (y, alpha) ->
+            last = maxOf(last, minOf(maxOf(0.dp, y), h))
+            (last / h) to if (alpha == 0f) Color.Transparent else ThemeColor.canvas.copy(alpha = alpha)
+        }
+        Brush.verticalGradient(*stops.toTypedArray())
     }
     Box(
         modifier
@@ -167,11 +188,12 @@ fun HeroCopyScrim(
     )
 }
 
-/** The run-in above the copy. See [HeroCopyScrim]. */
-val heroCopyScrimLead = 72.dp
-
-/** How far past the copy's top edge the scrim is effectively opaque — the body of the text block. */
-private val heroCopyScrimBodyReach = 56.dp
+/**
+ * The run-in above the copy. See [HeroCopyScrim]. 132, not 72 (4 Sep): the stops used to reach
+ * 0.72 at the copy's top edge, so the whole lower third of the billboard was canvas with type in
+ * it and the art stopped where the words began.
+ */
+val heroCopyScrimLead = 132.dp
 
 // -------------------------------------------------------------------------------------------------
 // Measuring the copy

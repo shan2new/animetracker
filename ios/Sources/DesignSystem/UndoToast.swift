@@ -20,6 +20,27 @@ struct UndoState: Identifiable {
     var customMessage: String? = nil
     /// A custom undo (e.g. restore a reset season); runs instead of `performUndo`.
     var undoAction: (() -> Void)? = nil
+    /// Where the receipt is drawn (`Receipts.swift`): in place under a host that stays on
+    /// screen, else the tab bar's lane. Default: the lane.
+    var placement: ReceiptPlacement = .lane
+
+    /// The same state, placed under a host.
+    func placed(at host: String) -> UndoState {
+        var s = self
+        s.placement = .inPlace(host: host)
+        return s
+    }
+
+    /// The fact alone — "Episode 19 watched" — for a receipt that sits where the show's name
+    /// already is (the receipt spike, 5 Sep).
+    var receipt: String {
+        if let customMessage { return customMessage }
+        // The lane's fact, with the show on the line beneath; the full sentence stays in
+        // `message` for VoiceOver.
+        if removed { return Copy.Toast.removedShort }
+        if added { return Copy.Toast.added(title: title, status: statusLabel ?? "Library") }
+        return count > 1 ? Copy.Toast.batchWatched(count) : Copy.Progress.episodeWatched(episode)
+    }
 
     var message: String {
         if let customMessage { return customMessage }
@@ -36,11 +57,10 @@ extension UndoState: Equatable {
     static func == (a: UndoState, b: UndoState) -> Bool { a.id == b.id }
 }
 
-// The shared toast layer: undo + error toasts stacked above the bottom chrome. A sheet presents
-// ABOVE the tab view's ZStack, so this host is mounted in BOTH MainTabView and the detail sheet —
-// whichever is frontmost shows the same state, and a toast survives the sheet dismissing.
-// Keeping the host always mounted (with `if let` children) also means the insert/remove
-// transitions actually animate — the animation lives on this container, not the transient child.
+// The bottom chrome's persistent surfaces, above the tab bar: the sync banner, and — below
+// iOS 26.1, where the bar has no accessory lane — the receipt lane. Always mounted with `if let`
+// children so the insert/remove transitions actually animate. The receipts themselves are
+// `Receipts.swift`; the in-place line lives under the control that was pressed.
 struct ToastHost: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -48,29 +68,20 @@ struct ToastHost: View {
     var body: some View {
         let sync = SyncCenter.shared
         VStack(spacing: 9) {
-            if !sync.failedChanges.isEmpty {
+            // Not over Profile: it lists every failed change with Retry and Discard, so the
+            // banner there was a duplicate of the screen being read.
+            if !sync.failedChanges.isEmpty, !sync.profileIsOpen {
                 SyncBanner(count: sync.failedChanges.count, retry: sync.canRetryAny ? { sync.retryAll() } : nil)
                     .frame(maxWidth: 420)
             }
-            if let message = appModel.errorToast {
-                ErrorToast(message: message)
-            }
-            if let undo = appModel.undo {
-                UndoToast(state: undo) { appModel.undoTapped(undo) }
+            if !ChromeCapability.tabBarAccessory {
+                LaneFallback().frame(maxWidth: 420)
             }
         }
-        // `pick`, so a toast does not still spring in with a 4-pt rise under Reduce Motion — the
-        // three shipped calls were raw `uiSnappy`. `uiDismiss` was minted at ThemeTokens:376 for
-        // exactly this moment and had zero call sites: a toast that leaves on the same spring it
-        // arrived on reads as a bounce out, not a dismissal.
         .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
                    value: sync.failedChanges.count)
-        .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
-                   value: appModel.undo?.id)
-        .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
-                   value: appModel.errorToast)
-        // A VoiceOver user was never told the toast existed, let alone that Undo was available for
-        // the next six (or ten) seconds.
+        // A VoiceOver user was never told the receipt existed, let alone that Undo was available
+        // for the next six (or ten) seconds.
         .onChange(of: appModel.undo?.id) { _, _ in
             guard let undo = appModel.undo else { return }
             Announce.status("\(undo.message). \(Copy.Action.undo) available.")
@@ -78,23 +89,8 @@ struct ToastHost: View {
         .onChange(of: appModel.errorToast) { _, message in
             if let message { Announce.status(message) }
         }
-    }
-}
-
-// Failure toast: persists until dismissed by a new write (spec: failure toasts persist).
-struct ErrorToast: View {
-    let message: String
-    var body: some View {
-        ToastView(message: message, failure: true).frame(maxWidth: 420)
-    }
-}
-
-// Canonical Undo toast (spec board 02): 6 s, one action, lands when the handoff settles.
-struct UndoToast: View {
-    let state: UndoState
-    let onUndo: () -> Void
-    var body: some View {
-        ToastView(message: state.message, actionLabel: Copy.Action.undo, action: onUndo)
-            .frame(maxWidth: 420)
+        .onChange(of: appModel.notice) { _, message in
+            if let message { Announce.status(message) }
+        }
     }
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -389,6 +391,41 @@ fun OverArtLabel(
         )
     }
 }
+
+/**
+ * The billboard's BADGE — "NEW EPISODE", "4 EPISODES BEHIND", "13 EPISODES LEFT", "CAUGHT UP",
+ * "TRENDING", "WHILE YOU WERE AWAY" — the state as a small filled tag above a hero's title.
+ *
+ * Ported from iOS `HeroBadge` (4 Sep, direction B of three photographed side by side): the
+ * streaming apps' signal — Prime Video overlays a "NEW EPISODE" badge on cover art, Disney+ tags
+ * tiles "Season Finale" — one or two words on a ground, never a sentence. Amber ground, `onAccent`
+ * ink, [ThemeType.heroBadge] caps, a 4-dp corner. A ground, so no amber WORD is drawn and the one
+ * accent object on the block stays the capsule. Detail's state block, the trending billboard and
+ * the recap wear the same badge; [OverArtLabel] stays the pill for a moment or an episode on CARD
+ * art.
+ *
+ * The height is a hard 20 dp, like [OverArtLabel]'s 24: a tag, not a line of copy.
+ */
+@Composable
+fun HeroBadge(text: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .height(HeroBadgeHeight)
+            .background(ThemeColor.accent, RoundedCornerShape(HeroBadgeCorner))
+            .padding(horizontal = HeroBadgeInset),
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(
+            text = text.uppercased(),
+            style = ThemeType.heroBadge.copy(color = ThemeColor.onAccent),
+            maxLines = 1,
+        )
+    }
+}
+
+private val HeroBadgeHeight = 20.dp
+private val HeroBadgeCorner = 4.dp
+private val HeroBadgeInset = 7.dp
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared internals

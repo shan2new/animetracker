@@ -423,11 +423,12 @@ private fun BesideArt(item: UpNextItem, artUri: String?, width: Dp, wide: Boolea
 }
 
 /**
- * pill → headline → show → fact → bar → support.
+ * badge → show → one line → bar → support — the hero's own lockup (4 Sep, direction B).
  *
- * A TV listing's order, and it never varies: what state this is, then the moment, then whose moment
- * it is, then which episode. Where-you-are is the bar and is **wordless** — the count rides in the
- * spoken label, never printed beside a numeral that already says it.
+ * What state this is (a filled amber badge), then whose moment it is (the title), then the moment
+ * and the episode on ONE line ("Today at 7:30 PM · Season 4 · Episode 15"). Where-you-are is the
+ * bar and is **wordless** — the count rides in the spoken label, never printed beside a numeral
+ * that already says it.
  *
  * The bar and the support line are the two things a 4 × 2 card has no room for, and they are
  * exactly the two the hero itself treats as optional.
@@ -441,7 +442,7 @@ private fun SlateCopy(item: UpNextItem, contentWidth: Dp, wide: Boolean, fillHei
             GlanceModifier.fillMaxWidth()
         },
     ) {
-        Pill(text = item.eyebrow, dot = item.eyebrowDot)
+        Badge(text = item.eyebrow)
 
         // On the billboard the art breathes between the pill and the copy; beside a poster there is
         // no art to breathe and the block is centred as a whole.
@@ -449,18 +450,6 @@ private fun SlateCopy(item: UpNextItem, contentWidth: Dp, wide: Boolean, fillHei
             Spacer(GlanceModifier.defaultWeight())
         } else {
             Spacer(GlanceModifier.height(ThemeSpace.x2))
-        }
-
-        item.headline?.let { headline ->
-            Text(
-                text = headline,
-                maxLines = 1,
-                style = TextStyle(
-                    color = ColorProvider(ThemeColor.accent),
-                    fontSize = if (wide) 30.sp else 24.sp,
-                    fontWeight = FontWeight.Bold,
-                ),
-            )
         }
 
         Text(
@@ -476,7 +465,7 @@ private fun SlateCopy(item: UpNextItem, contentWidth: Dp, wide: Boolean, fillHei
         Spacer(GlanceModifier.height(ThemeSpace.x0_5))
 
         Text(
-            text = item.fact,
+            text = listOfNotNull(item.moment, item.fact).joinToString(" \u00B7 "),
             maxLines = 1,
             style = TextStyle(
                 color = ColorProvider(ThemeColor.textSecondary),
@@ -514,6 +503,34 @@ private fun SlateCopy(item: UpNextItem, contentWidth: Dp, wide: Boolean, fillHei
  * amber and the word is ink**: amber here is STATE (today's drop, a later-today airing), and an
  * amber *word* would be the "this is a button" reading this app never allows.
  */
+@Composable
+private fun Badge(text: String) {
+    Row(
+        modifier = GlanceModifier
+            .height(BADGE_HEIGHT)
+            .background(
+                imageProvider = ImageProvider(R.drawable.widget_badge),
+                contentScale = ContentScale.FillBounds,
+            )
+            .padding(horizontal = BADGE_INSET),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text.uppercase(Locale.getDefault()),
+            maxLines = 1,
+            style = TextStyle(
+                color = ColorProvider(ThemeColor.onAccent),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+            ),
+        )
+    }
+}
+
+private val BADGE_HEIGHT = 20.dp
+private val BADGE_INSET = 7.dp
+
+@Suppress("unused")
 @Composable
 private fun Pill(text: String, dot: Boolean) {
     Row(

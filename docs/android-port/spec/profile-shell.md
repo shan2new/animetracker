@@ -2,7 +2,7 @@
 
 This is the behavioural specification for the *frame* of **Previously.** — everything that is not a
 content screen. It covers the process boot order (`AniTrackApp`), the authentication gate and
-cold-launch brand ident (`RootView` + `SplashView`), the four-tab shell with its per-tab navigation
+cold-launch ident (`RootView` + `LaunchIdent`), the four-tab shell with its per-tab navigation
 stacks and its deliberately three-layer tint architecture (`MainTabView`), the Profile modal — an
 *account sheet* in the App Store's reading order, not a dashboard (`ProfileView`, `LibraryExport`,
 `AccountDeletion`), the local episode-alert scheduler (`EpisodeNotifications`), and the two ambient
@@ -24,8 +24,8 @@ decisions were arrived at by measurement and reverting one re-introduces a named
 | --- | --- |
 | `ios/Sources/App/AniTrackApp.swift` | `@main` scene, boot order, tab-bar font proxy, global environment |
 | `ios/Sources/App/RootView.swift` | Splash/auth gate, `AppTab`, `MainTabView`, `detailDestinations` |
-| `ios/Sources/App/SplashView.swift` | The ~2 s brand ident and its hand-written timeline |
-| `ios/Sources/App/SplashShaders.metal` | `emberZoom` (radial smear + chromatic fringe), `filmGrain` |
+| `ios/Sources/App/LaunchIdent.swift` | The launch ident: the icon's ribbon arriving and taking its place, a pure function of live time |
+| `ios/Sources/App/LaunchHandoff.swift` | The launch's hand-off state (phase, auth answer, the destination mark's frame) |
 | `ios/Sources/App/Routing.swift` | `DetailRoute` |
 | `ios/Sources/Features/Profile/ProfileView.swift` | The account sheet, `ProfileWash`, `ProfileSnapshot`, `ProfileRow(Label)`, `ExportOptionsView` |
 | `ios/Sources/Features/Profile/LibraryExport.swift` | JSON/CSV export payloads |
@@ -107,8 +107,8 @@ layout appearances (`stackedLayoutAppearance`, `inlineLayoutAppearance`,
 | --- | --- | --- |
 | `UIUserInterfaceStyle` | `Dark` | No light theme exists |
 | `UISupportedInterfaceOrientations` | Portrait only | No landscape layouts anywhere |
-| `CADisableMinimumFrameDurationOnPhone` | `true` | *"allow display-linked custom animation (the splash's TimelineView) to run at up to 120 Hz on iPhone — without this key iOS caps custom animation at 60 fps"* |
-| `UILaunchScreen.UIColorName` | `LaunchBackground` = pure `#000000` sRGB | The static launch frame is **true black**, seamless with the splash's own black base |
+| `CADisableMinimumFrameDurationOnPhone` | `true` | *"allow display-linked custom animation (the launch ident's TimelineView) to run at up to 120 Hz on iPhone — without this key iOS caps custom animation at 60 fps"* |
+| `UILaunchScreen.UIColorName` | `LaunchBackground` = `#09090B` (the canvas) | The launch frame is the bare canvas and nothing else; the ident owns the whole entrance |
 | `NSSupportsLiveActivities` | `true` | Required for `Activity.request` |
 | `UIAppFonts` | Outfit Light/Regular/Medium/SemiBold/Bold `.ttf` | |
 | `APIBaseURL`, `ClerkPublishableKey`, `PrivacyPolicyURL`, `TermsURL`, `SupportEmail` | build settings | Read through `AppConfig`; a value that is empty or contains `REPLACE_ME` is treated as **absent** |
@@ -119,46 +119,44 @@ layout appearances (`stackedLayoutAppearance`, `inlineLayoutAppearance`,
 
 ## 2. `RootView` — the gate
 
-```
+```swift
 ZStack {
-  ThemeColor.canvas.ignoresSafeArea()
-  Group { auth.isSignedIn ? MainTabView() : SignInView() }
-      .scaleEffect(splashDone || reduceMotion ? 1 : 0.965)
-      .blur(radius:  splashDone || reduceMotion ? 0 : 4)
-  if !splashDone { SplashView { splashFinished = true; handOffIfReady() }.zIndex(10).transition(.opacity) }
+    ThemeColor.canvas.ignoresSafeArea()
+    Group { auth.isSignedIn ? MainTabView() : SignInView() }
+        .scaleEffect(emerged || reduceMotion ? 1 : 0.96)          // emerges through the ident; never faded
+    if !launchDone {
+        LaunchIdent(onLeaving: { appModel.surfaceReady = true; withAnimation(uiSettle) { emerged = true } },
+                    onFinished: { launchDone = true; launch.finished = true }).zIndex(10)
+    }
 }
+.environment(launch)                                              // one LaunchHandoff per launch
+.onChange(of: auth.bootstrapped, initial: true) { _, ready in if ready { launch.authReady = true } }
 ```
 
 * Both branches carry `.transition(.opacity.animation(ThemeMotion.uiGentle))` (ease-in-out 0.22 s).
 * `MainTabView` carries `.task(id: auth.isSignedIn) { appModel.start() }` — the library load starts
-  the instant a session exists, *behind* the splash.
-* **The app emerges from inside the ident.** While the splash is up the app tree is drawn at
-  **scale 0.965** with a **4 pt blur**; both settle to 1.0/0 when `splashDone` flips, animated by the
-  `withAnimation(ThemeMotion.uiSettle)` in `handOffIfReady`. Under Reduce Motion there is no camera
-  push to emerge from, so scale and blur are pinned at their settled values and the splash simply
-  crossfades away.
+  the instant a session exists, *behind* the ident.
+* **The app emerges through the ident** (scale 0.96 → 1 on `uiSettle` as the ident pushes through
+  and fades off it). It is never faded itself: an opacity ramp over the whole tree is an offscreen
+  pass per frame; the ident's two layers fading is the same picture for the price of two layers.
 
-### 2.1 `handOffIfReady()` — the two-condition gate
+### 2.1 The two-condition gate
 
-```swift
-guard !splashDone, splashFinished, auth.bootstrapped else { return }
-withAnimation(ThemeMotion.uiSettle) { splashDone = true }
-appModel.surfaceReady = true
-```
-
-Called from two places: the splash's `onFinished` callback, and `.onChange(of: auth.bootstrapped)`.
-*"The splash leaves when its timeline is done AND auth knows whether there is a session — so the
-screen it reveals is the right one, never sign-in for a signed-in user."* `AuthManager.bootstrap()`
-waits up to **3 s** (polling `Clerk.shared.isLoaded` every **80 ms**) before setting `bootstrapped`,
-so a cold launch on a slow network holds the splash past its 1.68 s timeline rather than flashing
-the sign-in screen at a returning user. `appModel.surfaceReady` is the signal Today's recap clock
-waits on.
+The ident holds until its own beats are done AND `launch.authReady` — *"so the screen it reveals
+is the right one, never sign-in for a signed-in user."* `AuthManager.bootstrap()` waits up to
+**3 s** (polling `Clerk.shared.isLoaded` every **80 ms**) before setting `bootstrapped`; the ident's
+own patience is 4 s. `appModel.surfaceReady` flips as the ident starts to leave (`.leaving`) and
+gates every tab's page-in and the recap clock; the launch tab's page-in only RISES
+(`pageInTransition(fadeIn: launch.finished)`) because the emergence is the fade, and — on iOS —
+the floating tab bar waits on `launch.emerging` (`launchTabBar`; the system composites the bar
+ABOVE any SwiftUI overlay). Android's bar is the app's own composable under the overlay and needs
+no gate.
 
 ### 2.2 Lifecycle observers
 
 | Trigger | Action |
 | --- | --- |
-| `onChange(of: auth.bootstrapped)` | `handOffIfReady()` |
+| `onChange(of: auth.bootstrapped, initial: true)` | `launch.authReady = true` |
 | `onChange(of: auth.isSignedIn)` → `false` | `appModel.teardown()`. *"Sign-out … is the one moment the model outlives its account: the library, the live clock, pending episode alerts and a running Live Activity all survive the view tree. Tear them down here so signing in again starts clean."* |
 | `onChange(of: scenePhase)` → `.active` (and `auth.isSignedIn`) | `appModel.sceneBecameActive()` |
 | `onChange(of: scenePhase)` → `.background` (and `auth.isSignedIn`) | `appModel.sceneEnteredBackground()` |
@@ -172,156 +170,64 @@ away time exceeds `AppModel.staleReloadAfter`, re-stamping `/me/opened` past `ne
 
 ---
 
-## 3. `SplashView` — the brand ident
+## 3. `LaunchIdent` — the launch (rebuilt 2026-09-04, settled 2026-09-05)
 
-A **single-climax ~2 s ident** driven by `TimelineView(.animation)`: *"All motion is pure math over
-elapsed real time … Base is true black for OLED — pixels stay off, seamless with the launch frame."*
-There are no SwiftUI animations at all; every value is a pure function of elapsed seconds `tm`.
+**The old ident (the ignition: icon lands from depth, sweep, ember, wordmark punch, tagline, camera
+push, Metal shaders, one haptic) is gone on both platforms, and so is the day's first replacement
+(a small ribbon flying into the header's mark — retired: a small object shrinking into a corner
+reads as a window minimising).** What ships:
 
-`tm` = `context.date.timeIntervalSince(start)` where `start` is set once in `.onAppear`
-(*"so a slow cold launch does not consume the timeline before the first frame"*).
-**Under Reduce Motion `tm` is pinned at the constant `1.4`** — a still frame of the ident at its
-settled state, held for 1.2 s, then hand-off.
+The launch is **the app icon's ribbon at cinematic scale, drawn by light, then the app coming
+through it.** iOS: on the first live frame a travelling light draws the ribbon (120 pt, a third of
+the screen) head to foot, the icon's material forming behind it — the ramp, the rim, the pool of
+warm light it casts on the canvas, arriving as the drawing completes; as the light passes the
+tails the coral full stop lands with one pulse of its own light. The composition holds, still.
+Once auth has answered, the ident pushes through: the composition grows to 1.12 and fades (gone
+before the ground has finished lifting, so it never lingers as a ghost over the screen), the
+ground fades, and the app emerges beneath from a hair small. Android: the system splash's icon
+disc IS frame 0; its tile dissolves and the ribbon is released — grown from the icon's size to
+120 dp with the light crossing it, the pool of light arriving, the full stop (already there, from
+the icon) pulsing once — then the same hold and push-through. No tagline, no flash, no haptic.
+Reduce Motion: fade in, hold, crossfade.
 
-### 3.1 Constants
+**Every value is a pure function of live time** — seconds of frames actually presented (iOS:
+`TimelineView(.animation)`; Android: `withFrameNanos`), with any stall between two frames longer
+than 250 ms cut out of the clock (`IdentClock`; a merely slow frame is NOT cut — cutting it plays
+the motion in stepped slow motion). There are no animation objects: an implicit animation started
+as the view appears is folded into its first frame and never plays, and a sleep counts wall time
+while the cold launch's main thread is still busy. **Nothing heavy runs per frame**: the ribbon is
+rasterised once (iOS: the reveal is a canvas-coloured cover sliding off it, not a mask; Android:
+one fixed-size layer moved by scale + translation, its outline — the shadow's — never changing),
+the light is one gradient band, and every exit is a layer opacity or a transform; the app beneath
+is scaled, never faded.
 
-| Constant | Value | Derivation / meaning |
-| --- | --- | --- |
-| `ignite` | `0.92` s | The climax. *"IGNITE is when the sweep's leading edge crosses the dot (inOutCubic over the sweep window hits dotX ≈ 0.557 at ~52% → ≈0.92 s) — every climax event (haptic, wordmark punch, light flood) is keyed to it."* |
-| `handoff` | `1.68` s | *"Real time at which we hand off to the app — early in the push, so the RootView crossfade overlaps the zoom-through and the app emerges from inside the icon."* |
-| `compFraction` | `640/1080` = `0.592593` | Icon comp width ÷ screen width |
-| `compTop` | `560/1920` = `0.291667` | Comp top as a fraction of screen height |
-| `dotX` | `0.5 + 0.49·0.56·0.32` = **`0.587808`** | *Derived* from `PreviouslyMark`'s geometry (mark width 0.49·comp centred at x 0.5; dot rest offset `+slotWidth·0.32`, slot width `0.56·markWidth`). *"The mock's hand-measured 0.424 was ~30 pt left of where the dot actually lands."* |
-| `dotY` | `0.48 − 0.49·1.58·0.24` = **`0.294192`** | Mark centred at y 0.48, height = 1.58·width, slot lift `−height·0.24` |
-| `dotArrive` | `0.571` | The sweep value at which the dot reaches its saved place — chosen so `fl` crosses it at `tm ≈ ignite` |
-| `wordmarkTop` | `1150/1920` = `0.598958` | |
-| `taglineTop` | `1330/1920` = `0.692708` | |
-| `ink` | `#F4EFE6` | Wordmark ink (splash-local; **not** `textPrimary`) |
-| `accentDeep` | `#C9702E` | Wordmark full-stop gradient end |
+### 3.1 The beats (seconds of live time)
 
-### 3.2 Easing helpers
-
-```swift
-seg(p, a, b)  = min(max((p - a) / (b - a), 0), 1)          // clamped normalise
-outQuint(t)   = 1 - pow(1 - t, 5)
-inOutQuint(t) = t < 0.5 ? 16t⁵ : 1 - pow(-2t + 2, 5)/2
-inOutCubic(t) = t < 0.5 ? 4t³  : 1 - pow(-2t + 2, 3)/2
-inCubic(t)    = t³
-outCubic(t)   = 1 - pow(1 - t, 3)
-```
-
-### 3.3 Driver values, in order of evaluation
-
-| Symbol | Formula | Window | Reads as |
+| beat | iOS | Android | notes |
 | --- | --- | --- | --- |
-| `ar` | `outQuint(seg(tm, 0, 0.55))` | 0 → 0.55 s | Icon lands from depth (scale 1.16 → 1, blur clears) |
-| `fl` | `inOutCubic(seg(tm, 0.50, 1.30))` | 0.50 → 1.30 | The progress dot travels to its saved place |
-| `lit` | `seg(fl, dotArrive − 0.07, dotArrive + 0.03)` | — | 0→1 across `fl` ∈ [0.501, 0.601]. **The ignition gate** |
-| `dip` | `seg(tm, 0.70, 0.88) · (1 − lit)` | 0.70 → 0.88 | *"the stage light dips a breath before ignition, so the flood that follows reads bigger — contrast bought just before it's spent"* |
-| `flood` | `lit · (1 − 0.45·seg(tm, 1.15, 1.60))` | — | Light jumps on the beat, then settles high |
-| `w` | `outQuint(seg(tm, 0.92, 1.28))` | ignite → +0.36 | Wordmark punch-in |
-| `tg` | `outQuint(seg(tm, 1.06, 1.46))` | | Tagline, a breath later |
-| `breathe` | `seg(tm, 1.30, 1.60) · (0.5 + 0.5·sin((tm − 1.30)·π/1.1))` | | Post-ignition dot breath |
-| `dotGlow` | `lit·(0.75 − 0.30·seg(tm, 1.10, 1.50)) + breathe·0.15` | | |
-| `glowScale` | `1 + 0.45·lit·(1 − 0.75·seg(tm, 1.10, 1.55))` | | |
-| `sheen` | `inOutQuint(seg(tm, 1.00, 1.70))` | | One specular pass across the ribbon |
-| `push` | `inCubic(seg(tm, 1.60, 2.10))` | 1.60 → 2.10 | The camera dive |
-| `tgOut` | `outQuint(seg(tm, 1.55, 1.80))` | | Tagline exit |
-| `wOut` | `outQuint(seg(tm, 1.60, 1.90))` | | Wordmark exit |
-| `iFade` | `seg(tm, 1.80, 2.08)` | | Icon fade during the dive |
+| pre-roll | 0.22 | — | the system's launch transition swallows the app's first frames |
+| entrance | the light draws the ribbon over 0.60 (ease-in-out) | the disc's tile dissolves over 0.25; the ribbon grows from the icon's size on a spring (0.72 / 0.86) from 0.12; the light crosses it 0.20 → 0.80 | `IdentFrame.spring` = the step response of a damped spring at rest |
+| pool of light | arrives 0.45 → 0.85 | 0.50 → 0.90 | the icon's coloured shadow: iOS a static blurred layer, Android the layer's elevation shadow (tinted 28+, none below 29 for a non-convex outline) |
+| full stop | lands at 0.66 (0.40 / 0.72), pulse 0.45 | present from the icon; pulse at 0.66 | one beat of coral light |
+| hold until | 1.15 | 1.15 | and `authReady`, capped by `patience` 4.0 |
+| push through | composition ×1.12 and gone over 0.23, ground over 0.36; app 0.96 → 1 on `uiSettle` | same | `surfaceReady` at `.leaving`; page-in rises only; iOS tab bar on `emerging` |
+| done | +0.36 | same | the ident is removed; `launch.finished` |
 
-Composites:
-```
-scale    = (1.16 − 0.16·ar) · (1 + 1.15·push)
-comp     = screenWidth · compFraction
-dotPoint = (screenWidth/2 + comp·(dotX − 0.5),  screenHeight·compTop + comp·dotY)
-```
+### 3.2 Geometry
 
-### 3.4 Layers (z-order, bottom → top)
+Ribbon width 120 pt/dp; centre (0.5 − 14 pt, 0.44 × height). `MarkGeometry` is the icon's: aspect
+800/376, notch 0.40, tip 0.045, apex 0.035, top 0.06, bead 180/376 wide with its foot flush with
+the tails and 38/376 clear of the edge. The header mark is 11, the colophon 9, the gate 56 (lit).
+The full stop is `brandPeriod` (#F0563F) everywhere the name is set.
 
-1. **Background** — `Color.black`, then a 5-stop vertical `LinearGradient`
-   `#2A1F14 @0 · #1C1510 @0.22 · #12100C @0.45 · #0C0B09 @0.70 · black @1` at `opacity(ar · 0.9)`;
-   then the stage light: `RadialGradient([#4A3B24 @ opacity(0.16 − 0.07·dip + 0.34·flood), .clear])`
-   centred `(0.5, 0.42)`, `startRadius 0`, `endRadius 420 + 140·lit`, at `opacity(ar)`;
-   then a vignette `RadialGradient([.clear, black@0.4])` centred, `endRadius max(1, 700·ar)`.
-2. **Icon** — frame `comp × comp`, `scaleEffect(scale, anchor: UnitPoint(dotX, dotY))` (*"Push scales
-   around the dot itself — we zoom THROUGH the ember"*), positioned at
-   `(width/2, height·compTop + comp/2)`, `opacity(ar · (1 − iFade))`. Contents:
-   * contact ellipse: `black @ (0.22 + 0.26·ar)`, `w = markWidth·(1.25 − 0.15·ar)`,
-     `h = markWidth·0.16`, `blur comp·(0.065 − 0.025·ar)`, at `(comp/2, comp·0.88)`;
-   * `PreviouslyMark(width: comp·0.49, progress: min(fl/dotArrive, 1), finish: .hero)`
-     with `shadow(black@0.5, radius comp·0.08, y comp·0.05)` at `(comp/2, comp·0.48)`;
-   * dot glow: `Circle` filled `RadialGradient([#F6BD7D@0.85, accent@0.2, .clear], r 0…comp·0.11)`,
-     `comp·0.22` square, `scaleEffect(glowScale)`, at `(comp·dotX, comp·dotY)`, `opacity(dotGlow)`;
-   * sheen (drawn only while `0 < sheen < 1`): a `markWidth·0.55 × markWidth·1.8` white-0.09 band,
-     rotated 24°, offset `markWidth·(−0.9 + 1.8·sheen)`, `opacity(sin(sheen·π))`, clipped to
-     `BookmarkSplashShape` (a splash-local copy of the mark silhouette), at `(comp/2, comp·0.48)`;
-   * the whole group is `.compositingGroup()`ed and gets
-     `.layerEffect(ShaderLibrary.emberZoom(float2(comp·dotX, comp·dotY), float(push)),
-     maxSampleOffset: 140×140, isEnabled: push > 0)`, then `opacity(ar)` and
-     `blur((1 − ar)·6)` while `ar < 0.99`.
-3. **Shockwave** — mounted only while `ignite < tm < ignite + 0.55`. `ring = outCubic(seg(tm, 0.92, 1.47))`;
-   a `Circle().stroke(#F6BD7D @ ((1−ring)²·0.30), lineWidth: 1 + 3.5·(1−ring))`, base size
-   `comp·0.12`, `scaleEffect(0.4 + 6.5·ring)`, positioned at `dotPoint`, `blur(1 + 3·ring)`.
-4. **Ember bloom** — always mounted. `Circle` filled
-   `RadialGradient([#F6BD7D@0.55, accent@0.18, .clear], r 0…comp·0.75)`, size `comp·1.5`,
-   `scaleEffect(0.25 + 2.6·push)`, at `dotPoint`, `opacity(sin(min(push·1.25, 1)·π)·0.6)`.
-5. **Wordmark** — `"Previously"` + a `"."` filled with
-   `LinearGradient([accent, #C9702E], topLeading→bottomTrailing)`, ink `#F4EFE6`,
-   font `AppFont.font(size: width·118/1080, weight: .bold)` (≈42.9 pt on a 393-pt screen),
-   `kerning(fs·(−0.03·w + 0.025·(1−w)))` (*"letters start airy and settle tight"*),
-   `scaleEffect(1.06 − 0.06·w)`, positioned at `(width/2, height·wordmarkTop + fs/2)`,
-   `offset(y: (1−w)·14)`, `opacity(w)`, `blur((1−w)·3)` while `w < 0.99`.
-   Exit: `scaleEffect(1 + 0.30·outQuint(seg(tm, 1.60, 2.00)), anchor: (0.5, wordmarkTop))`,
-   `blur(4·wOut)`, `opacity(1 − wOut)`.
-6. **Tagline** — `"ON EVERYTHING YOU WATCH"`, `.system(size: width·25/1080, weight: .medium,
-   design: .monospaced)` (**deliberately not Dynamic Type** — *"Fixed-art splash caption"*),
-   `kerning(fs·0.34)`, `ThemeColor.accent`, at `(width/2 + fs·0.17, height·taglineTop + fs/2)`,
-   `offset(y: (1−tg)·7)`, `opacity(tg·0.8)`. Exit: `scaleEffect(1 + 0.22·outQuint(seg(tm, 1.55, 1.95)),
-   anchor: (0.5, taglineTop))`, `opacity(1 − tgOut)`.
-7. **Ignition flash** — full-screen `#F6BD7D` at `opacity(0.07·lit·(1 − seg(tm, 0.97, 1.35)))`.
+### 3.3 The hand-off (`LaunchHandoff`)
 
-The whole stage carries `.colorEffect(ShaderLibrary.filmGrain(.float(floor(tm·24)/24), .float(0.035)))`
-— *"Film grain over the whole ident, quantized to 24 fps … Deliberately near-invisible."*
-
-### 3.5 Shaders
-
-```metal
-emberZoom(position, layer, center, strength)
-  // strength < 0.001 → passthrough
-  // dir = position - center; N = 10 taps
-  // tap i: t = i/(N-1); s = 1 - strength*0.18*t; sample layer at center + dir*s
-  //   red  channel resampled at center + dir*(s - strength*0.012)
-  //   blue channel resampled at center + dir*(s + strength*0.012)
-  // result = mean of the 10 taps
-filmGrain(position, color, time, intensity)
-  // n = fract(sin(dot(position*1.37 + time*61.7, float2(12.9898, 78.233))) * 43758.5453)
-  // rgb += (n - 0.5) * intensity * alpha        (intensity = 0.035, time quantised to 1/24 s)
-```
-
-### 3.6 The splash's own task (haptic + hand-off)
-
-```swift
-if !reduceMotion {
-    try? await Task.sleep(for: .seconds(0.92))          // ignite
-    FeedbackCoordinator.fire(.selection)                 // "one soft tap exactly as the dot ignites"
-}
-try? await Task.sleep(for: .seconds(reduceMotion ? 1.2 : 1.68 - 0.92))
-onFinished()
-```
-
-So: **non-reduced** — haptic at 0.92 s, `onFinished` at 1.68 s, while the stage keeps animating to
-2.10 s underneath the crossfade. **Reduced** — no haptic, a static frame of `tm = 1.4`, `onFinished`
-at 1.2 s.
-
-> **Android:** the whole ident ports as a `withInfiniteAnimationFrameNanos`/`Choreographer`-driven
-> Compose canvas over the same pure-math timeline — nothing here uses a spring, so it is portable
-> *exactly*. The two AGSL/RuntimeShader equivalents are available from API 33; below that, either
-> drop `emberZoom` (fall back to a plain scale) and `filmGrain` (drop it — it is near-invisible by
-> design), or precompose. `Text` with a per-character gradient fill needs a `Brush` on the
-> `TextStyle`, which Compose supports. **Difficulty: moderate**, chiefly for the shaders.
-
----
+`phase` Holding → Leaving, then `finished` once the ident is removed (a page-in fades only when
+`finished`; during the launch the emergence is the fade); `emerging` = leaving or finished;
+`authReady` (auth's first answer). Android also carries `systemIcon`, the splash icon view's frame
+read in `setOnExitAnimationListener` — `MainActivity` removes the system view two frames later,
+after the composition has drawn the same picture (the launcher's own layers clipped to the 160-dp
+disc at that frame). `launch_background` = the canvas.
 
 ## 4. `MainTabView` — the four-tab shell
 
@@ -1147,7 +1053,7 @@ orphaned on the last (m3). 330 pt is the width at which the two lines break afte
 
 `Wordmark(colophon: true)` is the shared lockup: *"this footer had drifted into an accent-period
 variant while Today's header drew the period in text ink."* In-app, the full stop is **text ink**;
-only the splash and sign-in draw it in amber.
+the full stop is `brandPeriod` (the icon's coral) everywhere the name is set — see §3.
 
 ### 6.18 `ProfileWash`
 
@@ -1621,8 +1527,7 @@ All are read via `UserDefaults.standard` (so `-key value` on the launch command 
 | Palette resolve size | `maxPixel 360` | `.task(id: washArtwork)` |
 | Toast host insets | h 22, bottom 62 | `MainTabView` |
 | Page-in travel | 6 pt, `uiReveal` 0.28 s, once per tab | `PageInTransition` |
-| App-under-splash | scale 0.965, blur 4 pt | `RootView` |
-| Splash ignite / hand-off | 0.92 s / 1.68 s (1.2 s under Reduce Motion) | `SplashView` |
+| Launch ident | see §3.1 — hold until 1.15 s, push through 0.36 s | `LaunchIdent` |
 | Auth bootstrap wait | ≤ 3 s, polling every 80 ms | `AuthManager.bootstrap` |
 | Alerts per show / total cap | 3 / 48 | `EpisodeNotifications` |
 | Live Activity window | lead 60 min, linger 15 min | `AiringLiveActivityManager` |

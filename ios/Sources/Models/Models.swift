@@ -167,6 +167,10 @@ struct FranchisePart: Codable, Identifiable, Sendable {
     let cover: String?
     let banner: String?
     let format: String?
+    /// How the catalogue relates this part to the work — "SEQUEL", "PREQUEL", "SIDE_STORY",
+    /// "SPIN_OFF", "SUMMARY", "OTHER"… (AniList's relation type, as the server sends it). Read for
+    /// one decision only: a spin-off is an extra, not a season (`isSpinOff`).
+    let relationship: String?
     let status: String?
     let isReleasing: Bool
     let totalEpisodes: Int
@@ -186,15 +190,21 @@ struct FranchisePart: Codable, Identifiable, Sendable {
     /// Dated episodes 8 days back … 15 days ahead, oldest first, on EVERY payload — the calendar's
     /// per-episode facts. `[]` from a server that predates the field; see `scheduleAirings`.
     let airings: [Airing]
+    /// Artwork with its orientation stated. `nil` from a server that predates the field.
+    let images: ArtworkSet?
+    /// The server's ranked alternatives per orientation. `nil` from a server that predates it.
+    let artwork: ArtworkGallery?
+    /// Trailers and teasers scoped to this exact part. `[]` from an older server.
+    let videos: [FranchiseVideo]
 
     var id: Int { mediaId }
 
     // Decode defensively: the server may omit optional/array fields.
     enum CodingKeys: String, CodingKey {
-        case mediaId, kind, sequence, label, title, cover, banner, format, status
+        case mediaId, kind, sequence, label, title, cover, banner, format, relationship, status
         case isReleasing, totalEpisodes, airedEpisodes, nextEpisodeNumber, nextAiringAt
         case lastAiredAt, synopsis, genres, progress
-        case year, studios, nextAiringCount, episodes, release, airings
+        case year, studios, nextAiringCount, episodes, release, airings, images, artwork, videos
     }
 
     init(from decoder: Decoder) throws {
@@ -207,6 +217,7 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         cover = try? c.decodeIfPresent(String.self, forKey: .cover)
         banner = try? c.decodeIfPresent(String.self, forKey: .banner)
         format = try? c.decodeIfPresent(String.self, forKey: .format)
+        relationship = try? c.decodeIfPresent(String.self, forKey: .relationship)
         status = try? c.decodeIfPresent(String.self, forKey: .status)
         isReleasing = (try? c.decode(Bool.self, forKey: .isReleasing)) ?? false
         totalEpisodes = (try? c.decode(Int.self, forKey: .totalEpisodes)) ?? 0
@@ -224,19 +235,23 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         episodes = ((try? c.decode([Episode].self, forKey: .episodes)) ?? []).filter { $0.number > 0 }
         release = try? c.decodeIfPresent(ReleasePrecision.self, forKey: .release)
         airings = ((try? c.decode([Airing].self, forKey: .airings)) ?? []).filter { $0.episode > 0 && $0.at > 0 }
+        images = try? c.decodeIfPresent(ArtworkSet.self, forKey: .images)
+        artwork = try? c.decodeIfPresent(ArtworkGallery.self, forKey: .artwork)
+        videos = (try? c.decode([FranchiseVideo].self, forKey: .videos)) ?? []
     }
 
     // Memberwise init for previews/tests. New fields default so existing call sites keep working.
     init(mediaId: Int, kind: PartKind, sequence: Int, label: String, title: String,
-         cover: String?, banner: String?, format: String?, status: String?,
+         cover: String?, banner: String?, format: String?, relationship: String? = nil, status: String?,
          isReleasing: Bool, totalEpisodes: Int, airedEpisodes: Int,
          nextEpisodeNumber: Int?, nextAiringAt: Int64?, lastAiredAt: Int64?,
          synopsis: String?, genres: [String], progress: Int,
          year: Int? = nil, studios: [String] = [], nextAiringCount: Int = 0, episodes: [Episode] = [],
-         release: ReleasePrecision? = nil, airings: [Airing] = []) {
+         release: ReleasePrecision? = nil, airings: [Airing] = [],
+         images: ArtworkSet? = nil, artwork: ArtworkGallery? = nil, videos: [FranchiseVideo] = []) {
         self.mediaId = mediaId; self.kind = kind; self.sequence = sequence
         self.label = label; self.title = title; self.cover = cover; self.banner = banner
-        self.format = format; self.status = status; self.isReleasing = isReleasing
+        self.format = format; self.relationship = relationship; self.status = status; self.isReleasing = isReleasing
         self.totalEpisodes = totalEpisodes; self.airedEpisodes = airedEpisodes
         self.nextEpisodeNumber = nextEpisodeNumber; self.nextAiringAt = nextAiringAt
         self.lastAiredAt = lastAiredAt; self.synopsis = synopsis; self.genres = genres
@@ -245,18 +260,21 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         self.nextAiringCount = nextAiringCount; self.episodes = episodes
         self.release = release
         self.airings = airings
+        self.images = images
+        self.artwork = artwork
+        self.videos = videos
     }
 
     /// A copy with the episode list replaced — grafts detail-fetched episodes onto the live
     /// (library) copy, which is loaded without them.
     func withEpisodes(_ eps: [Episode]) -> FranchisePart {
         FranchisePart(mediaId: mediaId, kind: kind, sequence: sequence, label: label, title: title,
-                      cover: cover, banner: banner, format: format, status: status,
+                      cover: cover, banner: banner, format: format, relationship: relationship, status: status,
                       isReleasing: isReleasing, totalEpisodes: totalEpisodes, airedEpisodes: airedEpisodes,
                       nextEpisodeNumber: nextEpisodeNumber, nextAiringAt: nextAiringAt, lastAiredAt: lastAiredAt,
                       synopsis: synopsis, genres: genres, progress: progress,
                       year: year, studios: studios, nextAiringCount: nextAiringCount, episodes: eps,
-                      release: release, airings: airings)
+                      release: release, airings: airings, images: images, artwork: artwork, videos: videos)
     }
 
     /// The calendar facts for this part. `airings` when the server sent them; otherwise the two
@@ -285,6 +303,61 @@ struct FranchisePart: Codable, Identifiable, Sendable {
 
     /// Currently releasing AND fully watched up to the latest aired episode.
     var isCaughtUp: Bool { isReleasing && episodesBehind == 0 }
+
+    // MARK: Airings-derived freshness
+    //
+    // `airedEpisodes`, `lastAiredAt` and `nextAiringAt` are the CATALOGUE'S facts, advanced by an
+    // hourly sync. `airings` is the per-episode calendar the same payload carries, and a slot in it
+    // that has struck IS an aired episode — the count merely hasn't caught up yet. Reading only the
+    // counts made the one show that had just aired (Re:ZERO, 6:30 PM) the one show Today could not
+    // see for up to an hour: not fresh (count unchanged), not waiting (slot passed) — gone.
+    // Every "is it out yet / when is the next one" question goes through these four. The raw
+    // fields stay for sort keys and the Library's calm captions, where an hour is nothing.
+
+    /// Slots that have passed: a real instant once its clock has struck; a date-only slot the day
+    /// AFTER its date (its clock is synthesized, and on the day itself it still reads "today").
+    private func passedAirings(now: Int64, anchor: Formatting.TimeAnchor) -> [Airing] {
+        airings.filter { a in
+            anchor.isDateOnly ? Formatting.dayDiff(ts: a.at, now: now, anchor: anchor) < 0 : a.at <= now
+        }
+    }
+
+    /// Episodes out BY NOW — the catalogue's count or the latest passed slot, whichever is ahead.
+    func airedByNow(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int {
+        guard isReleasing else { return airedEpisodes }
+        return max(airedEpisodes, passedAirings(now: now, anchor: anchor).map(\.episode).max() ?? 0)
+    }
+
+    /// `episodesBehind` against what has aired by now, not by the last sync.
+    func behind(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int {
+        isReleasing ? max(0, airedByNow(now: now, anchor: anchor) - progress) : 0
+    }
+
+    /// When the latest episode came out — `lastAiredAt`, advanced by any slot that has passed since.
+    func lastAired(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int64? {
+        let passed = passedAirings(now: now, anchor: anchor).map(\.at).max()
+        return [lastAiredAt, passed].compactMap { $0 }.max()
+    }
+    /// The latest drop struck on the calendar day the app's temporal ladder calls today
+    /// (review i5: a 24-hour window painted "Aired yesterday" amber). One test for the badge,
+    /// the moment, the queue's lead and every shelf caption.
+    func airedToday(now: Int64, anchor: Formatting.TimeAnchor) -> Bool {
+        guard let last = lastAired(now: now, anchor: anchor) else { return false }
+        return Formatting.dayDiff(ts: last, now: now, anchor: anchor) == 0
+    }
+
+
+    /// The next slot still AHEAD — strictly future for a timed source (a slot that has struck is an
+    /// episode, not a wait), today-or-later for date-only — from the airings first, then the
+    /// catalogue's single slot. What every "Airs Friday" / countdown reads.
+    func upcomingAiring(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int64? {
+        let ahead = airings
+            .filter { a in anchor.isDateOnly ? Formatting.dayDiff(ts: a.at, now: now, anchor: anchor) >= 0 : a.at > now }
+            .map(\.at).min()
+        if let ahead { return ahead }
+        guard let slot = scheduledAiring(now: now, anchor: anchor) else { return nil }
+        return (anchor.isDateOnly || slot > now) ? slot : nil
+    }
 
     /// Movies are a single binary unit (watched / not watched) — no episode count.
     var isMovie: Bool { kind == .movie }
@@ -511,6 +584,23 @@ struct FranchiseUpcoming: Codable, Sendable {
         }
     }
 
+    /// True once a DAY-dated release is behind us: the installment is out, or slipped without the
+    /// catalogue's curated note noticing (its `checked` date is weeks old). Either way "Returns
+    /// Jul 5" is no longer a fact, and the Library must not file the show under Returning on it —
+    /// Mushoku Tensei sat there reading "Returns today" two months into its third season.
+    func hasArrived(now: Int64) -> Bool {
+        guard isFutureInstallment, let key = releaseSortKey, key.precision == 3 else { return false }
+        var comps = DateComponents()
+        comps.year = key.value / 10000
+        comps.month = (key.value / 100) % 100
+        comps.day = key.value % 100
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        guard let date = cal.date(from: comps) else { return false }
+        let ts = Int64((date.timeIntervalSince1970 * 1000).rounded())
+        return Formatting.dayDiff(ts: ts, now: now, anchor: .utcDate) < 0
+    }
+
     /// Compact "what's next" line for a poster card, e.g. "Season 3 · Jul 5, 2026". Empty
     /// unless this is a future installment.
     var cardBadge: String {
@@ -537,6 +627,20 @@ struct Franchise: Codable, Identifiable, Sendable {
     let year: Int?             // premiere year (earliest dated part)
     let studios: [String]      // primary installment's studios (anime) / networks (TV)
 
+    // Catalogue enrichment (docs/api-contract.md). Every one of these is EMPTY, not absent, on a
+    // server older than the field or a row the server's background pass has not reached yet —
+    // the types and the detail-onto-library graft live in `Models+Enrichment.swift`.
+    let images: ArtworkSet?
+    /// The server's ranked artwork alternatives, by orientation. `nil` from an older server.
+    let artwork: ArtworkGallery?
+    let themes: [String]
+    let featuredVideo: FranchiseVideo?
+    let videos: [FranchiseVideo]
+    let audience: AudienceInfo?
+    let people: FranchisePeople?
+    let related: [RelatedTitle]
+    let continueWatching: ContinueWatching?
+
     // Fields present only in /me/library responses (LibraryFranchise extends Franchise).
     let status: WatchStatus?
     let behind: Int?
@@ -545,6 +649,7 @@ struct Franchise: Codable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, source, title, cover, banner, synopsis, genres, isReleasing, partCounts, parts, subscription, upcoming
         case year, studios
+        case images, artwork, themes, featuredVideo, videos, audience, people, related, continueWatching
         case status, behind, newParts
     }
 
@@ -564,6 +669,15 @@ struct Franchise: Codable, Identifiable, Sendable {
         upcoming = try? c.decodeIfPresent(FranchiseUpcoming.self, forKey: .upcoming)
         year = try? c.decodeIfPresent(Int.self, forKey: .year)
         studios = (try? c.decode([String].self, forKey: .studios)) ?? []
+        images = try? c.decodeIfPresent(ArtworkSet.self, forKey: .images)
+        artwork = try? c.decodeIfPresent(ArtworkGallery.self, forKey: .artwork)
+        themes = (try? c.decode([String].self, forKey: .themes)) ?? []
+        featuredVideo = try? c.decodeIfPresent(FranchiseVideo.self, forKey: .featuredVideo)
+        videos = (try? c.decode([FranchiseVideo].self, forKey: .videos)) ?? []
+        audience = try? c.decodeIfPresent(AudienceInfo.self, forKey: .audience)
+        people = try? c.decodeIfPresent(FranchisePeople.self, forKey: .people)
+        related = ((try? c.decode([RelatedTitle].self, forKey: .related)) ?? []).filter { !$0.title.isEmpty }
+        continueWatching = try? c.decodeIfPresent(ContinueWatching.self, forKey: .continueWatching)
         status = try? c.decodeIfPresent(WatchStatus.self, forKey: .status)
         behind = try? c.decodeIfPresent(Int.self, forKey: .behind)
         newParts = try? c.decodeIfPresent(Int.self, forKey: .newParts)
@@ -574,23 +688,44 @@ struct Franchise: Codable, Identifiable, Sendable {
          genres: [String], isReleasing: Bool, partCounts: PartCounts?, parts: [FranchisePart],
          subscription: Subscription?, upcoming: FranchiseUpcoming? = nil,
          year: Int? = nil, studios: [String] = [],
+         images: ArtworkSet? = nil, artwork: ArtworkGallery? = nil,
+         themes: [String] = [], featuredVideo: FranchiseVideo? = nil,
+         videos: [FranchiseVideo] = [], audience: AudienceInfo? = nil, people: FranchisePeople? = nil,
+         related: [RelatedTitle] = [], continueWatching: ContinueWatching? = nil,
          status: WatchStatus?, behind: Int?, newParts: Int?) {
         self.id = id; self.source = source; self.title = title; self.cover = cover; self.banner = banner
         self.synopsis = synopsis; self.genres = genres; self.isReleasing = isReleasing
         self.partCounts = partCounts; self.parts = parts; self.subscription = subscription
         self.upcoming = upcoming
         self.year = year; self.studios = studios
+        self.images = images; self.artwork = artwork
+        self.themes = themes; self.featuredVideo = featuredVideo; self.videos = videos
+        self.audience = audience; self.people = people; self.related = related; self.continueWatching = continueWatching
         self.status = status; self.behind = behind; self.newParts = newParts
     }
 
-    /// Copy with replaced parts — used for optimistic progress updates.
-    init(copying other: Franchise, parts: [FranchisePart]) {
+    /// Copy with replaced parts — used for optimistic progress updates. Every other field rides
+    /// along unchanged; the account and enrichment fields take an explicit value only when a
+    /// caller passes one (a status flip, the detail-onto-library graft). The double optionals
+    /// are what let "leave it" and "set it to nil" be different arguments.
+    init(copying other: Franchise, parts: [FranchisePart],
+         subscription: Subscription?? = nil, status: WatchStatus?? = nil,
+         images: ArtworkSet?? = nil, artwork: ArtworkGallery?? = nil,
+         themes: [String]? = nil, featuredVideo: FranchiseVideo?? = nil,
+         videos: [FranchiseVideo]? = nil, audience: AudienceInfo?? = nil, people: FranchisePeople?? = nil,
+         related: [RelatedTitle]? = nil, continueWatching: ContinueWatching?? = nil) {
         self.init(id: other.id, source: other.source, title: other.title, cover: other.cover, banner: other.banner,
                   synopsis: other.synopsis, genres: other.genres, isReleasing: other.isReleasing,
-                  partCounts: other.partCounts, parts: parts, subscription: other.subscription,
+                  partCounts: other.partCounts, parts: parts,
+                  subscription: subscription ?? other.subscription,
                   upcoming: other.upcoming,
                   year: other.year, studios: other.studios,
-                  status: other.status, behind: other.behind, newParts: other.newParts)
+                  images: images ?? other.images, artwork: artwork ?? other.artwork,
+                  themes: themes ?? other.themes,
+                  featuredVideo: featuredVideo ?? other.featuredVideo, videos: videos ?? other.videos,
+                  audience: audience ?? other.audience, people: people ?? other.people,
+                  related: related ?? other.related, continueWatching: continueWatching ?? other.continueWatching,
+                  status: status ?? other.status, behind: other.behind, newParts: other.newParts)
     }
 }
 
@@ -607,6 +742,11 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
     let nextAiringAt: Int64?
     let upcoming: FranchiseUpcoming?
     let year: Int?
+    let images: ArtworkSet?
+    /// The server's ranked artwork alternatives, by orientation. `nil` from an older server.
+    let artwork: ArtworkGallery?
+    let themes: [String]
+    let featuredVideo: FranchiseVideo?
 
     // Present only in /me/library:
     let status: WatchStatus?
@@ -615,6 +755,7 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, source, title, cover, banner, isReleasing, partCount, nextAiringAt, upcoming, year, status, behind, newParts
+        case images, artwork, themes, featuredVideo
     }
 
     init(from decoder: Decoder) throws {
@@ -629,6 +770,10 @@ struct FranchiseSummary: Codable, Identifiable, Sendable {
         nextAiringAt = try? c.decodeIfPresent(Int64.self, forKey: .nextAiringAt)
         upcoming = try? c.decodeIfPresent(FranchiseUpcoming.self, forKey: .upcoming)
         year = try? c.decodeIfPresent(Int.self, forKey: .year)
+        images = try? c.decodeIfPresent(ArtworkSet.self, forKey: .images)
+        artwork = try? c.decodeIfPresent(ArtworkGallery.self, forKey: .artwork)
+        themes = (try? c.decode([String].self, forKey: .themes)) ?? []
+        featuredVideo = try? c.decodeIfPresent(FranchiseVideo.self, forKey: .featuredVideo)
         status = try? c.decodeIfPresent(WatchStatus.self, forKey: .status)
         behind = try? c.decodeIfPresent(Int.self, forKey: .behind)
         newParts = try? c.decodeIfPresent(Int.self, forKey: .newParts)
@@ -710,8 +855,10 @@ extension Franchise {
     /// The next airing you can still count down to, read in this franchise's own calendar.
     /// Prefer this over `releasingPart?.scheduledAiring(now:)`, which defaults to `.local` and so
     /// keeps a TMDB drop alive a day too long east of UTC+7.
+    /// Airings-aware: a timed slot that has already struck is an episode, not a wait, so this
+    /// moves on to the following one the moment an episode is out (`FranchisePart.upcomingAiring`).
     func nextAiring(now: Int64) -> Int64? {
-        releasingPart?.scheduledAiring(now: now, anchor: timeAnchor)
+        releasingPart?.upcomingAiring(now: now, anchor: timeAnchor)
     }
 
     /// Calendar-day bucket key for one of this franchise's timestamps — what day-grouped feeds
@@ -751,7 +898,15 @@ extension Franchise {
     var nextAiringSortKey: Int64 { releasingPart?.nextAiringAt ?? .max }
 
     /// Most-recent airing as a descending sort key — franchises with no aired part sort last.
+    /// The CATALOGUE'S field: fine for the Library's calm shelves, wrong for anything live — sort
+    /// Today's stack on `lastAired(now:)`, or tonight's episode loses the hero to a days-old drop.
     var lastAiredSortKey: Int64 { releasingPart?.lastAiredAt ?? 0 }
+
+    /// When this franchise's latest episode came out, advanced by any airing slot that has struck
+    /// since the last sync (`FranchisePart.lastAired`). The recency every live ordering sorts on.
+    func lastAired(now: Int64) -> Int64? {
+        releasingPart?.lastAired(now: now, anchor: timeAnchor)
+    }
 
     /// Episodic parts (a movie is binary, handled elsewhere) in watch order.
     private var episodicParts: [FranchisePart] {

@@ -103,13 +103,24 @@ object ThemeColor {
      */
 
     /** The ribbon's lit edge — the gradient's top-leading stop. */
-    val markHighlight = Color(0xFFFFD6A0)
+    val markHighlight = Color(0xFFFFBB48)
 
     /** The ribbon's shaded edge — the gradient's bottom-trailing stop. Also the wordmark's stop. */
-    val markShadow = Color(0xFFC9702E)
+    val markShadow = Color(0xFFDE4A3C)
 
-    /** The point riding in the mark's progress slot. */
-    val markProgressDot = Color(0xFFFFF0DA)
+    /** The ramp's middle — the app icon's amber (design/app-icon-v2/glass/x9-final.icon). */
+    val markMid = Color(0xFFF28C3C)
+
+    /**
+     * The full stop. The app icon's coral bead (design/app-icon-v2/glass/x9-final.icon), and the
+     * period of "Previously." everywhere the name is set — the launch, the header, the sign-in
+     * gate, the colophon — so the icon's two objects are the wordmark's two objects. Not amber
+     * (amber is a fact or a state) and not an action colour: it is the name's.
+     */
+    val brandPeriod = Color(0xFFF0563F)
+
+    /** The icon's coloured shadow: the warm light the lit ribbon leaves on the canvas beneath it. */
+    val markCastShadow = Color(0xFFE8702E)
 
     /**
      * Immediate ground for an artwork wash before a remote image or its palette is available.

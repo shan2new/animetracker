@@ -151,6 +151,8 @@ fun ArtImage(
     placeholder: Boolean = true,
     fitSnapAspect: Float? = null,
     transformations: List<Transformation> = emptyList(),
+    /** Fires when the bitmap is on screen (a cache hit included). */
+    onLoaded: (() -> Unit)? = null,
 ) {
     val context = LocalPlatformContext.current
     val loader = LocalArtImageLoader.current
@@ -185,6 +187,7 @@ fun ArtImage(
     ) {
         if (source != null) {
             AsyncImage(
+                onSuccess = onLoaded?.let { loaded -> { _ -> loaded() } },
                 model = remember(source, bucket, ladderKey, transformations) {
                     ImageRequest.Builder(context)
                         .data(source)

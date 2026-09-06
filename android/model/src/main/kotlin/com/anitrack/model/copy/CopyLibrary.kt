@@ -14,7 +14,8 @@ object CopyLibrary {
     const val title = "Library"
 
     /** The Up Next shelf's header. */
-    const val continueWatching = "Continue watching"
+    // The same shelf Today heads "Next up" (i4): one object, one name across rooms.
+    const val continueWatching = "Next up"
 
     // The root's tab-strip strings went with the tabs (30 Aug): every bucket is a shelf, and
     // an empty bucket simply has no shelf — no per-status empty state to name.
@@ -30,8 +31,17 @@ object CopyLibrary {
      * no instant behind it there is nothing for the colour rule to measure, and a rumour dressed as
      * a fact is the one thing a tracker cannot be caught doing.
      */
-    fun rumored(next: String?): String =
-        if (next.isNullOrEmpty()) "Rumored" else "$next rumored"
+    fun rumored(next: String?): String {
+        if (next.isNullOrEmpty()) return "Rumoured"
+        // The curated `next` sometimes already says it — "New anime film (rumored)" — and two
+        // adjacent pages stated one class of fact in two grammars (i1-F8). One: strip the
+        // parenthetical, then say it once, our way.
+        val bare = next.replace(RUMORED_PAREN, " ").replace("  ", " ").trim()
+        return if (RUMORED_WORD.containsMatchIn(bare)) bare else "$bare rumoured"
+    }
+
+    private val RUMORED_WORD = Regex("rumou?red", RegexOption.IGNORE_CASE)
+    private val RUMORED_PAREN = Regex("\\s*\\((?:rumou?red)\\)\\s*", RegexOption.IGNORE_CASE)
 
     const val allTitlesHint = "Opens your whole library, with search, sorting and filters"
 

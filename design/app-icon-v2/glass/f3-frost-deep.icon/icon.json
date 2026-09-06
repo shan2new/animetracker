@@ -1,0 +1,46 @@
+{
+  "fill": {
+    "automatic-gradient": "display-p3:0.90980,0.40000,0.22745,1.00000"
+  },
+  "groups": [
+    {
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.55
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.2
+      },
+      "blur": 0,
+      "layers": [
+        {
+          "name": "period",
+          "image-name": "period.png",
+          "glass": true
+        },
+        {
+          "name": "ribbon",
+          "image-name": "ribbon.png",
+          "glass": true
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  },
+  "fill-specializations": [
+    {
+      "appearance": "dark",
+      "value": {
+        "solid": "display-p3:0.07059,0.06275,0.06275,1.00000"
+      }
+    }
+  ]
+}

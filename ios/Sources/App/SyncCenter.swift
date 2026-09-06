@@ -158,9 +158,10 @@ final class SyncCenter {
     /// row whose Retry would be a no-op must not draw the button at all.
     var canRetryAny: Bool { failedChanges.contains { $0.canRetry(self) } }
 
-    /// What `Retry` does for a change restored from a previous launch — its closure could not be
-    /// encoded, so the app supplies a full reload instead. Set once, at root.
-    var onRestoredRetry: (@MainActor () async -> Void)?
+    /// Replays a restored change's `WriteIntent` — the write itself, re-issued, not a reload that
+    /// would only confirm the server never got it. Installed by the model in `start()`; captures
+    /// it weakly, so it is wiring (like `signals`), not session state.
+    var replay: (@MainActor (WriteIntent) async -> Void)?
 
     /// Keys the user has explicitly retried, and when. A re-record inside this window is a
     /// *directly* failed action and earns one `.directError`; an automatic failure is silent.
@@ -174,7 +175,7 @@ final class SyncCenter {
 
     /// Records a write the server never accepted. Called by every mutation's `catch`.
     /// The local value is NOT rolled back for progress writes — the mark is a fact about the user.
-    func record(command: String, title: String, reason: String,
+    func record(command: String, title: String, reason: String, intent: WriteIntent? = nil,
                 retry: @escaping @MainActor () async -> Void) {
         let key = FailedChange.key(command: command, title: title)
         let now: Int64 = .nowMs
@@ -184,10 +185,12 @@ final class SyncCenter {
             failedChanges[i].reason = reason
             failedChanges[i].at = now
             failedChanges[i].attemptCount = attempts[key] ?? 1
+            failedChanges[i].intent = intent ?? failedChanges[i].intent
         } else {
             failedChanges.append(FailedChange(id: UUID(), command: command, title: title,
                                               reason: reason, at: now,
-                                              attemptCount: attempts[key] ?? 1, retry: retry))
+                                              attemptCount: attempts[key] ?? 1,
+                                              intent: intent, retry: retry))
         }
         // Exactly one error haptic, and only when the user asked for this attempt themselves.
         // Inside a `retryAll()` batch that is one haptic for the whole batch, not one per row.
@@ -294,10 +297,11 @@ final class SyncCenter {
 
     // MARK: - Persistence
     //
-    // Not board 13's outbox: there is no idempotency key, no sequence and no compensating command
-    // store in this prototype. What survives a relaunch is the *knowledge that a change failed*,
-    // so Sync status is never falsely calm. The retry closure cannot be encoded, so a restored
-    // entry retries by reloading.
+    // Not board 13's outbox: there is no idempotency key and no sequence. What survives a relaunch
+    // is the knowledge that a change failed AND, for the four writes the app makes, the write
+    // itself (`WriteIntent`) — so Retry after a relaunch re-issues the mark rather than reloading
+    // a library that never had it. A restored row without an intent keeps its place with
+    // Discard as the only way out; it is never cleared as if it had succeeded.
 
     private static let storeKey = "previously.sync.failedChanges"
 
@@ -308,6 +312,7 @@ final class SyncCenter {
         let reason: String
         let at: Int64
         let attemptCount: Int
+        var intent: WriteIntent? = nil
     }
 
     private init() {
@@ -317,7 +322,8 @@ final class SyncCenter {
     private func persist() {
         let rows = failedChanges.map {
             StoredChange(id: $0.id, command: $0.command, title: $0.title,
-                         reason: $0.reason, at: $0.at, attemptCount: $0.attemptCount)
+                         reason: $0.reason, at: $0.at, attemptCount: $0.attemptCount,
+                         intent: $0.intent)
         }
         guard let data = try? JSONEncoder().encode(rows) else { return }
         UserDefaults.standard.set(data, forKey: SyncCenter.storeKey)
@@ -328,7 +334,7 @@ final class SyncCenter {
               let rows = try? JSONDecoder().decode([StoredChange].self, from: data) else { return }
         failedChanges = rows.map {
             FailedChange(id: $0.id, command: $0.command, title: $0.title, reason: $0.reason,
-                         at: $0.at, attemptCount: $0.attemptCount, retry: nil)
+                         at: $0.at, attemptCount: $0.attemptCount, intent: $0.intent, retry: nil)
         }
     }
 
@@ -349,8 +355,9 @@ final class SyncCenter {
         // The path monitor runs a dispatch queue for as long as it is started; a signed-out app
         // has nothing to be reachable to. The root restarts it on the next sign-in.
         stopMonitoring()
-        // Holds a closure capturing the previous session's model. Never retry into a dead account.
-        onRestoredRetry = nil
+        // Captures the model weakly and the root re-installs it on the next sign-in; dropping it
+        // here guarantees nothing restored can replay into the account that follows this one.
+        replay = nil
         // The milestone ledger is per-account too: the next user's first season completion is
         // their own, not a token this one already spent.
         SeasonSweepLedger.reset()
@@ -360,6 +367,15 @@ final class SyncCenter {
 
 /// One write the server never accepted. `command` is a `Copy.Action` string, `reason` a
 /// `Copy.Notice.reason(_:)` string — never a status code.
+/// The write behind a failed change, in a form that survives a relaunch. Everything the app
+/// writes is one of these four; a change that carries one can be retried from any launch.
+enum WriteIntent: Codable, Equatable, Sendable {
+    case progress(franchiseId: String, mediaId: Int, episodes: Int)
+    case status(franchiseId: String, status: String)
+    case subscribe(franchiseId: String, title: String, status: String)
+    case unsubscribe(franchiseId: String, title: String)
+}
+
 struct FailedChange: Identifiable {
     let id: UUID
     let command: String
@@ -367,6 +383,8 @@ struct FailedChange: Identifiable {
     var reason: String
     var at: Int64
     var attemptCount: Int
+    /// The write itself, when it can be expressed — what a restored row retries with.
+    var intent: WriteIntent?
     /// `nil` for a change restored from a previous launch: the closure could not be encoded.
     let retry: (@MainActor () async -> Void)?
 
@@ -374,16 +392,18 @@ struct FailedChange: Identifiable {
     var key: String { FailedChange.key(command: command, title: title) }
     static func key(command: String, title: String) -> String { "\(command)\u{1F}\(title)" }
 
-    /// The retry to actually run — the recorded one, or the app-supplied reload for a restored
-    /// row. `nil` when there is nothing to run: a missing retry must never be mistaken for a
-    /// successful one, so there is deliberately no empty-closure fallback here.
+    /// The retry to actually run — the recorded closure, or the model replaying the stored
+    /// intent for a restored row. `nil` when there is nothing to run: a missing retry must never
+    /// be mistaken for a successful one, so there is deliberately no empty-closure fallback here.
     @MainActor
     func effectiveRetry(_ center: SyncCenter) -> (@MainActor () async -> Void)? {
-        retry ?? center.onRestoredRetry
+        if let retry { return retry }
+        guard let intent, let replay = center.replay else { return nil }
+        return { await replay(intent) }
     }
 
     /// Whether `Retry` can do anything for this row. A row with no runnable retry keeps its place
-    /// in the banner; Profile shows `Discard` as the only way out until `onRestoredRetry` is set.
+    /// in the banner; Profile shows `Discard` as the only way out until `replay` is installed.
     @MainActor
     func canRetry(_ center: SyncCenter) -> Bool { effectiveRetry(center) != nil }
 }

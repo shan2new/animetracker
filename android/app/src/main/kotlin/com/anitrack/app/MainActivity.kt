@@ -3,6 +3,7 @@ package com.anitrack.app
 import android.content.Intent
 import android.graphics.Color as AndroidColor
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -13,10 +14,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.anitrack.app.design.InstallFeedback
 import com.anitrack.app.design.PreviouslyTheme
+import com.anitrack.app.design.brand.LaunchHandoff
+import com.anitrack.app.design.brand.LocalLaunchHandoff
 import com.anitrack.app.ui.chrome.ProvideChromeSurface
 import com.anitrack.app.ui.chrome.ReduceTransparencyPreference
 import com.anitrack.app.ui.image.ProvideArtPipeline
@@ -52,6 +56,9 @@ class MainActivity : ComponentActivity() {
 
     private var debugLaunch by mutableStateOf(DebugLaunch.None)
 
+    /** The launch's shared state: one per process, published to the tree. */
+    private val launch = LaunchHandoff()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // FIRST, and before `setContent`. At targetSdk 36 the platform always draws its own splash
         // (the adaptive icon over `windowSplashScreenBackground`) before the first composable runs;
@@ -60,6 +67,25 @@ class MainActivity : ComponentActivity() {
         // ONE continuous ignite instead of the system's splash followed by the app's own.
         val splash = installSplashScreen()
         splash.setKeepOnScreenCondition { !composed }
+        // The exit listener replaces the platform's own fade with nothing: by the time it fires the
+        // composition has drawn the SAME picture underneath — the launcher's icon in its disc, on
+        // the canvas — from the frame read here, so the system view can simply go. Two frames
+        // later, so a frame drawn with the reported frame is on screen first.
+        splash.setOnExitAnimationListener { provider ->
+            val icon = provider.iconView
+            if (icon.width > 0 && icon.height > 0) {
+                val location = IntArray(2)
+                icon.getLocationInWindow(location)
+                launch.systemIcon = Rect(
+                    location[0].toFloat(),
+                    location[1].toFloat(),
+                    (location[0] + icon.width).toFloat(),
+                    (location[1] + icon.height).toFloat(),
+                )
+                Log.d("Launch", "system splash icon ${launch.systemIcon}")
+            }
+            provider.view.postOnAnimation { provider.view.postOnAnimation { provider.remove() } }
+        }
 
         // The app is dark-only and never follows the system light/dark setting, so both system bars
         // are forced dark with light icons. The bare `enableEdgeToEdge()` default does NOT do this:
@@ -87,7 +113,12 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            PreviouslyRoot(graph = graph, debugLaunch = debugLaunch, onReadyToDraw = { composed = true })
+            PreviouslyRoot(
+                graph = graph,
+                debugLaunch = debugLaunch,
+                launch = launch,
+                onReadyToDraw = { composed = true },
+            )
         }
     }
 
@@ -127,6 +158,7 @@ class MainActivity : ComponentActivity() {
 private fun PreviouslyRoot(
     graph: AppGraph,
     debugLaunch: DebugLaunch,
+    launch: LaunchHandoff,
     onReadyToDraw: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -143,6 +175,7 @@ private fun PreviouslyRoot(
                     LocalAppModel provides graph.model,
                     LocalAuth provides graph.auth,
                     LocalDebugLaunch provides debugLaunch,
+                    LocalLaunchHandoff provides launch,
                 ) {
                     // Binds `FeedbackCoordinator` to this window for as long as the composition
                     // lives. Every haptic in the app goes through it.

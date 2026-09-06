@@ -78,6 +78,7 @@ import com.anitrack.app.data.auth.AccountIdentity
 import com.anitrack.app.design.ContinuousCornerShape
 import com.anitrack.app.design.LocalReduceMotion
 import com.anitrack.app.design.brand.AccountDisc
+import com.anitrack.app.design.brand.BrandWord
 import com.anitrack.app.design.brand.PreviouslyMark
 import com.anitrack.app.design.PosterSize
 import com.anitrack.app.design.PreviouslyMaterialBridge
@@ -121,6 +122,7 @@ import com.anitrack.app.ui.state.InlineNotice
 import com.anitrack.app.ui.state.SkeletonBlock
 import com.anitrack.app.ui.state.SkeletonGate
 import com.anitrack.app.ui.state.SkeletonLine
+import com.anitrack.app.ui.state.SkeletonPoster
 import com.anitrack.app.ui.state.SkeletonRow
 import com.anitrack.app.ui.state.SkeletonShelf
 import com.anitrack.app.ui.state.centredState
@@ -151,6 +153,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import com.anitrack.app.data.ReceiptHost
+import com.anitrack.model.behind
+import com.anitrack.app.ui.detail.dockedName
 
 // =====================================================================================
 // TODAY — the flagship surface, and the only screen in the product whose job is URGENCY
@@ -233,6 +238,9 @@ fun TodayScreen(
     // when the copy really changes shape, and the boolean only on the crossing.
     var heroCopyHeight by remember { mutableStateOf(0.dp) }
     var heroCopyUnderBand by remember { mutableStateOf(false) }
+    // The copy has passed ABOVE the bar's ramp (i2): the straddle test above goes false again
+    // there, and the bar softened while the shelves scrolled under it.
+    var heroCopyAboveBand by remember { mutableStateOf(false) }
 
     // ---------------------------------------------------------------------------------
     // Feeds. All derived; nothing here fetches.
@@ -263,8 +271,12 @@ fun TodayScreen(
     val updateCount = appModel.outNow.size
     val showsViewAll = updateCount > VIEW_ALL_THRESHOLD
 
-    val upcoming = upcomingRows(library, stackIds, now, limit = if (actionable.isEmpty()) 3 else 1)
-    val shelf = watchingShelf(appModel, stackIds)
+    // Three cards on the Up next shelf; as rows (accessibility sizes) one under a busy screen and
+    // three under the calm one, where they are the content.
+    val upcoming = upcomingRows(library, stackIds, now, limit = if (isAX) (if (actionable.isEmpty()) 3 else 1) else 3)
+    // Not the Up next shows either (i3): a show on the shelf under its own Up next card was on
+    // the screen twice.
+    val shelf = watchingShelf(appModel, stackIds + upcoming.map { it.id })
     val shelfIsList = isAX || shelf.size < SHELF_MINIMUM_CARDS
     val comingNext = appModel.nextUp?.takeIf { !stackIds.contains(it.id) }
 
@@ -356,15 +368,17 @@ fun TodayScreen(
         val snapshot = items
         // The haptic is fired inside the write. One per transaction, and the view never fires one.
         val undo = appModel.markNext(f.id) ?: return
-        marks.settle(scope, appModel, snapshot, undo, reduceMotion, announce) { recap.clearStrip() }
+        // The receipt lands IN PLACE, under this capsule (`ReceiptLine` in `HeroFocus`).
+        marks.settle(scope, appModel, snapshot, undo.placed(ReceiptHost.todayHero(f.id)), reduceMotion, announce) { recap.clearStrip() }
     }
 
     fun markQueueRow(f: Franchise) {
         if (marks.committedQueue.contains(f.id)) return
         val undo = appModel.markNext(f.id) ?: return
         marks.committedQueue = marks.committedQueue + f.id
-        // Immediate: unlike the hero there is no card handing over here.
-        appModel.presentUndo(undo)
+        // Immediate: unlike the hero there is no card handing over here. In place, under the
+        // card's caption.
+        appModel.presentUndo(undo, host = ReceiptHost.todayQueue(f.id))
         announce(Copy.Progress.episodeWatched(undo.episode))
         scope.launch {
             delay(HandoffUndo.HOLD_MILLIS)
@@ -384,7 +398,7 @@ fun TodayScreen(
             episode = prompt.through,
             present = false,
         ) ?: return
-        marks.settle(scope, appModel, snapshot, undo, reduceMotion, announce) { recap.clearStrip() }
+        marks.settle(scope, appModel, snapshot, undo.placed(ReceiptHost.todayHero(prompt.franchiseId)), reduceMotion, announce) { recap.clearStrip() }
         announce(Copy.Confirm.batchMarkConfirm(prompt.count))
     }
 
@@ -497,6 +511,9 @@ fun TodayScreen(
                                     onCopyUnderBand = {
                                         if (it != heroCopyUnderBand) heroCopyUnderBand = it
                                     },
+                                    onCopyAboveBand = {
+                                        if (it != heroCopyAboveBand) heroCopyAboveBand = it
+                                    },
                                     onOpenDetail = onOpenDetail,
                                     onMark = ::markHero,
                                     onPromptBatch = { batchPrompt = it },
@@ -560,12 +577,16 @@ fun TodayScreen(
             scroll = scroll,
             showsHero = showsHero,
             headerCarriesTitle = headerCarriesTitle,
+            heroUnderBand = showsHero && heroCopyAboveBand,
             band = band,
         )
 
+        // Fit, shortened, or NOTHING — the wordmark stays (iOS's rule): a 39-character title in
+        // the band was the show's full name at caption size.
+        val dockedTitle = heroFranchise?.let { dockedName(it, budget = TODAY_DOCKED_BUDGET) }
         TodayHeader(
-            title = heroFranchise?.displayTitle.orEmpty(),
-            carriesTitle = headerCarriesTitle,
+            title = dockedTitle.orEmpty(),
+            carriesTitle = headerCarriesTitle && dockedTitle != null,
             identity = identity,
             topInset = topInset,
             onOpenProfile = onOpenProfile,
@@ -667,6 +688,7 @@ private fun Hero(
     reduceMotion: Boolean,
     onCopyHeight: (Dp) -> Unit,
     onCopyUnderBand: (Boolean) -> Unit,
+    onCopyAboveBand: (Boolean) -> Unit = {},
     onOpenDetail: (String) -> Unit,
     onMark: (Franchise) -> Unit,
     onPromptBatch: (BatchPrompt) -> Unit,
@@ -684,6 +706,7 @@ private fun Hero(
     }
     // Resolved once, outside the layout callback that consumes it.
     val bandLimit = with(LocalDensity.current) { (band + BAND_TOLERANCE).toPx() }
+    val rampLimit = with(LocalDensity.current) { (band + ThemeMetrics.barEdgeRamp).toPx() }
 
     LaunchedEffect(recap.arrivesWithoutAnimation) {
         if (recap.arrivesWithoutAnimation) recap.animationsResume()
@@ -737,6 +760,7 @@ private fun Hero(
                 )
                 HeroFocus(
                     slate = slate,
+                    franchiseId = franchise.id,
                     fullTitle = franchise.title,
                     committed = committed != null,
                     interactive = !marks.handoffInFlight,
@@ -759,7 +783,12 @@ private fun Hero(
                     modifier = Modifier
                         .reportHeight(onCopyHeight)
                         .onGloballyPositioned { coordinates ->
-                            onCopyUnderBand(coordinates.positionInWindow().y < bandLimit)
+                            // While the copy PASSES under the band, not for the rest of the
+                            // scroll (i1-F4): the bar named a show the reader had scrolled past.
+                            val top = coordinates.positionInWindow().y
+                            val bottom = top + coordinates.size.height
+                            onCopyUnderBand(top < bandLimit && bottom > bandLimit)
+                            onCopyAboveBand(bottom < rampLimit)
                         },
                 )
             }
@@ -879,8 +908,9 @@ private fun BelowTheFold(
     val notice = appModel.loadError && !appModel.libraryEmpty
     val hasQueue = showsHero && (queue.isNotEmpty() || showsViewAll)
 
+    // x4 under a hero (i1-F2): the shelf is the hero's continuation.
     val first = if (showsHero) {
-        if (isAX) ThemeMetrics.heroClearance else ThemeSpace.x5
+        if (isAX) ThemeMetrics.heroClearance else ThemeSpace.x4
     } else {
         ThemeMetrics.sectionGap
     }
@@ -895,7 +925,7 @@ private fun BelowTheFold(
                 // x3, not the section gap: the line is the hero's residue, and at full section
                 // distance it floated in the dead zone between hero and queue, reading as a stray
                 // debug print.
-                .padding(top = if (showsHero) ThemeSpace.x3 else first)
+                .padding(top = if (showsHero) ThemeSpace.x2 else first)
                 .padding(horizontal = ThemeMetrics.gutter),
         )
     }
@@ -911,34 +941,55 @@ private fun BelowTheFold(
         )
     }
 
-    if (hasQueue) {
-        QueueSection(
-            queue = queue,
-            marks = marks,
-            showsViewAll = showsViewAll,
-            updateCount = updateCount,
-            now = now,
-            isAX = isAX,
-            onOpenDetail = onOpenDetail,
-            onViewAllUpdates = onViewAllUpdates,
-            onMarkQueueRow = onMarkQueueRow,
-            modifier = Modifier.padding(top = if (strip || notice) gap else first),
-        )
-    }
-
-    if (upcoming.isNotEmpty()) {
-        UpcomingSection(
-            rows = upcoming,
-            now = now,
-            onOpenDetail = onOpenDetail,
-            modifier = Modifier.padding(
-                top = when {
-                    hasQueue -> gapAfterRow
-                    strip || notice -> gap
-                    else -> first
-                },
-            ),
-        )
+    val hasUpNext = hasQueue || upcoming.isNotEmpty()
+    if (hasUpNext) {
+        if (isAX) {
+            // Rows at accessibility sizes: a 16:9 card gives a grown caption four words.
+            if (hasQueue) {
+                QueueSection(
+                    queue = queue,
+                    marks = marks,
+                    showsViewAll = showsViewAll,
+                    updateCount = updateCount,
+                    now = now,
+                    isAX = isAX,
+                    onOpenDetail = onOpenDetail,
+                    onViewAllUpdates = onViewAllUpdates,
+                    onMarkQueueRow = onMarkQueueRow,
+                    modifier = Modifier.padding(top = if (strip || notice) gap else first),
+                )
+            }
+            if (upcoming.isNotEmpty()) {
+                UpcomingSection(
+                    rows = upcoming,
+                    now = now,
+                    onOpenDetail = onOpenDetail,
+                    modifier = Modifier.padding(
+                        top = when {
+                            hasQueue -> gapAfterRow
+                            strip || notice -> gap
+                            else -> first
+                        },
+                    ),
+                )
+            }
+        } else {
+            // One shelf, not two lists (4 Sep): the rest of the queue with its rings, then the
+            // upcoming airings, as 16:9 cards — see `UpNextShelf`.
+            UpNextShelf(
+                queue = queue,
+                upcoming = upcoming,
+                committedQueue = marks.committedQueue,
+                showsViewAll = showsViewAll,
+                updateCount = updateCount,
+                now = now,
+                appModel = appModel,
+                onOpenDetail = onOpenDetail,
+                onViewAllUpdates = onViewAllUpdates,
+                onMarkQueueRow = onMarkQueueRow,
+                modifier = Modifier.padding(top = if (strip || notice) gap else first),
+            )
+        }
     }
 
     if (shelf.isNotEmpty()) {
@@ -949,9 +1000,11 @@ private fun BelowTheFold(
             now = now,
             onOpenDetail = onOpenDetail,
             onSeeAll = onSeeAllWatching,
+            // A full section gap after the card shelf; after rows, the gap minus what the last
+            // row already spent.
             modifier = Modifier.padding(
                 top = when {
-                    hasQueue || upcoming.isNotEmpty() -> gapAfterRow
+                    hasUpNext -> if (isAX) gapAfterRow else gap
                     strip || notice -> gap
                     else -> first
                 },
@@ -1182,6 +1235,7 @@ private fun WatchingShelf(
                         poster = f.portraitArt,
                         slot = PosterSize.TodayShelf,
                         hint = Copy.Accessibility.opensTheShowHint,
+                        reserveTitleLines = true,
                     )
                 }
             }
@@ -1230,7 +1284,14 @@ private fun TrendingShelf(
  */
 private fun shelfCaption(appModel: AppModel, f: Franchise, now: Long): Pair<String, Boolean>? =
     when (appModel.shelfState(f)) {
-        ShelfState.NEW_EPISODE -> Copy.Label.newEpisode to true
+        ShelfState.NEW_EPISODE -> {
+            // The count the badge above carries (i1-F11).
+            val behind = f.releasingPart?.behind(now, f.timeAnchor) ?: 0
+            // Amber only while the drop is today's fact (i4): the Up next card prints the same
+            // count in grey, and one screen may not read one number two ways.
+            val struck = f.lastAired(now)?.let { now - it <= ShelfWindows.NOW_BAR_LIVE } ?: false
+            if (behind > 1) Copy.Progress.behind(behind) to struck else Copy.Label.newEpisode to true
+        }
         ShelfState.BACKLOG ->
             f.resumePart?.let { Copy.Progress.episodeNext(it.progress + 1) to false }
         ShelfState.AIRING_WAIT ->
@@ -1292,11 +1353,12 @@ private fun BoxScope.TodayVeils(
     scroll: ScrollOffset,
     showsHero: Boolean,
     headerCarriesTitle: Boolean,
+    heroUnderBand: Boolean,
     band: Dp,
 ) {
     val pastVeilOnset by scroll.past(VEIL_ONSET)
     val pastBarOnset by scroll.past(BAR_ONSET)
-    val hard = if (showsHero) headerCarriesTitle else pastBarOnset
+    val hard = if (showsHero) (headerCarriesTitle || heroUnderBand) else pastBarOnset
 
     Box(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
         AnimatedVisibility(
@@ -1378,11 +1440,7 @@ private fun BoxScope.TodayHeader(
                 horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
             ) {
                 PreviouslyMark(width = MARK_WIDTH)
-                BasicText(
-                    text = Copy.Brand.wordmark,
-                    style = ThemeType.brandWordmark,
-                    color = ColorProducer { ThemeColor.textPrimary },
-                )
+                BrandWord(style = ThemeType.brandWordmark)
             }
             if (title.isNotEmpty()) {
                 AutoSizeText(
@@ -1547,7 +1605,8 @@ private fun TodaySkeleton(isAX: Boolean) {
                 .padding(bottom = if (isAX) ThemeSpace.x5 else ThemeSpace.x4),
             verticalArrangement = Arrangement.Bottom,
         ) {
-            SkeletonLine(width = SkeletonPillWidth, height = SkeletonPillHeight)
+            // The lockup's shape: badge, title, one line, capsule.
+            SkeletonBlock(width = SkeletonBadgeWidth, height = SkeletonBadgeHeight, radius = SkeletonBadgeCorner)
             SkeletonLine(
                 width = SkeletonHeadlineWidth,
                 height = SkeletonHeadlineHeight,
@@ -1565,19 +1624,46 @@ private fun TodaySkeleton(isAX: Boolean) {
             )
         }
 
+        // The Up next shelf's shape: a header and two 16:9 cards with their captions — rows at
+        // accessibility sizes, as the loaded screen draws them. A scroller, like the shelf it
+        // stands in for: two 286-dp cards in a plain stack are wider than the screen.
         Column(
-            Modifier
-                .padding(top = if (isAX) ThemeMetrics.heroClearance else ThemeSpace.x5)
-                .padding(horizontal = ThemeMetrics.gutter),
+            Modifier.padding(top = if (isAX) ThemeMetrics.heroClearance else ThemeSpace.x5),
             verticalArrangement = Arrangement.spacedBy(ThemeMetrics.labelGap),
         ) {
-            SkeletonLine(width = SkeletonEyebrowWidth, height = SkeletonEyebrowHeight)
-            repeat(QUEUE_COUNT) {
-                SkeletonRow(
-                    poster = queueSlot.size,
-                    lines = listOf(SkeletonRowTitleWidth, SkeletonRowMetaWidth),
-                    posterRadius = queueSlot.radius,
-                )
+            SkeletonLine(
+                width = SkeletonShelfEyebrowWidth,
+                height = SkeletonHeadingHeight,
+                modifier = Modifier.padding(horizontal = ThemeMetrics.gutter),
+            )
+            if (isAX) {
+                Column(Modifier.padding(horizontal = ThemeMetrics.gutter)) {
+                    repeat(QUEUE_COUNT) {
+                        SkeletonRow(
+                            poster = queueSlot.size,
+                            lines = listOf(SkeletonRowTitleWidth, SkeletonRowMetaWidth),
+                            posterRadius = queueSlot.radius,
+                        )
+                    }
+                }
+            } else {
+                LazyRow(
+                    userScrollEnabled = false,
+                    contentPadding = PaddingValues(horizontal = ThemeMetrics.gutter),
+                    horizontalArrangement = Arrangement.spacedBy(ThemeMetrics.shelfGap),
+                ) {
+                    items(count = 2) {
+                        Column(verticalArrangement = Arrangement.spacedBy(ThemeSpace.x2)) {
+                            SkeletonPoster(
+                                width = SkeletonUpNextWidth,
+                                height = SkeletonUpNextHeight,
+                                radius = ThemeRadius.card,
+                            )
+                            SkeletonLine(width = SkeletonRowTitleWidth, height = SkeletonUpNextTitleHeight)
+                            SkeletonLine(width = SkeletonRowMetaWidth, height = SkeletonUpNextMetaHeight)
+                        }
+                    }
+                }
             }
         }
 
@@ -1835,9 +1921,19 @@ private val BAND_TOLERANCE = ThemeSpace.x2
 private val SKELETON_TITLE_GAP = 14.dp
 private val SKELETON_ACTION_GAP = 18.dp
 
-/** The hero's pill. */
-private val SkeletonPillWidth = 96.dp
-private val SkeletonPillHeight = 12.dp
+/** The hero's badge — `HeroBadge`'s 20 dp, a 4-dp corner. */
+private val SkeletonBadgeWidth = 88.dp
+private val SkeletonBadgeHeight = 20.dp
+private val SkeletonBadgeCorner = 4.dp
+
+/** A shelf header at `sectionTitle`'s height. */
+private val SkeletonHeadingHeight = 19.dp
+
+/** An Up next card at the shelf's own width on a 393-dp screen, and its two caption lines. */
+private val SkeletonUpNextWidth = 286.dp
+private val SkeletonUpNextHeight = 161.dp
+private val SkeletonUpNextTitleHeight = 14.dp
+private val SkeletonUpNextMetaHeight = 12.dp
 
 /** Its headline — the clock, or the show. */
 private val SkeletonHeadlineWidth = 250.dp
@@ -1864,7 +1960,7 @@ private val ACCOUNT_DISC = 34.dp
 private const val HEADER_TITLE_MIN_SCALE = 0.85f
 
 /** The wordmark's mark, at the width the lockup sets. Its aspect and palette are the mark's own. */
-private val MARK_WIDTH = 13.dp
+private val MARK_WIDTH = 11.dp
 
 private val FAN_RISE = (-60).dp
 private val FAN_STEP = 10.dp
@@ -1878,3 +1974,6 @@ private val FAN_BLUR = 1.5.dp
 // declared "Previously" and drew the period separately — two spellings that already disagreed about
 // whether the period is part of the name.
 
+
+/** The wordmark band's title budget: wider than Detail's bar (19), which shares it with two glyphs. */
+private const val TODAY_DOCKED_BUDGET = 28

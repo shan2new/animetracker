@@ -77,29 +77,19 @@ struct EmptyState: View {
     var prominence: Prominence = .major
     var primary: (() -> Void)? = nil
     var secondary: (() -> Void)? = nil
-    /// The ambient identity wash behind the plate. `nil` = automatic: a state that owns the whole
-    /// surface gets one, a state inside a populated screen does not.
-    ///
-    /// First-run Library and first-run Today are the first two frames a reviewer ever sees, and
-    /// they carried none of the app's identity — a grey plate on a black screen. There is no art to
-    /// sample yet, so this is a static `accentSoft` gradient rather than a palette read.
-    var ambient: Bool? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// The symbol and its tile answer to Dynamic Type. The shipped card's `.system(size: 22)` was
-    /// the one piece of type on it that did not.
+    /// The symbol answers to Dynamic Type like the type beside it.
     @ScaledMetric(relativeTo: .title3) private var glyphUnit: CGFloat = 1
 
     init(_ copy: EmptyStateCopy,
          prominence: Prominence = .major,
          primary: (() -> Void)? = nil,
-         secondary: (() -> Void)? = nil,
-         ambient: Bool? = nil) {
+         secondary: (() -> Void)? = nil) {
         self.copy = copy
         self.prominence = prominence
         self.primary = primary
         self.secondary = secondary
-        self.ambient = ambient
         #if DEBUG
         // A state whose copy promises an action, wired to nothing, is the SYS-4 bug returning.
         assert(copy.primaryLabel == nil || primary != nil || secondary != nil,
@@ -108,74 +98,58 @@ struct EmptyState: View {
     }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
-    /// Whether either button will actually be drawn. An actionless plate is two lines of text, and
-    /// a 236-pt floor under two lines of text is 235 pt of grey (Search's no-results, measured).
+    /// Whether either button will actually be drawn.
     private var hasAction: Bool {
         (copy.primaryLabel != nil && primary != nil) || (copy.secondaryLabel != nil && secondary != nil)
     }
-    /// `minHeight`, never `height`: at AX3–AX5 the card has to grow, not overflow.
-    private var minHeight: CGFloat {
-        guard !isAX, hasAction else { return 0 }
-        return prominence == .major ? 236 : 148
-    }
-    private var showsAmbient: Bool { ambient ?? (prominence == .major) }
-    /// One accent object on this card, and it is the BUTTON. An accent glyph in an `accentSoft`
-    /// tile beside an accent capsule is two things claiming to be the point.
-    /// A failure keeps `warning`, because that is the one colour a failure edge is allowed.
-    private var glyphTint: Color {
-        guard let symbol = copy.symbol else { return ThemeColor.textTertiary }
-        return symbol.hasPrefix("exclamationmark") ? ThemeColor.warning : ThemeColor.textTertiary
-    }
-    private var pad: CGFloat { prominence == .major ? ThemeSpace.x6 : ThemeSpace.x5 }
-    private var radius: CGFloat { prominence == .major ? ThemeRadius.focusCard : ThemeRadius.card }
     private var titleToken: TypeToken { prominence == .major ? ThemeType.showTitleL : ThemeType.showTitleM }
     private var supportToken: TypeToken { prominence == .major ? ThemeType.callout : ThemeType.metadata }
-    private var tile: CGFloat { (prominence == .major ? 60 : 48) * glyphUnit }
-    private var glyph: CGFloat { (prominence == .major ? 26 : 20) * glyphUnit }
+    private var glyph: CGFloat { (prominence == .major ? 44 : 30) * glyphUnit }
 
+    // The system's own grammar for "nothing here" (`ContentUnavailableView`, and every state in
+    // Apple TV, Music and Netflix): a symbol, a title, a sentence, one action — set on the
+    // canvas, centred. It was a plate with a glyph in a tile, an ambient bloom, a 236-pt floor
+    // and a 280-pt amber capsule: an "empty state card" from a dashboard template, and the thing
+    // that made every failure in the app look like a SaaS product had crashed (user, 2 Sep).
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                if let symbol = copy.symbol {
-                    Image(systemName: symbol)
-                        .font(.system(size: glyph, weight: .regular))
-                        .foregroundStyle(glyphTint)
-                        .frame(width: tile, height: tile)
-                        .background(ThemeColor.surfaceRaised,
-                                    in: RoundedRectangle(cornerRadius: tile / 3.2, style: .continuous))
-                        .padding(.bottom, ThemeSpace.x4)
-                }
-                Text(copy.title)
-                    .type(titleToken)
-                    .foregroundStyle(ThemeColor.textPrimary)
-                    .multilineTextAlignment(.center)
-                    // At accessibility sizes the card grows instead of clipping the title.
-                    .lineLimit(isAX ? nil : (prominence == .major ? 3 : 2))
-                    .fixedSize(horizontal: false, vertical: true)
-                if let supporting = copy.supporting {
-                    Text(supporting)
-                        .type(supportToken)
-                        .foregroundStyle(ThemeColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, ThemeSpace.x2)
-                }
+            if let symbol = copy.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: glyph, weight: .regular))
+                    .foregroundStyle(ThemeColor.textTertiary)
+                    .padding(.bottom, prominence == .major ? ThemeSpace.x4 : ThemeSpace.x3)
+                    .accessibilityHidden(true)
             }
-            .frame(maxWidth: 320)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(copy.spokenLabel)
-
-            // A label without a handler is a dead control, not a disabled one: an empty state
-            // that draws `Try again` at 0.38 opacity is worse than an empty state with no button.
-            // The button exists only when the caller supplied something for it to do.
+            Text(copy.title)
+                .type(titleToken)
+                .foregroundStyle(ThemeColor.textPrimary)
+                .multilineTextAlignment(.center)
+                .lineLimit(isAX ? nil : (prominence == .major ? 3 : 2))
+                .fixedSize(horizontal: false, vertical: true)
+            if let supporting = copy.supporting {
+                Text(supporting)
+                    .type(supportToken)
+                    .foregroundStyle(ThemeColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, ThemeSpace.x2)
+            }
+            // A label without a handler is a dead control, not a disabled one: the button exists
+            // only when the caller supplied something for it to do.
             if hasAction {
                 VStack(spacing: ThemeSpace.x1) {
                     if let label = copy.primaryLabel, let primary {
-                        Button(label, action: primary)
-                            .buttonStyle(PrimaryButtonStyle2())
-                            // Not full width: a 376-pt amber capsule under a "nothing here"
-                            // sentence is a banner, not a recovery action.
-                            .frame(maxWidth: isAX ? .infinity : 280)
+                        // Hugging, never a banner. A recovery ("Try again") is a quiet capsule —
+                        // amber is for a real next step ("Add a show"), not for retrying a fetch.
+                        if copy.isRecovery {
+                            Button(label, action: primary)
+                                .buttonStyle(SecondaryButtonStyle2())
+                                .fixedSize(horizontal: !isAX, vertical: false)
+                        } else {
+                            Button(label, action: primary)
+                                .buttonStyle(PrimaryButtonStyle2())
+                                .fixedSize(horizontal: !isAX, vertical: false)
+                        }
                     }
                     if let label = copy.secondaryLabel, let secondary {
                         Button(label, action: secondary)
@@ -185,28 +159,12 @@ struct EmptyState: View {
                 .padding(.top, ThemeSpace.x5)
             }
         }
-        .padding(pad)
-        .frame(maxWidth: .infinity, minHeight: minHeight)
-        // A plate. "Nothing here" is the quietest thing on any screen; outlining it in grey was
-        // the loudest way to draw it.
-        .surface(.plate, radius: radius)
-        .background(alignment: .top) { wash }
+        .frame(maxWidth: 300)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(copy.spokenLabel)
+        .frame(maxWidth: .infinity)
         // Opacity only: an empty state that scales in reads as a celebration of having nothing.
         .transition(.opacity)
-    }
-
-    /// A static `accentSoft` bloom behind the plate. There is no artwork to sample on a first run —
-    /// that is precisely the state — so the app's own colour stands in for it.
-    @ViewBuilder
-    private var wash: some View {
-        if showsAmbient {
-            RadialGradient(colors: [ThemeColor.accentSoft, .clear],
-                           center: .init(x: 0.5, y: 0.18),
-                           startRadius: 0, endRadius: 340)
-                .padding(-64)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
     }
 }
 
@@ -250,66 +208,38 @@ struct InlineNotice: View {
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
+    // One quiet line: a glyph, the fact, and "Retry" as a link. It was a plate with a 3-pt warning
+    // rule down its edge, a bold triangle and a 17-pt "Retry" — an alert box, on screens whose
+    // content had loaded fine from the cache. A background refresh that failed is a footnote
+    // (Mail's "Cannot connect" at the foot of the list), never a warning.
     var body: some View {
-        Group {
-            if isAX {
-                VStack(alignment: .leading, spacing: 10) {
-                    label
-                    if let retry {
-                        Button(Copy.Action.retry, action: retry)
-                            .buttonStyle(SecondaryButtonStyle2())
-                            .accessibilityHint(Copy.Accessibility.retryHint)
-                    }
-                }
-                .padding(.trailing, ThemeSpace.x3)
-                .padding(.vertical, ThemeSpace.x3)
-            } else {
-                HStack(spacing: 10) {
-                    label
-                    Spacer(minLength: ThemeSpace.x2)
-                    if let retry {
-                        Button(Copy.Action.retry, action: retry)
-                            .buttonStyle(TertiaryButtonStyle2())
-                            .accessibilityHint(Copy.Accessibility.retryHint)
-                    }
-                }
-                .padding(.trailing, 6)
+        let layout = isAX
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x1))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: ThemeSpace.x2))
+        layout {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: kind == .failure ? "wifi.exclamationmark" : "info.circle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(ThemeColor.textTertiary)
+                Text(message)
+                    .type(ThemeType.metadata)
+                    .foregroundStyle(ThemeColor.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(message)
+            if let retry {
+                Button(Copy.Action.retry, action: retry)
+                    .buttonStyle(InlineLinkButtonStyle())
+                    // The style holds its 44-pt target with padding; pulled back optically so the
+                    // link sits on the line's baseline rather than 12 pt off it.
+                    .padding(.vertical, -12)
+                    .padding(.leading, isAX ? -12 : -4)
+                    .accessibilityHint(Copy.Accessibility.retryHint)
             }
         }
-        .padding(.leading, 14)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .surface(.plate, radius: ThemeRadius.row)
-        // A 3-pt warning rule down the leading edge instead of a 1-px amber outline round the
-        // whole notice: the colour lands where the eye enters the line, and the notice stops
-        // looking like a disabled button.
-        .overlay(alignment: .leading) {
-            if kind == .failure {
-                UnevenRoundedRectangle(topLeadingRadius: ThemeRadius.row,
-                                       bottomLeadingRadius: ThemeRadius.row,
-                                       bottomTrailingRadius: 0, topTrailingRadius: 0,
-                                       style: .continuous)
-                    .fill(ThemeColor.warning.opacity(0.85))
-                    .frame(width: 3)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.row, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
         .transition(.opacity)
-    }
-
-    private var label: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: kind == .failure ? "exclamationmark.triangle" : "info.circle")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(kind == .failure ? ThemeColor.warning : ThemeColor.textTertiary)
-            Text(message)
-                .type(ThemeType.metadataEmphasis)
-                .foregroundStyle(ThemeColor.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(.vertical, ThemeSpace.x2)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(message)
     }
 }
 
@@ -418,10 +348,10 @@ struct SyncBanner: View {
             : AnyLayout(HStackLayout(spacing: ThemeSpace.x3))
         return layout {
             Text(Copy.Toast.syncFailed(count))
-                .type(ThemeType.body)
+                .type(ThemeType.metadataEmphasis)
                 .foregroundStyle(ThemeColor.textPrimary)
+                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
             if let retry {
                 if isAX {
                     Button(Copy.Action.retry) { issueRetry(retry) }
@@ -459,11 +389,17 @@ struct SyncBanner: View {
             guard !Task.isCancelled else { return }
             retryInFlight = false
         }
-        .padding(.leading, 14)
-        .padding(.trailing, isAX ? 14 : 6)
+        // The toast's own capsule (`ToastView`): content-width glass, centred over the tab bar.
+        // It was a full-width floating plate at 17-pt — a system alert bar laid across the app.
+        // A failed write is the same class of message as a committed one, and it wears the same
+        // object; only its persistence differs.
+        .padding(.leading, ThemeSpace.x4)
+        .padding(.trailing, isAX ? ThemeSpace.x4 : ThemeSpace.x1)
         .padding(.vertical, isAX ? ThemeSpace.x3 : 0)
-        .frame(minHeight: 52)
-        .surface(.floating, radius: ThemeRadius.toast)
+        .frame(minHeight: 48)
+        .fixedSize(horizontal: false, vertical: true)
+        .chromeGlass(in: Capsule())
+        .shadow(.floating)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isSummaryElement)
         // Persistent chrome fades; it never springs in.
@@ -525,7 +461,9 @@ struct EpisodeArtwork: View {
     /// One rectangle for every episode row, still or not. The shipped build put a 96×54 photograph
     /// on rows that had one and a 48×48 square on rows that did not, so a season list changed
     /// shape halfway down and the row rhythm broke with it.
-    static let slot = CGSize(width: 96, height: 54)
+    /// 120×68 (16:9). It was 96×54 — a postage stamp beside 17-pt type; Netflix's episode
+    /// thumbnails run ~130 pt wide, and now every row carries one (2 Sep).
+    static let slot = CGSize(width: 120, height: 68)
 }
 
 /// The no-still episode tile: the SAME 96×54 rectangle as a real still, filled with the show's own
@@ -649,109 +587,121 @@ struct QueryProgressBar: View {
 
 // MARK: - Rows
 
-/// The canonical 44-pt selection row: optional 40×60 cover, optional subtitle, optional trailing
-/// value, a check when selected. Differentiate Without Colour passes because selection is a check,
-/// not a tint.
-struct SelectionRow: View {
-    let title: String
-    var subtitle: String? = nil
-    var secondary: String? = nil
-    var cover: String? = nil
-    var selected: Bool = false
-    let action: () -> Void
+// `SelectionRow` was deleted in the cohesion pass (30 Aug): zero call sites — selection lists
+// ended up as native `Picker`s and menus, which is the right grammar for them.
 
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: ThemeSpace.x3) {
-                if let cover {
-                    PosterSlot(url: cover, .row)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .type(ThemeType.body)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let subtitle {
-                        Text(subtitle)
-                            .type(ThemeType.metadata)
-                            .foregroundStyle(ThemeColor.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: ThemeSpace.x2)
-                if let secondary {
-                    Text(secondary)
-                        .type(ThemeType.metadata)
-                        .foregroundStyle(ThemeColor.textTertiary)
-                }
-                Image(systemName: "checkmark")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ThemeColor.accent)
-                    .opacity(selected ? 1 : 0)
-                    .frame(width: 22)
-            }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(RowPressStyle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-    }
-}
-
-/// A section header with an optional count and one optional 44-pt trailing action. Replaces the
-/// legacy `SectionHeader`, whose pulsing dot board 12 refuses by name.
+/// THE section header: a bold title in the app's voice, an optional count on its baseline, and —
+/// when the header is the way into its section — a trailing chevron with the whole title as the
+/// target. Replaces the legacy `SectionHeader`, whose pulsing dot board 12 refuses by name.
+///
+/// Rebuilt 2 Sep against the references the product is measured by. Every shelf in Apple TV,
+/// Netflix and Apple Music is headed by a bold mixed-case title ("Continue Watching ›"), tappable
+/// as a unit; this app headed its shelves with an 11-pt small-caps footnote and hung a 13-pt
+/// "See all" off the far edge, so the section's name was the quietest thing in the section and
+/// its action was a word to hunt for. The chevron carries the affordance now (position, weight,
+/// 44-pt target — the `ThemeColor.interactive` rule, met without a second word), and an
+/// `inlineAction` ("Clear") keeps the old trailing-link shape for the one case that is not
+/// navigation.
 struct SectionHeaderRow: View {
     let text: String
     var count: Int? = nil
     var dot: Bool = false
     var actionLabel: String? = nil
     var action: (() -> Void)? = nil
+    /// The action is a command on the section ("Clear"), not the way into it: rendered as a
+    /// trailing text link instead of making the title the button.
+    var inlineAction: Bool = false
 
     init(_ text: String, count: Int? = nil, dot: Bool = false,
-         actionLabel: String? = nil, action: (() -> Void)? = nil) {
+         actionLabel: String? = nil, inlineAction: Bool = false, action: (() -> Void)? = nil) {
         self.text = text
         self.count = count
         self.dot = dot
         self.actionLabel = actionLabel
+        self.inlineAction = inlineAction
         self.action = action
     }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-            SectionLabel(text: text, dot: dot)
+            if let action, !inlineAction {
+                Button(action: action) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        title
+                        countLabel
+                        // The one chevron size the app draws (`MediaRow`), a step heavier in ink
+                        // than a row's because it sits beside a 20-pt title rather than 13-pt meta.
+                        Image(systemName: "chevron.forward")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(ThemeColor.textTertiary)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .buttonStyle(SectionHeaderPressStyle())
+                // The style pads the target out to 44 pt; the row is pulled back optically so the
+                // header's LAYOUT stays the title's own height (see the note on `zIndex` below).
+                .padding(.vertical, -10)
+                .accessibilityLabel("\(text), \(actionLabel ?? Copy.Action.seeAll)")
                 .accessibilityAddTraits(.isHeader)
-            if let count {
-                Text("\(count)")
-                    .type(ThemeType.sectionLabel)
-                    // `textTertiary` (#85817C, 5.14:1), not `textDisabled` (#6C6965, 3.64:1): this
-                    // is the smallest type in the app and it was rendered in the dimmest ink, below
-                    // the 4.5:1 AA floor that applies to text at any size. `textDisabled` is
-                    // reserved for the chevron glyph, where the 3:1 non-text threshold applies.
-                    .foregroundStyle(ThemeColor.textTertiary)
-                    .monospacedDigit()
+            } else {
+                title.accessibilityAddTraits(.isHeader)
+                countLabel
             }
             Spacer(minLength: ThemeSpace.x2)
-            if let actionLabel, let action {
+            if inlineAction, let actionLabel, let action {
                 Button(actionLabel, action: action)
-                    // `InlineLinkButtonStyle`, not `TertiaryButtonStyle2`: a section header's
-                    // action is a LINK. At 16-pt semibold amber it was optically larger than the
-                    // 11-pt label it belongs to, so on Library and Today "See all" read as the
-                    // loudest thing in the section — louder than the shows.
+                    // `InlineLinkButtonStyle`: a section's command is a LINK, 13 pt, in
+                    // `ThemeColor.interactive` — it must not out-weigh the title it belongs to.
                     .buttonStyle(InlineLinkButtonStyle())
-                    // The style's target is held by padding + `contentShape`, so the row is pulled
-                    // back optically instead of clamped: this shrinks the *layout* height to ~20 pt
-                    // while the hit region stays ≥ 44 pt tall.
                     .padding(.vertical, -12)
             }
         }
-        // That negative padding leaves the button DRAWING and HIT-TESTING 12 pt above and below
-        // the row's layout rect. Siblings laid out after the header would otherwise win the taps
-        // in the lower overlap band whenever the stack's spacing is under 12 pt, quietly eating
-        // the bottom quarter of a 44-pt target. The header paints (and tests) above them.
+        // The negative padding leaves the button DRAWING and HIT-TESTING above and below the
+        // row's layout rect. Siblings laid out after the header would otherwise win the taps in
+        // the lower overlap band whenever the stack's spacing is under 10 pt, quietly eating the
+        // bottom quarter of a 44-pt target. The header paints (and tests) above them.
         .zIndex(1)
         .accessibilityElement(children: .contain)
+    }
+
+    private var title: some View {
+        HStack(alignment: .center, spacing: 6) {
+            // The 5-pt accent dot means "newly changed" only — the same mark `OverArtLabel` uses.
+            if dot { Circle().fill(ThemeColor.accent).frame(width: 5, height: 5) }
+            Text(text)
+                .type(ThemeType.sectionTitle)
+                .foregroundStyle(ThemeColor.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
+    }
+
+    @ViewBuilder
+    private var countLabel: some View {
+        if let count {
+            Text("\(count)")
+                // `metadata` on the title's baseline, `textTertiary` (5.14:1 — the AA floor for
+                // text at any size; `textDisabled` is reserved for glyphs).
+                .type(ThemeType.metadata)
+                .foregroundStyle(ThemeColor.textTertiary)
+                .monospacedDigit()
+        }
+    }
+}
+
+/// The press state of a section header that navigates: the title dips like a link, and the
+/// target is padded to the 44-pt floor without changing the header's layout height.
+struct SectionHeaderPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.vertical, 10)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.55 : 1)
+            .animation(ThemeMotion.pick(ThemeMotion.uiPress, reduceMotion: reduceMotion),
+                       value: configuration.isPressed)
     }
 }
 
@@ -1117,7 +1067,7 @@ private struct Freshness: ViewModifier {
                 ToolbarItem(placement: .topBarTrailing) {
                     RefreshIndicator(isRefreshing: appModel.isRefreshing, suppressed: pullDriving)
                 }
-                .sharedBackgroundVisibility(.hidden)
+                .chromeSharedBackgroundHidden()
             }
         }
         .animation(ThemeMotion.uiGentle, value: appModel.isRefreshing)
@@ -1282,9 +1232,6 @@ private struct PreviouslyRefreshable: ViewModifier {
 #Preview("Rows and milestone") {
     VStack(alignment: .leading, spacing: ThemeSpace.x4) {
         SectionHeaderRow("Seasons & movies", count: 4, actionLabel: Copy.Action.seeAll) {}
-        SelectionRow(title: "Season 4", subtitle: Copy.Progress.watchedOf(18, 24),
-                     secondary: "24", selected: true) {}
-        SelectionRow(title: "Entire franchise", selected: false) {}
         HStack(spacing: ThemeSpace.x3) {
             EpisodeArtwork(url: nil, spoilerSafe: false)
             EpisodeGlyphTile()

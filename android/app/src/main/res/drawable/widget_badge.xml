@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  `HeroBadge`'s ground, as a shape (see widget_pill.xml for why a shape and not `cornerRadius`):
+  amber, a 4 dp corner, 20 dp tall — the streaming apps' "NEW EPISODE" tag, the hero's own badge
+  (4 Sep, direction B).
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/widget_badge_ground" />
+    <corners android:radius="4dp" />
+</shape>

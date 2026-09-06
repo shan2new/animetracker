@@ -235,8 +235,6 @@ object Copy {
 
         const val upcoming = "Upcoming"
 
-        /** No live call site in this build. Kept: it is part of the vocabulary. */
-        const val airingSoon = "Airing soon"
 
         const val watching = "Watching"
 
@@ -345,7 +343,7 @@ object Copy {
 
         fun markAllUnwatched(n: Int): String = "Mark all ${Copy.episodes(n)} as unwatched…"
 
-        const val markCaughtUp = "Mark caught up"
+        const val markCaughtUp = "Mark as caught up"
 
         const val startRewatch = "Start rewatch"
         const val continueRewatch = "Continue rewatch"
@@ -517,7 +515,9 @@ object Copy {
             if (title.isEmpty()) batchMarked(n) else "$title · ${Copy.episodes(n)} watched"
 
         /** Remove never touches history, and the toast says so in words. */
-        const val removed = "Removed from Library. Watch history kept."
+        const val removed = "Removed from Library · Watch history kept"
+        /** The lane's line — the history clause is spoken, not drawn, beside the show's name. */
+        const val removedShort = "Removed from Library"
 
         /**
          * The status defaults to the Library's own name for the case where the caller has none —
@@ -549,7 +549,7 @@ object Copy {
      */
     object Notice {
         const val today = "Airing dates couldn’t refresh"
-        const val schedule = "The schedule couldn’t refresh"
+        const val schedule = "Your schedule couldn’t refresh"
         const val library = "Your library couldn’t refresh"
         const val detailEpisodes = "Episodes couldn’t refresh"
         const val searchAnime = "Anime results couldn’t refresh"
@@ -688,6 +688,15 @@ object Copy {
          * (`when` is a Kotlin keyword, so the parameter reads `whenPhrase`; it is the Swift's
          * `when:` label and nothing else.)
          */
+        /**
+         * The drop that just struck, as a fact under a count: "Episode 21 aired yesterday" (i2).
+         * The count is the badge's; this line says WHICH episode and when.
+         */
+        fun dropAired(episode: Int, whenPhrase: String): String {
+            val lowered = listOf("Today", "Tomorrow", "Yesterday").any { whenPhrase.startsWith(it) }
+            return "${Copy.episode(episode)} aired ${if (lowered) whenPhrase.lowercasedFirst() else whenPhrase}"
+        }
+
         fun newEpisode(whenPhrase: String): String {
             val lowered = listOf("Today", "Tomorrow", "Airs", "In ").any { whenPhrase.startsWith(it) }
             return "New episode ${if (lowered) whenPhrase.lowercasedFirst() else whenPhrase}"
@@ -921,6 +930,7 @@ object Copy {
         val serverNoCache get() = EmptyStateCopy.serverNoCache
         val nothingScheduled get() = EmptyStateCopy.nothingScheduled
         val noFilterMatches get() = EmptyStateCopy.noFilterMatches
+        val noScheduleMatches get() = EmptyStateCopy.noScheduleMatches
         val everythingSynced get() = EmptyStateCopy.everythingSynced
 
         fun calmToday(title: String?, whenPhrase: String?): EmptyStateCopy =
@@ -985,7 +995,7 @@ object Copy {
                 EmptyStateCopy.emptyAccount, EmptyStateCopy.emptyToday, EmptyStateCopy.emptySchedule,
                 EmptyStateCopy.noWatching, EmptyStateCopy.offlineCached, EmptyStateCopy.offlineNoData,
                 EmptyStateCopy.searchFailed, EmptyStateCopy.searchLaunchpad, EmptyStateCopy.noSessions,
-                EmptyStateCopy.serverNoCache, EmptyStateCopy.noFilterMatches,
+                EmptyStateCopy.serverNoCache, EmptyStateCopy.noFilterMatches, EmptyStateCopy.noScheduleMatches,
                 EmptyStateCopy.nothingScheduled, EmptyStateCopy.everythingSynced,
                 EmptyStateCopy.calmToday(title = "Frieren", whenPhrase = "Returns tomorrow"),
                 EmptyStateCopy.caughtUp(title = "Frieren", whenPhrase = "Returns tomorrow"),
@@ -1193,7 +1203,7 @@ data class EmptyStateCopy(
         val emptyToday = EmptyStateCopy(
             symbol = "tv",
             title = "Nothing to watch yet",
-            supporting = "Add a show and this screen fills in with what is next.",
+            supporting = "Add a show and this screen fills in with what’s next.",
             primaryLabel = Copy.Action.addAShow,
         )
 
@@ -1220,7 +1230,7 @@ data class EmptyStateCopy(
         val offlineCached = EmptyStateCopy(
             symbol = "wifi_off",
             title = "You’re offline",
-            supporting = "Showing saved data. Changes will sync when you reconnect.",
+            supporting = "Showing what was saved on this device. Changes sync when you reconnect.",
         )
 
         /** SF `magnifyingglass`. */
@@ -1330,6 +1340,14 @@ data class EmptyStateCopy(
             primaryLabel = Copy.Action.clear,
         )
 
+        /** Schedule with a filter that leaves no episode — about episodes and a schedule (i4). */
+        val noScheduleMatches = EmptyStateCopy(
+            symbol = "filter_list",
+            title = "No episodes match",
+            supporting = "Clear the filter to see the whole schedule.",
+            primaryLabel = Copy.Action.clear,
+        )
+
         /**
          * Schedule with a library that has no dated episodes. Not an error and not empty-account.
          * SF `calendar`.
@@ -1337,7 +1355,7 @@ data class EmptyStateCopy(
         val nothingScheduled = EmptyStateCopy(
             symbol = "calendar_month",
             title = "Nothing scheduled",
-            supporting = "None of the shows you follow have an upcoming date.",
+            supporting = "None of the shows in your library has an upcoming date.",
         )
 
         /**

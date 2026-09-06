@@ -72,7 +72,7 @@ import com.anitrack.model.TemporalCopy
 import com.anitrack.model.Time
 import com.anitrack.model.TimeAnchor
 import com.anitrack.model.copy.Copy
-import com.anitrack.model.landscapeArt
+import com.anitrack.model.stillLandscape
 import com.anitrack.model.markTarget
 import com.anitrack.model.portraitArt
 import com.anitrack.model.progressCeiling
@@ -85,6 +85,8 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import com.anitrack.app.data.ReceiptHost
+import com.anitrack.app.ui.state.ReceiptLine
 
 /*
  * DETAIL SUPPORT — the port of `ios/Sources/Features/FranchiseDetail/DetailSupport.swift`.
@@ -306,6 +308,40 @@ object DetailTint {
 
     private fun mix(value: Float, toward: Float): Float =
         (value * (1f - NEUTRAL_MIX) + toward * NEUTRAL_MIX).coerceIn(0f, 1f)
+
+    /**
+     * The hardened bar's ink for a show page: the art colour kept as a HUE, dark enough to be a bar
+     * (OKLab lightness 0.20–0.26 — canvas is ~0.10, [quiet] sits at 0.40–0.46 for a tile), a little
+     * more chroma than a tile so the colour survives the material. Painted at `chromeBarOpacity`
+     * over the blur it is the show's own glass; the flat canvas veil read as a black slab over the
+     * picture ("too blackish anyway, should be glassish", user, 4 Sep).
+     */
+    fun chrome(tint: Color?): Color? {
+        val source = tint ?: return null
+        val lab = PaletteMath.oklab(
+            source.red.toDouble(),
+            source.green.toDouble(),
+            source.blue.toDouble(),
+        )
+        val chroma = hypot(lab.a, lab.b)
+        val scale = if (chroma > CHROME_CHROMA_MAX) CHROME_CHROMA_MAX / chroma else 1.0
+        val rgb = PaletteMath.srgb(
+            OkLab(
+                l = lab.l.coerceIn(CHROME_LIGHTNESS_MIN, CHROME_LIGHTNESS_MAX),
+                a = lab.a * scale,
+                b = lab.b * scale,
+            ),
+        )
+        return Color(
+            red = rgb.r.toFloat().coerceIn(0f, 1f),
+            green = rgb.g.toFloat().coerceIn(0f, 1f),
+            blue = rgb.b.toFloat().coerceIn(0f, 1f),
+        )
+    }
+
+    private const val CHROME_CHROMA_MAX = 0.07
+    private const val CHROME_LIGHTNESS_MIN = 0.20
+    private const val CHROME_LIGHTNESS_MAX = 0.26
 }
 
 /**
@@ -498,19 +534,20 @@ fun episodeListCount(part: FranchisePart, now: Long): Int = max(
 )
 
 /**
- * The six-row window the show page draws: **the last one watched for context, the next, and what
- * follows.** A finished season shows its tail; an unstarted one its head.
+ * The six-row window the show page draws: **the NEXT episode first, then what follows.** A finished
+ * season shows its tail; an unstarted one its head. It used to open on the last episode watched, and
+ * beside the header's "18 of 24" a list that began at Episode 18 read as "showing 18 of 24" (4 Sep).
  *
  * | progress | total | window |
  * |---|---|---|
  * | 0 | 24 | 1…6 |
- * | 11 | 24 | 11…16 |
+ * | 11 | 24 | 12…17 |
  * | 24 | 24 | 19…24 |
  * | 0 | 3 | 1…3 |
  */
 fun episodeWindow(progress: Int, total: Int): IntRange {
     val n = max(1, total)
-    val start = min(max(1, progress), max(1, n - 5))
+    val start = min(max(1, progress + 1), max(1, n - 5))
     return start..min(n, start + 5)
 }
 
@@ -591,6 +628,7 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                             appModel.setProgress(franchise.id, part.mediaId, progress, haptic = false)
                         },
                     ),
+                    host = ReceiptHost.episodes(part.mediaId),
                 )
             }
 
@@ -621,6 +659,7 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                             customMessage = Copy.Detail.batchMarkedUnwatched(state.count),
                             undoAction = state.undoAction,
                         ),
+                        host = ReceiptHost.episodes(part.mediaId),
                     )
                 }
             }
@@ -636,7 +675,7 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                     mediaId = part.mediaId,
                     haptic = if (completes) FeedbackToken.SUCCESS else FeedbackToken.COMMIT_LIGHT,
                 ) ?: return
-                appModel.presentUndo(undo)
+                appModel.presentUndo(undo, host = ReceiptHost.episodes(part.mediaId))
             }
 
             // Marking FORWARD past the next episode is a batch, and a batch confirms.
@@ -648,7 +687,8 @@ class EpisodeListController internal constructor(private val appModel: AppModel)
                     message = Copy.Confirm.batchMarkMessage(from = progress + 1, to = target),
                     confirm = Copy.Confirm.batchMarkConfirm(count),
                 ) {
-                    appModel.markThrough(franchise.id, part.mediaId, target)
+                    appModel.markThrough(franchise.id, part.mediaId, target, present = false)
+                        ?.let { appModel.presentUndo(it, host = ReceiptHost.episodes(part.mediaId)) }
                 }
             }
         }
@@ -719,11 +759,10 @@ fun EpisodeRow(
     // line with the same words the fact line already carried.
     val canReveal = !spoilerSafe && (cleanTitle != null || !episode?.still.isNullOrEmpty())
 
-    val title = if (spoilerSafe && cleanTitle != null) {
-        "${Copy.episode(number)} · $cleanTitle"
-    } else {
-        Copy.episode(number)
-    }
+    // Apple TV's row: the number is an EYEBROW over the title, never "Episode 10 · Mhysa" on one
+    // line ("melting the episode number with the title looks shitty", user, 4 Sep).
+    val eyebrow = if (spoilerSafe && cleanTitle != null) Copy.episode(number) else null
+    val title = if (spoilerSafe && cleanTitle != null) cleanTitle else Copy.episode(number)
     val subtitle = episodeSubtitle(franchise, part, number, episode, aired, isNext, now, anchor)
 
     Row(
@@ -779,6 +818,13 @@ fun EpisodeRow(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(ThemeMetrics.titleGap),
             ) {
+                if (eyebrow != null) {
+                    BasicText(
+                        text = eyebrow.uppercase(),
+                        style = ThemeType.sectionLabel.copy(color = ThemeColor.textTertiary),
+                        maxLines = 1,
+                    )
+                }
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
                     verticalAlignment = Alignment.CenterVertically,
@@ -858,7 +904,7 @@ private fun EpisodeTile(
         spoilerSafe -> EpisodeStill(
             url = episode?.still,
             poster = part.portraitArt ?: franchise.portraitArt,
-            landscape = part.landscapeArt ?: franchise.landscapeArt,
+            landscape = part.stillLandscape(within = franchise),
             tint = tint,
             number = number,
         )
@@ -868,7 +914,7 @@ private fun EpisodeTile(
         else -> EpisodeStill(
             url = null,
             poster = part.portraitArt ?: franchise.portraitArt,
-            landscape = part.landscapeArt ?: franchise.landscapeArt,
+            landscape = part.stillLandscape(within = franchise),
             tint = tint,
             number = number,
         )
@@ -926,6 +972,9 @@ private fun episodeSubtitle(
     now: Long,
     anchor: TimeAnchor,
 ): EpisodeSubtitle? {
+    // One rule per row. A WATCHED row says nothing: the check says it, and its air date is a fact
+    // about the past. The show page's window used to mix four grammars in six rows (4 Sep).
+    if (number <= part.progress) return null
     if (isNext) return EpisodeSubtitle(Copy.Label.nextUp, accent = true)
     if (!aired) {
         val scheduled = part.scheduledAiring(now, anchor)
@@ -990,6 +1039,13 @@ fun EpisodeListColumn(
                 tint = tint,
                 isLast = n == window.last,
             )
+            // The ring's receipt, in place under the row it marked (5 Sep).
+            ReceiptLine(
+                host = ReceiptHost.episodes(part.mediaId),
+                episode = n,
+                compact = true,
+                modifier = Modifier.padding(start = EpisodeArtworkDefaults.slot.width + ThemeSpace.x3),
+            )
         }
     }
 }
@@ -1030,6 +1086,12 @@ fun LazyListScope.episodeListItems(
             isLast = n == range.last,
             revealAll = revealAll,
             modifier = itemModifier,
+        )
+        ReceiptLine(
+            host = ReceiptHost.episodes(part.mediaId),
+            episode = n,
+            compact = true,
+            modifier = itemModifier.padding(start = EpisodeArtworkDefaults.slot.width + ThemeSpace.x3),
         )
     }
 }

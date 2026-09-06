@@ -111,6 +111,7 @@ import com.anitrack.app.ui.control.InlineLinkButton
 import com.anitrack.app.ui.control.MarkSplitButton
 import com.anitrack.app.ui.control.PressStyle
 import com.anitrack.app.ui.control.PrimaryButton
+import com.anitrack.app.ui.control.ProgressBar
 import com.anitrack.app.ui.control.TertiaryButton
 import com.anitrack.app.ui.control.materialGlyphBox
 import com.anitrack.app.ui.control.minimumTapTarget
@@ -131,7 +132,7 @@ import com.anitrack.app.ui.scroll.ScrollOffset
 import com.anitrack.app.ui.scroll.past
 import com.anitrack.app.ui.scroll.rememberScrollOffset
 import com.anitrack.app.ui.scroll.track
-import com.anitrack.app.ui.section.OverArtLabel
+import com.anitrack.app.ui.section.HeroBadge
 import com.anitrack.app.ui.section.SectionLabel
 import com.anitrack.app.ui.state.EmptyState
 import com.anitrack.app.ui.state.InlineNotice
@@ -162,6 +163,7 @@ import com.anitrack.model.displayRelease
 import com.anitrack.model.displayTitle
 import com.anitrack.model.effectiveStatus
 import com.anitrack.model.episodicPartsInOrder
+import com.anitrack.model.seasonPartsInOrder
 import com.anitrack.model.grafting
 import com.anitrack.model.hasArrived
 import com.anitrack.model.isComplete
@@ -172,10 +174,19 @@ import com.anitrack.model.isUpcoming
 import com.anitrack.model.kindWord
 import com.anitrack.model.landscapeArt
 import com.anitrack.model.lastAired
+import com.anitrack.model.ShelfWindows
+import com.anitrack.model.airedByNow
+import com.anitrack.model.availableEpisodes
+import com.anitrack.model.billboardResolution
 import com.anitrack.model.looksUnenriched
 import com.anitrack.model.markTarget
 import com.anitrack.model.nextAiring
 import com.anitrack.model.nextPremiere
+import com.anitrack.model.billboardName
+import com.anitrack.model.textlessPortrait
+import com.anitrack.app.ui.hero.HeroTitle
+import com.anitrack.app.ui.hero.HeroLockup
+import com.anitrack.app.ui.hero.HeroLockupDefaults
 import com.anitrack.model.portraitArt
 import com.anitrack.model.themesBeyondGenres
 import com.anitrack.model.timeAnchor
@@ -190,6 +201,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.anitrack.app.data.ReceiptHost
+import com.anitrack.app.ui.state.ReceiptLine
+import com.anitrack.model.shelfShortened
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 /*
  * THE SHOW PAGE — the port of `ios/Sources/Features/FranchiseDetail/FranchiseDetailView.swift`.
@@ -550,6 +566,7 @@ fun DetailScreen(
             video = playing,
             showTitle = franchise.displayTitle,
             onDismiss = { state.video = null },
+            ambientArt = franchise.landscapeArt ?: franchise.portraitArt,
         )
     }
 }
@@ -599,7 +616,11 @@ private fun DetailContent(
     // the screen recomposes on the crossing rather than on the scroll. Reading `scrollState.value`
     // here instead was a second scroll-position source on a screen that already feeds one, and it
     // published a raw pixel on every frame where the offset publishes nothing once it has settled.
-    val scrolledUnderBar by scroll.past(heroHeight - ThemeSpace.x4 - state.heroCopyHeight - band)
+    // The copy's top is the badge; the NAME sits a badge and a gap beneath it (5 Sep, the lockup),
+    // and it is the name's arrival in the bar that the dock answers.
+    val scrolledUnderBar by scroll.past(
+        heroHeight - ThemeSpace.x4 - state.heroCopyHeight + HeroLockupDefaults.badgeToName - band,
+    )
 
     val now = appModel.now
     val staleAfterFailure = state.loadError && state.fetched != null
@@ -617,6 +638,10 @@ private fun DetailContent(
             DetailHero(
                 franchise = franchise,
                 state = state,
+                appModel = appModel,
+                now = now,
+                inLibrary = inLibrary,
+                nextUp = nextUp,
                 tint = tint,
                 heroTint = heroTint,
                 height = heroHeight,
@@ -626,7 +651,9 @@ private fun DetailContent(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = ThemeMetrics.heroClearance),
+                    // The first thing under the billboard is the identity line heading the
+                    // synopsis (5 Sep). x4 (i1-F2): the in-place receipt lives in this band.
+                    .padding(top = ThemeSpace.x4),
                 verticalArrangement = Arrangement.spacedBy(ThemeMetrics.sectionGap),
             ) {
                 if (staleAfterFailure) {
@@ -639,28 +666,19 @@ private fun DetailContent(
                     )
                 }
 
-                if (inLibrary && nextUp != null) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = detailGutter),
-                        verticalArrangement = Arrangement.spacedBy(ThemeMetrics.cardGap),
-                    ) {
-                        NextUpBlock(
-                            franchise = franchise,
-                            state = state,
-                            nextUp = nextUp,
-                            appModel = appModel,
-                            now = now,
-                        )
-                        HistoryRow(franchise = franchise, push = push)
-                    }
-                }
-
+                // The state block lives in the billboard's lockup now (5 Sep); the way into watch
+                // history follows the synopsis.
                 AboutSection(
                     franchise = franchise,
                     expanded = state.synopsisExpanded,
                     onToggle = { state.synopsisExpanded = !state.synopsisExpanded },
                     modifier = Modifier.padding(horizontal = detailGutter),
                 )
+                if (inLibrary && RewatchStore.sessions(franchise.id).isNotEmpty()) {
+                    Box(Modifier.padding(horizontal = detailGutter)) {
+                        HistoryRow(franchise = franchise, push = push)
+                    }
+                }
 
                 EpisodesSection(
                     franchise = franchise,
@@ -674,7 +692,8 @@ private fun DetailContent(
                 )
 
                 val extras = remember(franchise) {
-                    val spine = franchise.episodicPartsInOrder.map { it.mediaId }.toSet()
+                    // Everything that is not a SEASON: films, OVAs, ONAs, spin-offs, specials.
+                    val spine = franchise.seasonPartsInOrder.map { it.mediaId }.toSet()
                     franchise.parts.filterNot { spine.contains(it.mediaId) }.sortedBy { it.sequence }
                 }
                 MoviesAndExtrasShelf(
@@ -683,6 +702,7 @@ private fun DetailContent(
                     now = now,
                     inLibrary = inLibrary,
                     onToggle = { part -> toggleUnit(appModel, franchise, part) },
+                    onOpen = { part -> push(DetailPush.Episodes(franchise.id, part.mediaId, null)) },
                 )
 
                 val videos = remember(franchise) { franchise.allVideos }
@@ -692,7 +712,7 @@ private fun DetailContent(
                         modifier = Modifier.anchor(state, ANCHOR_TRAILERS, scrollState),
                     ) {
                         items(videos, key = { "${it.site}/${it.id}" }) { video ->
-                            TrailerCard(video = video, onPlay = { state.video = video })
+                            TrailerCard(video = video, onPlay = { state.video = video }, showTitle = franchise.title)
                         }
                     }
                 }
@@ -745,7 +765,12 @@ private fun DetailContent(
             Spacer(Modifier.height(DetailMetrics.bottomClearance()))
         }
 
-        DetailVeils(scroll = scroll, band = band, hardOn = scrolledUnderBar)
+        DetailVeils(
+            scroll = scroll,
+            band = band,
+            hardOn = scrolledUnderBar,
+            ink = DetailTint.chrome(heroTint ?: tint),
+        )
 
         DetailBar(
             franchise = franchise,
@@ -808,9 +833,11 @@ private val heroBloomOverlap = 56.dp
 private data class HeroArt(val url: String?, val portrait: Boolean)
 
 private fun heroArt(f: Franchise?): HeroArt {
-    val cover = f?.portraitArt
+    // The TEXTLESS poster where the gallery has one: the billboard draws the name itself — and
+    // `billboardResolution`: the billboard asks TMDB for the original, not the card's `w780`.
+    val cover = billboardResolution(f?.textlessPortrait ?: f?.portraitArt)
     if (cover != null) return HeroArt(cover, portrait = true)
-    val banner = f?.landscapeArt
+    val banner = billboardResolution(f?.landscapeArt)
     if (banner != null) return HeroArt(banner, portrait = false)
     return HeroArt(null, portrait = true)
 }
@@ -841,6 +868,10 @@ private fun heroArt(f: Franchise?): HeroArt {
 private fun DetailHero(
     franchise: Franchise,
     state: DetailScreenState,
+    appModel: AppModel,
+    now: Long,
+    inLibrary: Boolean,
+    nextUp: NextUp?,
     tint: Color?,
     heroTint: Color?,
     height: Dp,
@@ -849,7 +880,6 @@ private fun DetailHero(
     val art = remember(franchise.portraitArt, franchise.landscapeArt) { heroArt(franchise) }
     val ground = heroTint ?: tint ?: ArtGround.neutralWarm
     val isAX = isAccessibilityTextSize()
-    val identity = remember(franchise, isAX) { identityLine(franchise, isAX) }
 
     Box(Modifier.fillMaxWidth().height(height)) {
         ArtHeader(
@@ -871,35 +901,26 @@ private fun DetailHero(
             modifier = Modifier.align(Alignment.BottomCenter),
         )
 
-        Column(
+        // ONE billboard lockup, Today's (`HeroLockup`, 5 Sep): the state badge, the name, the
+        // moment and the episode, the season bar and the one action, all over the art's foot. The
+        // page used to end its hero on a logo and a grey identity line and start a second block on
+        // canvas with the badge, the fact and the capsule — a poster with a caption, then a widget
+        // ("poorly built and rushed", user). The identity line heads the synopsis now; a show that
+        // is not in the library draws its name alone.
+        DetailHeroCopy(
+            franchise = franchise,
+            state = state,
+            nextUp = nextUp,
+            inLibrary = inLibrary,
+            appModel = appModel,
+            now = now,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .padding(horizontal = ThemeMetrics.gutter)
-                .padding(bottom = ThemeMetrics.gutter)
+                .padding(bottom = if (isAX) ThemeSpace.x5 else ThemeSpace.x4)
                 .reportHeight { state.heroCopyHeight = it },
-        ) {
-            // The FULL title. The shortened one is the bar's, and every row's.
-            AutoSizeText(
-                text = franchise.title,
-                style = (if (isAX) ThemeType.displayXL else ThemeType.heroTitle)
-                    .copy(color = ThemeColor.textPrimary),
-                // A scale floor at EVERY size: the hero may never ellipsize the one name the screen
-                // exists to show.
-                minScale = HERO_TITLE_MIN_SCALE,
-                maxLines = if (isAX) Int.MAX_VALUE else 3,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            AutoSizeText(
-                text = identity,
-                style = ThemeType.heroMeta.copy(color = ThemeColor.textSecondary),
-                minScale = HERO_IDENTITY_MIN_SCALE,
-                maxLines = if (isAX) 3 else 1,
-                modifier = Modifier
-                    .padding(top = ThemeMetrics.titleGap)
-                    .fillMaxWidth(),
-            )
-        }
+        )
 
         HeroTopVeil(band = band, modifier = Modifier.align(Alignment.TopCenter))
 
@@ -958,7 +979,10 @@ private fun HeroBloom(tint: Color?, modifier: Modifier = Modifier) {
                             base.copy(alpha = (0.16f * lift).coerceAtMost(1f)),
                             Color.Transparent,
                         ),
-                        center = Offset(size.width * 0.18f, size.height * 0.12f),
+                        // Inside its overlay (i2-4): at 0.12 / 300 dp the pool was still at 26 % at
+                        // the overlay's top edge and printed a straight step above the frame's foot.
+                        // Centred under the lockup (i3): the pool sat off to the left of a centred name.
+                        center = Offset(size.width * 0.5f, size.height * 0.26f),
                         radius = HERO_BLOOM_RADIUS.toPx(),
                     ),
                     blendMode = BlendMode.Plus,
@@ -969,7 +993,7 @@ private fun HeroBloom(tint: Color?, modifier: Modifier = Modifier) {
 }
 
 private const val HERO_DARK_LIGHTNESS = 0.34
-private val HERO_BLOOM_RADIUS = 300.dp
+private val HERO_BLOOM_RADIUS = 88.dp
 
 /**
  * "Anime · 2016 · U/A 16+ · Action · Adventure".
@@ -981,13 +1005,13 @@ private val HERO_BLOOM_RADIUS = 300.dp
  * The **studio is not on the hero** — *"a studio is a credit, not identity"* — and "8-Bit" /
  * "WIT Studio" read as genres with a missing separator when they closed the run.
  */
-internal fun identityLine(f: Franchise, isAX: Boolean): String {
+internal fun identityLine(f: Franchise, isAX: Boolean, withRating: Boolean = true): String {
     val genres = LinkedHashSet<String>()
     f.parts.forEach { part -> part.genres.forEach { genres.add(it.capitalisedWords()) } }
     val head = ArrayList<String>(3)
     head.add(f.kindWord)
     premiereYear(f)?.let { head.add(it.toString()) }
-    f.contentRatingLabel?.let { head.add(it) }
+    if (withRating) f.contentRatingLabel?.let { head.add(it) }
     val budget = if (isAX) Int.MAX_VALUE else IDENTITY_BUDGET
     val tail = ArrayList(genres.take(3))
     while (true) {
@@ -1036,7 +1060,7 @@ private fun String.capitalisedWords(): String =
  * frame invalidates a layer and nothing else.
  */
 @Composable
-private fun DetailVeils(scroll: ScrollOffset, band: Dp, hardOn: Boolean) {
+private fun DetailVeils(scroll: ScrollOffset, band: Dp, hardOn: Boolean, ink: Color? = null) {
     val softVisible by remember(scroll) { derivedStateOf { scroll.y > SOFT_VEIL_ONSET } }
 
     AnimatedVisibility(
@@ -1062,6 +1086,8 @@ private fun DetailVeils(scroll: ScrollOffset, band: Dp, hardOn: Boolean) {
             height = band + ThemeMetrics.barEdgeRamp,
             soft = false,
             holdHeight = band,
+            // The show's colour as bar ink (`DetailTint.chrome`): the show's glass, not canvas.
+            ink = ink,
         )
     }
 }
@@ -1105,8 +1131,9 @@ private fun DetailBar(
         DetailBackButton(onClick = onBack)
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             BasicText(
-                // `displayTitle` — the SHORTENED name. The full title is the billboard's.
-                text = franchise.displayTitle,
+                // Fit, shortened, or NOTHING (i2-8): a bar that says "That Time I Got R…" says
+                // less than a bar with no noun.
+                text = dockedName(franchise) ?: "",
                 style = ThemeType.bodyEmphasis.copy(color = ThemeColor.textPrimary),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1552,92 +1579,88 @@ internal fun DetailMenuDivider() {
 // =================================================================================================
 
 /**
- * The screen's one action, **de-boxed** — it sits directly on the canvas, no plate, no container, no
- * artwork thumbnail.
+ * The billboard's copy (5 Sep): [HeroLockup] — Today's composable — for a show in the library, fed
+ * from [NextUp]; the name alone otherwise.
  *
- * > DE-BOXED (user, 30 Aug: "extremely cheap… not Apple Music premium"). The block sat in an
- * > art-tinted plate with a 96 × 54 thumb and form rows — a home-screen widget directly under a
- * > cinematic hero … Apple Music sets its primary actions straight on the page under the art;
- * > Today's hero already speaks that grammar (eyebrow → fact → amber capsule, no container).
- *
- * There is deliberately **no handoff ground**: *"the block sits on the CANVAS, so there is no card
- * object for the canvas to flash through between — the asymmetric handoff alone carries the swap."*
+ * The state on the badge (an active rewatch prefixes its ordinal name: "Second watch · 3 episodes
+ * behind"), the FULL title at `heroTitle` with a scale floor, the moment leading the line, the
+ * reveal glyph on the line's trailing edge, the season bar, the airing cadence as the support line,
+ * and beneath it the capsule (or "Start rewatch"). It replaced the boxed-then-deboxed "Next up"
+ * block that sat on the canvas under the art: the hero and the block were one thing said in two
+ * places.
  */
 @Composable
-private fun NextUpBlock(
+private fun DetailHeroCopy(
     franchise: Franchise,
     state: DetailScreenState,
-    nextUp: NextUp,
+    nextUp: NextUp?,
+    inLibrary: Boolean,
     appModel: AppModel,
     now: Long,
+    modifier: Modifier = Modifier,
 ) {
+    val isAX = isAccessibilityTextSize()
+    val style = (if (isAX) ThemeType.displayXL else ThemeType.heroTitle).copy(color = ThemeColor.textPrimary)
+    if (!inLibrary || nextUp == null) {
+        // The FULL title — as the show's logo where the gallery has one, else in type with a scale
+        // floor at EVERY size: the hero may never ellipsize the one name the screen exists to show.
+        HeroTitle(
+            text = franchise.title,
+            name = franchise.billboardName,
+            style = style,
+            minScale = HERO_TITLE_MIN_SCALE,
+            maxLines = if (isAX) Int.MAX_VALUE else 3,
+            isAX = isAX,
+            modifier = modifier.fillMaxWidth(),
+        )
+        return
+    }
+
     val scope = rememberCoroutineScope()
     val reduceMotion = LocalReduceMotion.current
-    val isAX = isAccessibilityTextSize()
     val session = RewatchStore.activeSession(franchise.id)
-    // An active rewatch prefixes its ordinal name: "Second watch · 3 episodes behind".
     val eyebrow = session?.let { "${it.title} · ${nextUp.eyebrow}" } ?: nextUp.eyebrow
     val part = nextUp.part
     val episode = nextUp.episode
-    val revealTarget = if (part != null && episode != null &&
-        canRevealEpisode(franchise, part, episode)
-    ) {
-        episode
+    val committed = state.committedEpisode != null && state.pinned != null
+    val revealTarget: Int? = if (part != null && episode != null && canRevealEpisode(franchise, part, episode)) episode else null
+    val bar = heroBar(franchise, nextUp, committed, state.committedEpisode, now)
+    val accessory: (@Composable () -> Unit)? = if (!isAX && revealTarget != null) {
+        {
+            RevealGlyph(
+                revealed = state.revealed.contains(revealTarget),
+                onChange = { on ->
+                    state.revealed = if (on) state.revealed + revealTarget else state.revealed - revealTarget
+                },
+            )
+        }
     } else {
         null
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .seasonCompleteSweep(
-                token = if (nextUp.kind == NextUp.Kind.SEASON_COMPLETE) state.sweepToken else null,
-                reduceMotion = reduceMotion,
-            ),
-        verticalArrangement = Arrangement.spacedBy(ThemeMetrics.cardGap),
+    HeroLockup(
+        badge = eyebrow,
+        title = franchise.title,
+        name = franchise.billboardName,
+        moment = if (committed) null else nextUp.moment,
+        fact = nextUp.line1,
+        support = secondLine(franchise, nextUp, state.revealed),
+        progress = bar?.first,
+        progressSpoken = bar?.second,
+        modifier = modifier.seasonCompleteSweep(
+            token = if (nextUp.kind == NextUp.Kind.SEASON_COMPLETE) state.sweepToken else null,
+            reduceMotion = reduceMotion,
+        ),
+        third = nextUp.line3,
+        style = style,
+        minScale = HERO_TITLE_MIN_SCALE,
+        maxLines = if (isAX) Int.MAX_VALUE else 3,
+        accessory = accessory,
+        receiptHost = ReceiptHost.detailHero(franchise.id),
     ) {
-        OverArtLabel(text = eyebrow, dot = nextUp.dot)
-
-        // The swap happens in a BOX, out of the flow layout: an id swap with a crossfade keeps BOTH
-        // cards in a column's layout for the whole transition, so the block was momentarily two cards
-        // tall and About / the shelves / the history row all shoved down a card height and lurched
-        // back — on EVERY mark made from this screen.
-        Box(Modifier.fillMaxWidth()) {
-            AnimatedContent(
-                targetState = nextUp,
-                transitionSpec = { ThemeMotion.handoff(reduceMotion) },
-                contentAlignment = Alignment.TopStart,
-                label = "nextUpHandoff",
-            ) { current ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
-                    verticalAlignment = Alignment.Top,
-                ) {
-                    FactBlock(
-                        franchise = franchise,
-                        state = current,
-                        revealed = state.revealed,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (!isAX && revealTarget != null) {
-                        val target: Int = revealTarget
-                        RevealToggle(
-                            revealed = state.revealed.contains(target),
-                            onChange = { on ->
-                                state.revealed =
-                                    if (on) state.revealed + target else state.revealed - target
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
         if (part != null && episode != null &&
             (nextUp.kind == NextUp.Kind.ACTIONABLE || nextUp.kind == NextUp.Kind.BACKLOG)
         ) {
-            val committed = state.committedEpisode != null && state.pinned != null
             MarkSplitButton(
                 episode = if (committed) (state.committedEpisode ?: episode) else episode,
                 committed = committed,
@@ -1650,28 +1673,32 @@ private fun NextUpBlock(
                 onMarkAll = {
                     promptBatchMark(state, appModel, franchise, part, part.markTarget(now))
                 },
-                modifier = Modifier.padding(top = ThemeSpace.x2),
+                modifier = Modifier
+                    .padding(top = HeroLockupDefaults.actionGap(isAX))
+                    .fillMaxWidth(),
             )
         }
 
         if (nextUp.kind == NextUp.Kind.SERIES_COMPLETE && session == null) {
+            // Full width, as the mark capsule and iOS's are: a hugging capsule sat left in a
+            // centred lockup.
             PrimaryButton(
                 label = Copy.Action.startRewatch,
                 onClick = { state.startRewatchOpen = true },
-                hugging = !isAX,
-                modifier = Modifier.padding(top = ThemeSpace.x1),
+                hugging = false,
+                modifier = Modifier
+                    .padding(top = HeroLockupDefaults.actionGap(isAX))
+                    .fillMaxWidth(),
             )
         }
 
-        // At AX sizes the reveal control FOLLOWS the action rather than being pushed off the trailing
-        // edge of a row that is now a column.
+        // At accessibility sizes the labelled reveal FOLLOWS the action rather than sharing a line
+        // that is now a column.
         if (isAX && revealTarget != null) {
-            val target: Int = revealTarget
             RevealToggle(
-                revealed = state.revealed.contains(target),
+                revealed = state.revealed.contains(revealTarget),
                 onChange = { on ->
-                    state.revealed =
-                        if (on) state.revealed + target else state.revealed - target
+                    state.revealed = if (on) state.revealed + revealTarget else state.revealed - revealTarget
                 },
             )
         }
@@ -1679,50 +1706,62 @@ private fun NextUpBlock(
 }
 
 /**
- * The three lines.
- *
- * *"The load-bearing support ('9 episodes behind', 'Aired 26 Aug') reads; only a THIRD line stays
- * tertiary."* And explicitly no numeric roll here: it sat inside the very view the handoff replaces
- * on every mark, so *"the roll was swapped out from under itself. Two mechanisms for one change is a
- * smear either way; the handoff is the one that survives."*
+ * Today's season bar, on the show page: watched over what there is to watch — aired-by-now for a
+ * releasing season, the available run otherwise — advancing in the same frame as a mark. Null when
+ * there is nothing to show: nothing watched yet, or everything.
+ */
+private fun heroBar(
+    f: Franchise,
+    state: NextUp,
+    committed: Boolean,
+    committedEpisode: Int?,
+    now: Long,
+): Pair<Float, String>? {
+    if (state.kind != NextUp.Kind.ACTIONABLE && state.kind != NextUp.Kind.BACKLOG) return null
+    val part = state.part ?: return null
+    val done = if (committed) (committedEpisode ?: part.progress) else part.progress
+    val total = if (part.isReleasing) part.airedByNow(now, f.timeAnchor) else part.availableEpisodes()
+    if (total <= 0 || done <= 0 || done >= total) return null
+    val left = max(0, total - done)
+    val spoken = if (part.isReleasing) Copy.Progress.behind(left) else Copy.Progress.left(left)
+    return (done.toFloat() / total.toFloat()) to spoken
+}
+
+/**
+ * The reveal as a GLYPH on the line's trailing edge (5 Sep). The labelled toggle shared the fact's
+ * row and took half of it, so "Season 3 · Episode 8" wrapped mid-phrase with a dangling middot
+ * (Thrones). An eye in a 44-dp target, `textSecondary`, with the switch role and the labelled
+ * control's words spoken; [RevealToggle] survives at accessibility sizes, under the action.
  */
 @Composable
-private fun FactBlock(
-    franchise: Franchise,
-    state: NextUp,
-    revealed: Set<Int>,
-    modifier: Modifier = Modifier,
-) {
-    val second = secondLine(franchise, state, revealed)
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(ThemeMetrics.titleGap),
+private fun RevealGlyph(revealed: Boolean, onChange: (Boolean) -> Unit) {
+    Box(
+        Modifier
+            .size(HeroLockupDefaults.accessoryTarget)
+            .toggleable(
+                value = revealed,
+                interactionSource = null,
+                indication = PressStyle.tertiary,
+                role = Role.Switch,
+                onValueChange = onChange,
+            )
+            .semantics {
+                contentDescription = if (revealed) Copy.Action.hideEpisodeTitle else Copy.Action.revealEpisodeTitle
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        BasicText(
-            text = state.line1,
-            style = ThemeType.showTitleL.copy(color = ThemeColor.textPrimary),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
+        Image(
+            imageVector = rememberSymbol(
+                if (revealed) PreviouslyIcons.VisibilityOff else PreviouslyIcons.Visibility,
+            ),
+            contentDescription = null,
+            modifier = Modifier.size(materialGlyphBox(REVEAL_GLYPH)),
+            colorFilter = ColorFilter.tint(ThemeColor.textSecondary),
         )
-        if (second != null) {
-            BasicText(
-                text = second,
-                style = ThemeType.metadata.copy(color = ThemeColor.textSecondary),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        val third = state.line3
-        if (third != null) {
-            BasicText(
-                text = third,
-                style = ThemeType.metadata.copy(color = ThemeColor.textTertiary),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
     }
 }
+
+private val REVEAL_GLYPH = 15.dp
 
 /**
  * For `.actionable` only, the revealed episode title is appended to the support line.
@@ -1879,36 +1918,89 @@ private fun AboutSection(
     val synopsis = remember(franchise) {
         Formatting.stripHtml(franchise.parts.firstOrNull { !it.synopsis.isNullOrEmpty() }?.synopsis)
     }
-    if (synopsis.isEmpty()) return
+    val isAX = isAccessibilityTextSize()
+    // The certificate is a TAG beside the line (i3), the way a rating is printed everywhere
+    // else: inline it read as one more genre.
+    val identity = remember(franchise, isAX) { identityLine(franchise, isAX, withRating = false) }
+    val rating = franchise.contentRatingLabel
     // The catalogue's themes for an anime often ARE its genres, and a fact printed twice on one
     // screen is a defect.
     val themes = remember(franchise) { franchise.themesBeyondGenres.take(4).joinToString(" · ") }
+    if (synopsis.isEmpty() && identity.isEmpty()) return
     Column(modifier.fillMaxWidth()) {
-        BasicText(
-            text = synopsis,
-            style = ThemeType.prose.copy(color = ThemeColor.textSecondary),
-            maxLines = if (expanded) Int.MAX_VALUE else 3,
-            overflow = TextOverflow.Ellipsis,
-        )
-        InlineLinkButton(
-            label = if (expanded) Copy.Detail.readLess else Copy.Detail.readMore,
-            onClick = onToggle,
-            // Cancels the link style's own padding so the word starts on the gutter while the 44-dp
-            // target survives.
-            modifier = Modifier.negativePadding(
-                start = InlineLink.sideOverhang,
-                top = InlineLink.readingLift,
-                bottom = InlineLink.readingLift,
-            ),
-        )
-        if (themes.isNotEmpty()) {
+        // ONE metadata line — class, year, rating, genres — heading the synopsis, where Apple TV
+        // keeps a show's metadata (5 Sep). It used to close the hero's lockup under the name; with
+        // the state block folded into the billboard the grey identity line was the last thing on
+        // the art and the first thing under it an amber badge.
+        // `metadata`, not `heroMeta`: off the art it is a footnote over the paragraph (Apple TV's
+        // small grey "TV-MA · 2011 · Drama"); at the prose's own size the two read as one block.
+        if (identity.isNotEmpty()) {
+            // Kind · year, the tag, then the genres — air on both sides of the tag, no middot
+            // against it (i4, Apple TV's grammar).
+            val facts = identity.split(" · ")
+            val headCount = facts.indexOfFirst { !(it == franchise.kindWord || it.all(Char::isDigit)) }
+                .let { if (it < 0) facts.size else it }
+            val head = facts.take(headCount).joinToString(" · ")
+            val tail = facts.drop(headCount).joinToString(" · ")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = if (synopsis.isEmpty()) 0.dp else ThemeSpace.x2),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
+            ) {
+                if (head.isNotEmpty()) {
+                    BasicText(
+                        text = head,
+                        style = ThemeType.metadata.copy(color = ThemeColor.textSecondary),
+                        maxLines = 1,
+                    )
+                }
+                if (rating != null) CertificateTag(rating)
+                if (tail.isNotEmpty()) {
+                    AutoSizeText(
+                        text = tail,
+                        style = ThemeType.metadata.copy(color = ThemeColor.textSecondary),
+                        minScale = HERO_IDENTITY_MIN_SCALE,
+                        maxLines = if (isAX) 3 else 1,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+            }
+        }
+        if (synopsis.isNotEmpty()) {
+            // The link is drawn only when there is more (i4): a link that does nothing teaches
+            // that links here do nothing.
+            var overflows by remember(synopsis) { mutableStateOf(false) }
             BasicText(
-                text = themes,
-                style = ThemeType.metadata.copy(color = ThemeColor.textTertiary),
-                maxLines = 1,
+                text = synopsis,
+                style = ThemeType.prose.copy(color = ThemeColor.textSecondary),
+                maxLines = if (expanded) Int.MAX_VALUE else 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = ThemeSpace.x2),
+                onTextLayout = { if (!expanded) overflows = it.hasVisualOverflow },
             )
+            if (expanded || overflows) {
+                InlineLinkButton(
+                    label = if (expanded) Copy.Detail.readLess else Copy.Detail.readMore,
+                    onClick = onToggle,
+                    // Cancels the link style's own padding so the word starts on the gutter while
+                    // the 44-dp target survives.
+                    modifier = Modifier.negativePadding(
+                        start = InlineLink.sideOverhang,
+                        top = InlineLink.readingLift,
+                        bottom = InlineLink.readingLift,
+                    ),
+                )
+            }
+            if (themes.isNotEmpty()) {
+                BasicText(
+                    text = themes,
+                    style = ThemeType.metadata.copy(color = ThemeColor.textTertiary),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = ThemeSpace.x2),
+                )
+            }
         }
     }
 }
@@ -1935,7 +2027,7 @@ private fun EpisodesSection(
     push: (DetailPush) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val seasons = franchise.episodicPartsInOrder
+    val seasons = franchise.seasonPartsInOrder
     val part = focusSeason(franchise, state.selectedSeasonId) ?: return
     val total = episodeListCount(part, now)
     val window = episodeWindow(part.progress, total)
@@ -1980,10 +2072,10 @@ private fun EpisodesSection(
 
 /**
  * The picker's choice → the part the screen is about (airing, resuming, or the earliest unfinished)
- * → the last season.
+ * when that is a season → the earliest unfinished season → the last.
  */
 internal fun focusSeason(f: Franchise, selectedId: Int?): FranchisePart? {
-    val seasons = f.episodicPartsInOrder
+    val seasons = f.seasonPartsInOrder
     if (selectedId != null) {
         seasons.firstOrNull { it.mediaId == selectedId }?.let { return it }
     }
@@ -1991,16 +2083,19 @@ internal fun focusSeason(f: Franchise, selectedId: Int?): FranchisePart? {
     if (current != null) {
         seasons.firstOrNull { it.mediaId == current.mediaId }?.let { return it }
     }
-    return seasons.lastOrNull()
+    return seasons.firstOrNull { !it.isComplete } ?: seasons.lastOrNull()
 }
 
 /**
- * "Season 4 ⌄⌃", with the count on its baseline.
+ * "Episodes" and, trailing, the season as a capsule menu ([SeasonPill]) — the streaming apps'
+ * grammar: a section labelled Episodes, one "Season 4 ⌄" pill that lists seasons only. Where-you-are
+ * is the bar under it, never "18 of 24" in numerals: beside a window that opened on Episode 18 the
+ * pair read as "showing 18 of 24" (4 Sep). The season's name used to BE the section title, with a
+ * stacked chevron, and did not read as a control.
  *
  * ⚠ **Port faithfully:** the header's total (`max(totalEpisodes, airedEpisodes)`) and the list's total
- * ([episodeListCount]) are computed differently and CAN disagree — the header can read "11 of 24"
- * while the list draws 25 rows (a user marked past the catalogue's count). This is the shipped
- * behaviour.
+ * ([episodeListCount]) are computed differently and CAN disagree — the bar can be full while the list
+ * draws 25 rows (a user marked past the catalogue's count). This is the shipped behaviour.
  */
 @Composable
 private fun EpisodesHeader(
@@ -2008,91 +2103,42 @@ private fun EpisodesHeader(
     seasons: List<FranchisePart>,
     onSelect: (Int) -> Unit,
 ) {
-    var open by remember { mutableStateOf(false) }
-    val label = seasonLabel(part)
     val total = part.headerTotal()
+    val watched = min(part.progress, total)
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
     ) {
-        if (seasons.size > 1) {
-            Box(Modifier.weight(1f, fill = false)) {
-                Row(
-                    modifier = Modifier
-                        .clickable(
-                            interactionSource = null,
-                            // Detail's primary navigation control had no pressed state at all.
-                            indication = PressStyle.textAction,
-                            role = Role.Button,
-                            onClick = { open = true },
-                        )
-                        .semantics(mergeDescendants = true) {
-                            heading()
-                            contentDescription = Copy.Detail.seasonPicker(label)
-                        }
-                        .height(minimumTapTarget),
-                    horizontalArrangement = Arrangement.spacedBy(DetailMetrics.glyphGap),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AutoSizeText(
-                        text = label,
-                        style = ThemeType.sectionTitle.copy(color = ThemeColor.textPrimary),
-                        minScale = SEASON_LABEL_MIN_SCALE,
-                        maxLines = 1,
-                    )
-                    Image(
-                        // `unfold_more`, never a chevron: it must stay visually distinct from a
-                        // disclosure — this chooses IN PLACE, it does not push.
-                        imageVector = rememberSymbol(PreviouslyIcons.UnfoldMore),
-                        contentDescription = null,
-                        modifier = Modifier.size(materialGlyphBox(DetailMetrics.pickerGlyph)),
-                        colorFilter = ColorFilter.tint(ThemeColor.textTertiary),
-                    )
-                }
-                DetailMenu(expanded = open, onDismiss = { open = false }) {
-                    seasons.forEach { season ->
-                        DetailMenuItem(
-                            label = seasonLabel(season),
-                            symbol = if (season.mediaId == part.mediaId) {
-                                PreviouslyIcons.Check
-                            } else {
-                                null
-                            },
-                        ) {
-                            open = false
-                            onSelect(season.mediaId)
-                        }
-                    }
-                }
-            }
-        } else {
-            AutoSizeText(
-                text = label,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = Copy.Heading.episodes,
                 style = ThemeType.sectionTitle.copy(color = ThemeColor.textPrimary),
-                minScale = SEASON_LABEL_MIN_SCALE,
                 maxLines = 1,
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .semantics { heading() },
             )
+            Spacer(Modifier.weight(1f))
+            if (seasons.size > 1) {
+                SeasonPill(current = part, seasons = seasons, onPick = onSelect)
+            } else if (part.canonicalLabel.isNotEmpty()) {
+                // One season with a name: the name, as a fact, not a control.
+                BasicText(
+                    text = part.canonicalLabel,
+                    style = ThemeType.metadataEmphasis.copy(color = ThemeColor.textSecondary),
+                    maxLines = 1,
+                )
+            }
         }
-        Spacer(Modifier.weight(1f))
         if (total > 0) {
-            val watched = min(part.progress, total)
-            BasicText(
-                // The numeral pair replaces the words, where the old row list spelt
-                // "11 of 24 watched"; the spoken label restores them.
-                text = Copy.Progress.watchedOfCount(watched, total),
-                style = ThemeType.metadata.copy(
-                    color = ThemeColor.textTertiary,
-                    fontFeatureSettings = "tnum",
-                ),
-                maxLines = 1,
-                modifier = Modifier.semantics {
-                    contentDescription = Copy.Progress.watchedOf(watched, total)
-                },
+            ProgressBar(
+                value = watched.toFloat() / total.toFloat(),
+                spoken = Copy.Progress.watchedOf(watched, total),
             )
         }
     }
@@ -2161,7 +2207,8 @@ private fun mark(
     }
 
     state.pinned = snapshot
-    state.pendingUndo = undo
+    // The receipt lands IN PLACE, under this capsule (`ReceiptLine` in the lockup).
+    state.pendingUndo = undo.placed(ReceiptHost.detailHero(franchise.id))
     state.committedEpisode = undo.episode
     scope.launch {
         delay(MARK_RESULT_WINDOW_MILLIS)
@@ -2192,7 +2239,8 @@ internal fun promptBatchMark(
         message = Copy.Confirm.batchMarkMessage(from = part.progress + 1, to = through),
         confirm = Copy.Confirm.batchMarkConfirm(count),
     ) {
-        appModel.markThrough(franchise.id, part.mediaId, through)
+        appModel.markThrough(franchise.id, part.mediaId, through, present = false)
+            ?.let { appModel.presentUndo(it, host = ReceiptHost.detailHero(franchise.id)) }
     }
 }
 
@@ -2639,6 +2687,11 @@ class NextUp(
     val eyebrow: String,
     /** The amber dot — a fresh, actionable episode only. */
     val dot: Boolean = false,
+    /**
+     * The WHEN, leading the lockup's one line ahead of the fact (Today's grammar, 5 Sep): today's
+     * drop ("Aired 2h ago"), a caught-up show's next airing ("Friday at 7:30 PM").
+     */
+    val moment: String? = null,
     /** The FACT. */
     val line1: String,
     val line2: String?,
@@ -2703,14 +2756,16 @@ internal fun nextUpState(f: Franchise, now: Long): NextUp? {
             )
         }
         val episode = current.nextEpisodeNumber ?: (current.progress + 1)
+        // The next airing is the MOMENT, leading the line ("Friday at 7:30 PM · Season 5 · Episode
+        // 10"); only its absence is a support line.
+        val next = f.nextAiring(now)?.let { TemporalCopy.airs(at = it, now = now, source = f.source) }
         return NextUp(
             kind = NextUp.Kind.CAUGHT_UP,
             part = current,
             eyebrow = Copy.Progress.caughtUp,
+            moment = next,
             line1 = f.watchContext(current, episode),
-            line2 = f.nextAiring(now)
-                ?.let { TemporalCopy.airs(at = it, now = now, source = f.source) }
-                ?: TemporalCopy.noDateAnnounced,
+            line2 = if (next == null) TemporalCopy.noDateAnnounced else null,
         )
     }
 
@@ -2726,22 +2781,29 @@ internal fun nextUpState(f: Franchise, now: Long): NextUp? {
                 Copy.Progress.left(behind)
             },
             line1 = context,
-            line2 = newEpisodeLine(f, now),
+            // The drop while it is fresh (i3): "Episode 21 aired yesterday" under "4 EPISODES
+            // BEHIND" says which one struck; the next air date takes over once it has settled.
+            line2 = dropAiredLine(f, current, now) ?: newEpisodeLine(f, now),
             episode = episode,
             behind = behind,
         )
     }
+    // Today's fresh-hero grammar, verbatim (5 Sep): a drop that struck today is "NEW EPISODE" on the
+    // badge with its recency leading the line ("Aired 2h ago · Season 4 · Episode 19"); an older
+    // single drop wears its day on the badge and has no moment.
+    val last = current.lastAired(now, f.timeAnchor)
+    val recency = last?.let { TemporalCopy.aired(at = it, now = now, source = f.source) }
+    val struck = last != null && now - last <= ShelfWindows.NOW_BAR_LIVE
     return NextUp(
         kind = NextUp.Kind.ACTIONABLE,
         part = current,
-        eyebrow = current.lastAired(now, f.timeAnchor)
-            ?.let { TemporalCopy.aired(at = it, now = now, source = f.source) }
-            ?: Copy.Label.newEpisode,
+        eyebrow = if (struck) Copy.Label.newEpisode else (recency ?: Copy.Label.newEpisode),
         // The amber dot belongs to a fresh, actionable episode and nothing else.
         dot = true,
+        moment = if (struck) recency else null,
         line1 = context,
-        // No third line: "Caught up after this episode" restated what the eyebrow's aired date and
-        // the one-episode CTA already say — the capsule is the sentence.
+        // No third line: "Caught up after this episode" restated what the badge and the
+        // one-episode CTA already say — the capsule is the sentence.
         line2 = newEpisodeLine(f, now),
         episode = episode,
         behind = 1,
@@ -2771,6 +2833,13 @@ private fun waitingState(f: Franchise, part: FranchisePart): NextUp {
  * `ahead` exists so *"this page cannot say COMPLETE while the Library's shelf says 'Returns Oct 2026'
  * about the same show — and a rumour is called one."*
  */
+/** The name the bar can hold: `displayTitle` within the budget, else the shelf-shortened form, else null. */
+internal fun dockedName(f: Franchise, budget: Int = 19): String? {
+    if (f.displayTitle.length <= budget) return f.displayTitle
+    val short = f.title.shelfShortened
+    return if (short.length <= budget) short else null
+}
+
 private fun completeState(f: Franchise, now: Long): NextUp {
     val summary = RewatchStore.summary(f.id)
     val last = summary.lastCompletedAt
@@ -2793,15 +2862,15 @@ private fun completeState(f: Franchise, now: Long): NextUp {
                 else -> "${up.next} · ${returnFact(f, now)}"
             }
         }
-    val lines = listOfNotNull(ahead, last, scale)
+    // The fact and its scale on ONE line, then the ONE more thing (i1-F8).
+    val fact = listOfNotNull(Copy.Progress.watchedTimes(max(1, summary.completedCount)), scale).joinToString(" · ")
     return NextUp(
         kind = NextUp.Kind.SERIES_COMPLETE,
         part = null,
         eyebrow = Copy.Label.complete,
-        line1 = Copy.Progress.watchedTimes(max(1, summary.completedCount)),
-        line2 = lines.firstOrNull(),
-        // The third is dropped.
-        line3 = lines.getOrNull(1),
+        line1 = fact,
+        line2 = ahead ?: last,
+        line3 = null,
     )
 }
 
@@ -2827,6 +2896,14 @@ private fun returnFact(f: Franchise, now: Long): String {
  * the reader would take the day for its air date."* A `planned` show gets no cadence line — it is in
  * your library but not in your week.
  */
+/** "Episode 21 aired yesterday" while the latest drop is inside the live window, else null. */
+private fun dropAiredLine(f: Franchise, part: FranchisePart, now: Long): String? {
+    val last = f.lastAired(now) ?: return null
+    if (now - last > ShelfWindows.NOW_BAR_LIVE) return null
+    val whenText = TemporalCopy.aired(at = last, now = now, source = f.source).removePrefix("Aired ")
+    return Copy.Progress.dropAired(part.airedByNow(now, f.timeAnchor), whenText)
+}
+
 private fun newEpisodeLine(f: Franchise, now: Long): String? {
     if (!f.tracksAirings) return null
     val at = f.nextAiring(now) ?: return null
@@ -2945,4 +3022,17 @@ private fun DebugCaptureDriver(
             if (index in franchise.related.indices) onOpenRelated(index)
         }
     }
+}
+
+/** The market's certificate as an outlined tag — "U/A 16+", "TV-MA" — beside the identity line. */
+@Composable
+private fun CertificateTag(text: String) {
+    BasicText(
+        text = text,
+        style = ThemeType.metadataEmphasis.copy(color = ThemeColor.textSecondary),
+        maxLines = 1,
+        modifier = Modifier
+            .border(1.dp, ThemeColor.textSecondary.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
 }

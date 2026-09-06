@@ -24,16 +24,26 @@ import com.anitrack.app.ui.art.PosterSlot
 import com.anitrack.app.ui.control.PressStyle
 import com.anitrack.app.ui.isAccessibilityTextSize
 import com.anitrack.model.shelfShortened
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.unit.dp
 
 /** The identity title shrinks to 82 % before it does anything else. It never ellipsizes. */
-private const val SHELF_TITLE_MIN_SCALE = 0.82f
+private const val SHELF_TITLE_MIN_SCALE = 0.8f
 
 /** Two lines of title at ordinary sizes; at AX the card is a full-width row and may run to six. */
 private const val SHELF_TITLE_LINES = 2
+/** A shelf card may run to three lines when nothing reserves its baseline (i3). */
+private const val SHELF_TITLE_LINES_FREE = 3
+/** The title budgets, in graphemes: two reserved lines, else the one-to-three-line free form. */
+private const val SHELF_TITLE_FIT = 24
+private const val SHELF_TITLE_FIT_RESERVED = 26
+/** Two lines of `shelfTitle`, reserved on a grid (i1-F5). */
+private val SHELF_TITLE_RESERVED = 36.dp
 private const val SHELF_TITLE_LINES_AX = 6
 
 /** Two lines and a tail ellipsis — the caption is a fact, and a fact may be cut. */
-private const val SHELF_CAPTION_LINES = 2
+// ONE line (i2-7): "3 episodes / behind" grew a card four rows tall with "behind" orphaned.
+private const val SHELF_CAPTION_LINES = 1
 
 /**
  * One poster on a horizontal shelf: the artwork, the identity title, and one caption.
@@ -73,6 +83,8 @@ fun ShelfCard(
     modifier: Modifier = Modifier,
     caption: String? = null,
     captionIsLead: Boolean = false,
+    /** A GRID reserves two title lines so every row shares one caption baseline (i1-F5). */
+    reserveTitleLines: Boolean = false,
     poster: String? = null,
     slot: PosterSize = PosterSize.ShelfLarge,
     hint: String? = null,
@@ -115,11 +127,15 @@ fun ShelfCard(
             horizontalAlignment = Alignment.Start,
         ) {
             AutoSizeText(
-                text = title.shelfShortened,
+                text = title.shelfShortened(fitting = if (reserveTitleLines) SHELF_TITLE_FIT_RESERVED else SHELF_TITLE_FIT),
                 style = ThemeType.shelfTitle.copy(color = ThemeColor.textPrimary),
                 minScale = SHELF_TITLE_MIN_SCALE,
-                maxLines = if (isAX) SHELF_TITLE_LINES_AX else SHELF_TITLE_LINES,
-                modifier = Modifier.fillMaxWidth(),
+                // Reserved is a floor, never a cap (i4): the identity title never ellipsizes.
+                maxLines = if (isAX) SHELF_TITLE_LINES_AX else SHELF_TITLE_LINES_FREE,
+                // A GRID reserves the second line's height so every row shares one caption baseline.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (reserveTitleLines && !isAX) Modifier.heightIn(min = SHELF_TITLE_RESERVED) else Modifier),
             )
             if (caption != null) {
                 BasicText(

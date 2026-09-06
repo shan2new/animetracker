@@ -1,0 +1,43 @@
+{
+  "fill": {
+    "solid": "display-p3:0.07059,0.06275,0.06275,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "name": "plate",
+          "image-name": "plate.png",
+          "glass": true
+        },
+        {
+          "name": "ribbon",
+          "image-name": "ribbon.png",
+          "glass": false
+        },
+        {
+          "name": "period",
+          "image-name": "period.png",
+          "glass": false
+        }
+      ],
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.6
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.35
+      },
+      "blur": 0
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

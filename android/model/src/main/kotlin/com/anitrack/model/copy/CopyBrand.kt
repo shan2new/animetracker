@@ -12,9 +12,9 @@ package com.anitrack.model.copy
  * vary.
  *
  * **The period belongs to the name.** "Previously." is the brand; "Previously" is an adverb. So
- * [wordmark] is the whole name, and [word] / [period] exist only for the ONE lockup that draws them
- * in two inks (the splash's, where the period is the ember). A surface that wants the name and has
- * nothing to say about its colour uses [wordmark] and nothing else.
+ * [wordmark] is the whole name, and [word] / [period] exist for the lockup that draws them in two
+ * inks (`BrandWord`, where the period is the icon's coral bead at text size). A surface that wants
+ * the name and has nothing to say about its colour uses [wordmark] and nothing else.
  *
  * `app_name` in `strings.xml` is the single unavoidable second copy — the launcher reads it out of
  * the manifest before any of this app's code runs, and a manifest attribute can only reference a
@@ -30,7 +30,7 @@ object CopyBrand {
      */
     const val wordmark = "Previously."
 
-    /** The name's word, for the two-ink lockup only. Its period is [period], drawn in accent. */
+    /** The name's word, for the two-ink lockup. Its period is [period], drawn in `brandPeriod`. */
     const val word = "Previously"
 
     /** The lockup's second half. It is part of the name, not punctuation after it. */
@@ -44,17 +44,9 @@ object CopyBrand {
     const val spoken = "Previously"
 
     /**
-     * The ident's line, under the mark, on the first screen every user sees. Set in small caps at
-     * render; the string carries the caps because the lockup is a piece of artwork, not a sentence.
-     */
-    const val tagline = "ON EVERYTHING YOU WATCH"
-
-    /**
-     * The sign-in gate's line — the app's *other* brand line, and deliberately a different one:
-     * the ident says what the app is about, the gate says what it does for you.
-     *
-     * They live together here so the two can be read together, which is the whole point: they were
-     * declared in two files that never mention each other.
+     * The sign-in gate's line: what the app does for you. (The launch ident once carried a second
+     * brand line, "ON EVERYTHING YOU WATCH"; the launch says nothing now — the mark arrives, the
+     * name follows it — so the gate's is the app's one brand sentence.)
      */
     const val promise = "Know what changed. Record what you watched."
 }

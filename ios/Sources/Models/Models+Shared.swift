@@ -22,6 +22,10 @@ extension FranchisePart {
         label.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The catalogue relates this part to the work as a spin-off. A spin-off is an extra, never a
+    /// season of the show, whatever its `kind` says.
+    var isSpinOff: Bool { relationship?.uppercased() == "SPIN_OFF" }
+
     /// "Episode 19". Never "E19", never "Ep 19" (board 09 notation table).
     func episodeLabel(_ n: Int) -> String { Copy.episode(n) }
 
@@ -63,7 +67,12 @@ extension FranchisePart {
                   Formatting.dayDiff(ts: d, now: now, anchor: Episode.airDateAnchor) < 0 else { return acc }
             return max(acc, ep.number)
         }
-        return max(airedEpisodes, dated)
+        // A per-episode slot that has struck is an aired episode too (`airedByNow`): without it the
+        // mark target trailed the catalogue's count by a sync, so the episode Today had just called
+        // "out now" could not be marked. For a date-only source this admits the drop day once its
+        // synthesized 17:00 UTC instant has passed — TMDB's own date has arrived by then.
+        let struck = airings.filter { $0.at <= now }.map(\.episode).max() ?? 0
+        return max(airedEpisodes, dated, struck)
     }
 
     /// How many episode rows to render.
@@ -115,6 +124,18 @@ extension Franchise {
             .sorted { $0.sequence < $1.sequence }
     }
 
+    /// The SEASONS — what the show page's picker lists and what "Season N" means on that screen:
+    /// the `.season` parts that are not spin-offs. OVAs, ONAs, side stories, spin-offs, specials
+    /// and films are extras, on the shelf under the episode list. The picker used to list every
+    /// episodic part in release order — Season 1, OVA 1, Sukuwareru Ramiris, Season 2, Visions of
+    /// Coleus, Season 2 Part 2… nine entries on Slime ("utterly confusing", 4 Sep); Netflix, Apple
+    /// TV, Prime and Crunchyroll list seasons only. A work with no season at all (an ONA run)
+    /// keeps its whole episodic spine, so it still has an Episodes section.
+    var seasonPartsInOrder: [FranchisePart] {
+        let seasons = episodicPartsInOrder.filter { $0.kind == .season && !$0.isSpinOff }
+        return seasons.isEmpty ? episodicPartsInOrder : seasons
+    }
+
     /// The part the whole screen is "about": what is airing, else what the user would resume,
     /// else the earliest thing they have not finished. `nil` only when there is nothing episodic.
     var currentPart: FranchisePart? {
@@ -132,6 +153,16 @@ extension Franchise {
         guard episodic.allSatisfy({ $0.isComplete }) else { return false }
         guard !parts.contains(where: { $0.isReleasing || $0.isUpcoming }) else { return false }
         return upcoming?.isFutureInstallment != true
+    }
+
+    /// Watched through: every episodic member complete and nothing releasing or upcoming — the
+    /// series-complete milestone's own test. Unlike `isSeriesComplete` a curated rumour ("Sequel
+    /// series rumoured") does not count: a rumour is not a season to watch, and Thrones stayed
+    /// under "Watching ⌄" over "COMPLETE · Watched once" because of one (review i4).
+    var isWatchedThrough: Bool {
+        let episodic = episodicPartsInOrder
+        guard !episodic.isEmpty, episodic.allSatisfy({ $0.isComplete }) else { return false }
+        return !parts.contains(where: { $0.isReleasing || $0.isUpcoming })
     }
 
     /// The canonical label of one member, by media id. "" when the part is unknown or unlabelled.

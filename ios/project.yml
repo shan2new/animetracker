@@ -1,8 +1,14 @@
 name: AniTrack
+# Deployment target is iOS 18.0, not 26.0 and not 17.0. iOS 17 and iOS 18 support the IDENTICAL
+# iPhone set (iPhone XR / XS and later, A12+) — Apple kept 17's device list for 18 — while iOS 26
+# requires iPhone 11 / SE 2nd gen. So 18 already reaches every phone that 26 excludes, and dropping
+# to 17 would buy no extra device while costing the `onGeometryChange` scroll probes (18 sites),
+# the `Tab { }` builder and Schedule's `onScrollTargetVisibilityChange` day tracking.
+# iOS 26 flourishes are gated in DesignSystem/GlassHelpers.swift, never removed.
 options:
   bundleIdPrefix: com.anitrack
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "18.0"
   createIntermediateGroups: true
   groupSortPosition: top
 
@@ -25,7 +31,7 @@ targets:
   AniTrack:
     type: application
     platform: iOS
-    deploymentTarget: "26.0"
+    deploymentTarget: "18.0"
     # XcodeGen has no separate `resources:` key — resources are `sources` entries it
     # auto-categorizes by file type into the resources build phase.
     sources:
@@ -42,6 +48,11 @@ targets:
       - path: Resources/AppIcon.icon
         type: file
         buildPhase: resources
+      # Apple privacy manifest (required-reason APIs + collected data types). Explicit
+      # type/buildPhase because XcodeGen has no rule for .xcprivacy and would otherwise drop it.
+      - path: Resources/PrivacyInfo.xcprivacy
+        type: file
+        buildPhase: resources
     dependencies:
       # The clerk-ios package vends two products: ClerkKit (core) and ClerkKitUI (prebuilt views).
       - package: Clerk
@@ -56,13 +67,27 @@ targets:
         CFBundleDisplayName: "Previously."
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # Export compliance, answered at build time so TestFlight/App Store Connect stops asking on
+        # every upload. The app ships no cryptography of its own — only HTTPS through the OS, which
+        # is exempt under the ATS/standard-crypto exemption. If a future build adds its own crypto,
+        # this answer must be revisited.
+        ITSAppUsesNonExemptEncryption: false
+        # The launch screen is the bare canvas (`LaunchBackground` = `ThemeColor.canvas`) and
+        # nothing else: the ident (App/LaunchIdent.swift) owns the whole entrance. A `UIImageName`
+        # still from the asset catalogue was tried (4 Sep) and never rendered on the iOS 27
+        # simulator — the system composes the launch frame before the catalogue is readable — so
+        # a design that continued from it would cut on exactly the devices it was meant for.
         UILaunchScreen:
           UIColorName: LaunchBackground
-        # ProMotion: allow display-linked custom animation (the splash's TimelineView) to run
-        # at up to 120Hz on iPhone — without this key iOS caps custom animation at 60fps.
+        # ProMotion: allow display-linked custom animation (the launch ident's TimelineView) to
+        # run at up to 120Hz on iPhone — without this key iOS caps custom animation at 60fps.
         CADisableMinimumFrameDurationOnPhone: true
+        # Landscape is listed so the SYSTEM video player (the trailer stage's hand-off) can
+        # rotate; the app itself stays portrait through `AppDelegate`'s orientation gate.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UIUserInterfaceStyle: Dark
         # Bundled Outfit weights (files live in Resources/Fonts). Filenames only — XcodeGen
         # flattens the folder into the bundle root.
@@ -109,10 +134,11 @@ targets:
         # For local development, override with a LAN URL such as
         # "http://Shantanus-MacBook-Air.local:8787" (NSAllowsLocalNetworking permits it).
         API_BASE_URL: "https://anime.cognipin.com"
-        # === FILL THESE IN BEFORE SUBMISSION (guideline 5.1.1) ===
-        PRIVACY_POLICY_URL: "REPLACE_ME"
-        TERMS_URL: "REPLACE_ME"
-        SUPPORT_EMAIL: "REPLACE_ME"
+        # Guideline 5.1.1 — served by the backend itself (server/src/routes/legal.ts), so the
+        # URLs live on the same HTTPS domain the app already talks to and need no extra hosting.
+        PRIVACY_POLICY_URL: "https://anime.cognipin.com/privacy"
+        TERMS_URL: "https://anime.cognipin.com/terms"
+        SUPPORT_EMAIL: "shantanusinha95@gmail.com"
         # === SIGNING ===
         DEVELOPMENT_TEAM: YLPZXZS2F4
         CODE_SIGN_STYLE: Automatic
@@ -120,7 +146,7 @@ targets:
   AniTrackWidgets:
     type: app-extension
     platform: iOS
-    deploymentTarget: "26.0"
+    deploymentTarget: "18.0"
     sources:
       - path: Widgets
       - path: Shared

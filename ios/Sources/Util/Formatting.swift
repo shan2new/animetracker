@@ -195,8 +195,19 @@ enum Formatting {
 
     // Weekday/month NAMES depend on the locale only, never the time zone, so they always come off
     // the local formatter regardless of the anchor the day itself was computed in.
-    private static func weekdayShort(_ wd: Int) -> String {
+    static func weekdayShort(_ wd: Int) -> String {
         let symbols = formatter("EEEE", .local).shortStandaloneWeekdaySymbols ?? []
+        return symbols.indices.contains(wd) ? symbols[wd] : ""
+    }
+
+    /// "Wed" for a Monday-first column (the day strip's and the day header's calendar).
+    static func weekdayShortMonFirst(_ col: Int) -> String { weekdayShort((col + 1) % 7) }
+
+    /// "W" for a Monday-first column — the locale's own one-letter form, not the first
+    /// character of a name that has no reason to be Latin.
+    static func weekdayLetterMonFirst(_ col: Int) -> String {
+        let symbols = formatter("EEEE", .local).veryShortStandaloneWeekdaySymbols ?? []
+        let wd = (col + 1) % 7
         return symbols.indices.contains(wd) ? symbols[wd] : ""
     }
 
@@ -218,8 +229,9 @@ enum Formatting {
         let h = s / H
         s -= h * H
         let m = s / minuteMs
-        if d > 0 { return "\(d)d \(h)h" }
-        if h > 0 { return "\(h)h \(m)m" }
+        // A zero unit is dropped: "in 1h", not "in 1h 0m" (the hero's fact line, 4 Sep).
+        if d > 0 { return h > 0 ? "\(d)d \(h)h" : "\(d)d" }
+        if h > 0 { return m > 0 ? "\(h)h \(m)m" : "\(h)h" }
         return "\(m)m"
     }
 
@@ -339,6 +351,12 @@ enum Formatting {
     /// "Oct 2026" — a month-precision date: Library's Returning captions and its month headers.
     static func fmtMonthYear(_ ts: Int64, anchor: TimeAnchor = .local) -> String {
         string(ts, "MMMyyyy", anchor)
+    }
+
+    /// "September 2026" — the month NAMED, for a calendar's own header, where the month is the one
+    /// fact the panel exists to state. `fmtMonthYear`'s "SEP 2026" is a caption's abbreviation.
+    static func fmtMonthNameYear(_ ts: Int64, anchor: TimeAnchor = .local) -> String {
+        string(ts, "MMMMyyyy", anchor)
     }
 
     /// Prettify a curated release string from FranchiseUpcoming. A bare ISO date or year-month

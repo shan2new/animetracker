@@ -72,6 +72,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.anitrack.app.data.ReceiptPlacement
+import com.anitrack.app.ui.state.LaneItem
+import com.anitrack.model.isWatchedThrough
 
 /*
  * # The brain
@@ -504,6 +507,7 @@ class AppModel(
             // stale by definition; applying it would resurrect state we just tore down.
             if (seq != reloadSeq) return
             library = reconcileLocalProgress(res.franchises, seq)
+            settleCompletedSeries()
             // Keep the larger of the two prevOpenedAt values we may have seen.
             if (res.prevOpenedAt > 0) prevOpenedAt = maxOf(prevOpenedAt, res.prevOpenedAt)
             // The screens fade their "couldn't refresh" footnote in and out around this flag. On
@@ -548,6 +552,8 @@ class AppModel(
      * next sign-in opens on a loader, never on someone else's shows.
      */
     fun teardown() {
+        completedByMark.clear()
+        completionSweepDone = false
         RewatchStore.reset()
         SessionResets.runAll()
         cache.clear()
@@ -671,11 +677,23 @@ class AppModel(
     // MARK: - Toasts, receipts and celebration
     // =============================================================================================
 
-    /** Present an Undo toast for a write that already happened (when a card's handoff settles). */
-    fun presentUndo(state: UndoState) {
-        undo = state
+    /**
+     * Present a receipt for a write that already happened (when a card's handoff settles). With
+     * [host] it lands IN PLACE under that control; without, on the bottom chrome's lane.
+     */
+    fun presentUndo(state: UndoState, host: String? = null) {
+        undo = if (host != null) state.placed(host) else state
         scheduleUndoDismissal()
     }
+
+    /** What the lane shows: the newest of a failure, a lane-placed undo, or a notice. */
+    val laneItem: LaneItem?
+        get() {
+            errorToast?.let { return LaneItem.Error(it) }
+            undo?.let { if (it.placement == ReceiptPlacement.Lane) return LaneItem.Undo(it) }
+            notice?.let { return LaneItem.Notice(it) }
+            return null
+        }
 
     /**
      * The lifetime comes from [SyncCenter], which is the only thing that knows whether a screen
@@ -1716,6 +1734,7 @@ class AppModel(
             removeFromLibrary(fid, haptic = false)
         } else if (fid != null && mediaId != null && isInLibrary(fid)) {
             applyLocalProgress(fid, mediaId, u.prevProgress)
+            unsettleCompletion(fid)
             justCaught = justCaught - fid
             // An undo is a progress write like any other: it rides the part's lane BEHIND the mark
             // it reverses, so the server can never end on the mark after the user took it back, and
@@ -1827,6 +1846,41 @@ class AppModel(
         if (fi < 0) return
         library = library.toMutableList().also {
             it[fi] = it[fi].withUpdatedProgress(mediaId, episodes)
+        }
+        settleCompletion(franchiseId)
+    }
+
+    /** The shows THIS session moved to Watched by marking their last episode — Undo takes the move back too. */
+    private val completedByMark = HashSet<String>()
+    private var completionSweepDone = false
+
+    /**
+     * A finished series whose last episode has just been marked is filed under Watched (i4:
+     * Thrones read "Watching ⌄" in the bar over "COMPLETE · Watched once"), the way AniList, MAL
+     * and Trakt file it. A status write like any other: it rolls back on failure.
+     */
+    private fun settleCompletion(franchiseId: String) {
+        val f = franchise(franchiseId) ?: return
+        if (f.effectiveStatus != WatchStatus.WATCHING || !f.isWatchedThrough) return
+        completedByMark.add(franchiseId)
+        setStatus(franchiseId, WatchStatus.COMPLETED, haptic = false, present = false)
+    }
+
+    private fun unsettleCompletion(franchiseId: String) {
+        if (!completedByMark.remove(franchiseId)) return
+        val f = franchise(franchiseId) ?: return
+        if (f.effectiveStatus != WatchStatus.COMPLETED || f.isWatchedThrough) return
+        setStatus(franchiseId, WatchStatus.WATCHING, haptic = false, present = false)
+    }
+
+    /** Rows the server still files under Watching though everything is watched: moved once per session, quietly. */
+    private fun settleCompletedSeries() {
+        if (completionSweepDone) return
+        completionSweepDone = true
+        for (f in library) {
+            if (f.effectiveStatus == WatchStatus.WATCHING && f.isWatchedThrough) {
+                setStatus(f.id, WatchStatus.COMPLETED, haptic = false, present = false)
+            }
         }
     }
 

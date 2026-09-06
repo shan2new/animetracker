@@ -65,6 +65,7 @@ import com.anitrack.app.design.AppFont
 import com.anitrack.app.design.ContinuousCornerShape
 import com.anitrack.app.design.MotionToken
 import com.anitrack.app.design.SurfaceLevel
+import com.anitrack.app.design.brand.BrandWord
 import com.anitrack.app.design.brand.PreviouslyMark
 import com.anitrack.app.design.ThemeColor
 import com.anitrack.app.design.ThemeMetrics
@@ -191,19 +192,12 @@ private fun Identity(modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        PreviouslyMark(width = MarkWidth, bloom = true)
+        // The icon's ribbon, lit, then the name with its coral full stop.
+        PreviouslyMark(width = MarkWidth, lit = true, bloom = true)
 
-        BasicText(
-            text = buildAnnotatedString {
-                append(Copy.Brand.word)
-                // The period is amber and the word is ink. The whole lockup, in one string.
-                withStyle(SpanStyle(color = ThemeColor.accent)) { append(Copy.Brand.period) }
-            },
-            style = ThemeType.displayXL.copy(color = ThemeColor.textPrimary),
-            modifier = Modifier
-                .padding(top = ThemeSpace.x5)
-                // A screen reader hears the name, not a word and a full stop.
-                .semantics { contentDescription = Copy.Brand.spoken },
+        BrandWord(
+            style = ThemeType.displayXL,
+            modifier = Modifier.padding(top = ThemeSpace.x5),
         )
 
         BasicText(
@@ -572,8 +566,8 @@ private fun Context.findActivity(): Activity? {
 // aspect, the bloom and three `Color(0x…)` literals, and so did Today's header and Profile's disc.
 // -------------------------------------------------------------------------------------
 
-/** iOS `PreviouslyMark(width: 58)`. */
-private val MarkWidth = 58.dp
+/** iOS `PreviouslyMark(width: 56, lit: true)`. */
+private val MarkWidth = 56.dp
 
 /**
  * The dev field's side inset. One step over `ThemeSpace.x3` on purpose: at 12 the caret sits on the

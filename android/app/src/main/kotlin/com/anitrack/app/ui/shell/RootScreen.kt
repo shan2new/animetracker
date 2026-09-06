@@ -1,7 +1,6 @@
 package com.anitrack.app.ui.shell
 
 import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -33,7 +32,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -44,6 +42,8 @@ import com.anitrack.app.data.SyncCenter
 import com.anitrack.app.data.api.ApiClient
 import com.anitrack.app.data.auth.AuthManager
 import com.anitrack.app.design.LocalReduceMotion
+import com.anitrack.app.design.brand.LaunchHandoff
+import com.anitrack.app.design.brand.LocalLaunchHandoff
 import com.anitrack.app.design.MotionToken
 import com.anitrack.app.design.PreviouslyMaterialBridge
 import com.anitrack.app.design.ProvideControlInk
@@ -52,7 +52,6 @@ import com.anitrack.app.design.ThemeMetrics
 import com.anitrack.app.design.ThemeMotion
 import com.anitrack.app.design.motion
 import com.anitrack.app.ui.auth.SignInScreen
-import com.anitrack.app.ui.chrome.LocalCanUseMaterial
 import com.anitrack.app.ui.chrome.PushedScreenChrome
 import com.anitrack.app.ui.detail.ApiClientDetailApi
 import com.anitrack.app.ui.detail.DetailDebugArgs
@@ -84,17 +83,16 @@ import com.anitrack.model.copy.CopyDates
  *    screen it reveals is the right one, never sign-in for a signed-in user."
  *
  * `AuthManager.bootstrap()` waits up to 3 s for Clerk to restore a session, so on a cold launch
- * over a slow network the ident holds past its own 1.68 s timeline rather than flashing the sign-in
- * screen at a returning user. Both conditions are checked in one place ([handOffIfReady] on iOS,
- * the single `LaunchedEffect` below here), because two places is how one of them gets forgotten.
+ * over a slow network the ident rests past its own beats rather than flashing the sign-in screen
+ * at a returning user. The ident reads that answer through `LaunchHandoff.authReady`, set below.
  */
 
 /**
  * The gate and the shell.
  *
  * @param onReadyToDraw called on the first composition. The SYSTEM splash is held until it fires,
- *   so the platform's launch frame and this app's ident are one continuous image rather than two
- *   splashes.
+ *   and the ident's first frame is that splash's own picture, so the platform's launch frame and
+ *   this app's ident are one continuous image rather than two splashes.
  */
 @Composable
 fun RootScreen(
@@ -104,9 +102,6 @@ fun RootScreen(
     modifier: Modifier = Modifier,
     onReadyToDraw: () -> Unit = {},
 ) {
-    val reduceMotion = LocalReduceMotion.current
-    val canUseMaterial = LocalCanUseMaterial.current
-
     LaunchedEffect(Unit) { onReadyToDraw() }
 
     // The ≤3 s wait for Clerk. iOS runs it from the scene's `.task`; the root is the same place.
@@ -115,23 +110,21 @@ fun RootScreen(
     val signedIn by auth.isSignedIn.collectAsState()
     val bootstrapped by auth.bootstrapped.collectAsState()
 
-    // Saveable, both of them: an Activity recreation (a font-scale change, which the manifest
-    // deliberately does not suppress) must not replay a 2-second brand ident over an app the user
-    // is already using.
-    var splashFinished by rememberSaveable { mutableStateOf(false) }
-    var splashDone by rememberSaveable { mutableStateOf(false) }
+    // Saveable: an Activity recreation (a font-scale change, which the manifest deliberately does
+    // not suppress) must not replay the launch over an app the user is already using.
+    var launchDone by rememberSaveable { mutableStateOf(false) }
+    val launch = LocalLaunchHandoff.current ?: remember { LaunchHandoff() }
 
-    // `handOffIfReady`, entire. Both inputs are keys, so it re-runs when either arrives and the
-    // order they arrive in cannot matter.
-    LaunchedEffect(splashFinished, bootstrapped) {
-        if (splashDone || !splashFinished || !bootstrapped) return@LaunchedEffect
-        splashDone = true
-        // What Today's recap clock waits on: the surface is now the user's to read.
-        model.surfaceReady = true
-    }
+    // The ident waits for auth's first answer before it leaves, so the screen it reveals is the
+    // right one — never sign-in for a signed-in user.
+    LaunchedEffect(bootstrapped) { if (bootstrapped) launch.authReady = true }
+
+    // The surface is the user's to read once the app starts emerging: Today's page-in (rise only —
+    // the emergence is the fade) and the recap clock wait on this.
+    LaunchedEffect(launchDone) { if (launchDone) model.surfaceReady = true }
 
     // `.task(id: auth.isSignedIn)` — the library load starts the instant a session exists, BEHIND
-    // the splash, so a signed-in launch has content by the time the ident leaves.
+    // the ident, so a signed-in launch has content by the time the ident leaves.
     //
     // The teardown half may run only on a real sign-OUT, never on the first composition of a
     // signed-out launch: `teardown()` clears the restored failed changes, and discarding writes the
@@ -151,34 +144,23 @@ fun RootScreen(
 
     Box(modifier.fillMaxSize().background(ThemeColor.canvas)) {
 
-        // THE APP EMERGES FROM INSIDE THE IDENT. While the splash is up the tree is drawn at 0.965
-        // and softened; both settle as the splash leaves, so the ident's dive and this expansion are
-        // one movement. Under Reduce Motion there is no camera push to emerge from, so both are
-        // pinned at their settled values and the splash simply crossfades away.
+        // The app is laid out under the ident from the first frame and EMERGES through it: a hair
+        // small while the ident holds, settling to full size as the ident pushes through and fades
+        // off it. It is never faded itself — an alpha ramp over the whole tree is an offscreen
+        // pass on every frame; the ident's two layers fading is the same picture for the price
+        // of two layers. Under Reduce Motion nothing scales.
+        val reduceMotion = LocalReduceMotion.current
         val emerge by animateFloatAsState(
-            targetValue = if (splashDone || reduceMotion) 1f else 0f,
+            targetValue = if (launch.emerging || launchDone || reduceMotion) 1f else EMERGE_SCALE,
             animationSpec = motion(MotionToken.UI_SETTLE),
-            label = "splashEmerge",
+            label = "launchEmerge",
         )
-
         Box(
             Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    val t = emerge
-                    val s = EMERGE_SCALE + (1f - EMERGE_SCALE) * t
-                    scaleX = s
-                    scaleY = s
-                    // A render effect, not `Modifier.blur`: the blur is a function of an animating
-                    // float, and this lambda is a deferred read — it re-runs per frame without
-                    // recomposing the app under it. `Modifier.blur` is also a silent no-op below
-                    // API 31, which is what `canUseMaterial` answers for.
-                    renderEffect = if (canUseMaterial && t < 0.999f) {
-                        val r = (1f - t) * EMERGE_BLUR * density
-                        if (r > 0.1f) BlurEffect(r, r) else null
-                    } else {
-                        null
-                    }
+                    scaleX = emerge
+                    scaleY = emerge
                 },
         ) {
             Crossfade(
@@ -187,33 +169,28 @@ fun RootScreen(
                 label = "authGate",
             ) { inside ->
                 if (inside) {
-                    MainTabs(model = model, auth = auth, client = client)
+                    MainTabs(model = model, auth = auth, client = client, launch = launch)
                 } else {
                     SignInScreen(auth = auth)
                 }
             }
         }
 
-        // `AnimatedVisibility`, not `if (!splashDone)`: the ident has to STAY MOUNTED through its own
-        // fade, because that overlap is the effect. It hands off early — at 1.68 s of a 2.10 s
-        // timeline — so the camera dive is still running underneath the crossfade while the app
-        // scales up through it. Unmounted on the flag, the dive would simply be cut.
-        AnimatedVisibility(
-            visible = !splashDone,
-            enter = EnterTransition.None,
-            exit = fadeOut(motion(MotionToken.UI_SETTLE)),
-            label = "splash",
-        ) {
-            SplashScreen(onFinished = { splashFinished = true })
+        if (!launchDone) {
+            LaunchIdent(
+                handoff = launch,
+                onLeaving = { model.surfaceReady = true },
+                onFinished = {
+                    launchDone = true
+                    launch.finished = true
+                },
+            )
         }
     }
 }
 
-/** The app under the ident: pushed back a hair, so it comes forward as the ident leaves. */
-private const val EMERGE_SCALE = 0.965f
-
-/** …and softened by this much, in dp, while it is back there. */
-private const val EMERGE_BLUR = 4f
+/** The app under the ident: a hair small, so it comes forward as the ident pushes through. */
+private const val EMERGE_SCALE = 0.96f
 
 // ---------------------------------------------------------------------------------------------
 // The shell
@@ -232,6 +209,7 @@ private fun MainTabs(
     model: AppModel,
     auth: AuthManager,
     client: ApiClient,
+    launch: LaunchHandoff,
 ) {
     val debug = LocalDebugLaunch.current
     val reduceMotion = LocalReduceMotion.current
@@ -315,7 +293,7 @@ private fun MainTabs(
                 entryProvider = entryProvider<Route> {
 
                     entry<Route.TabRoot>(clazzContentKey = { "root/${it.tab.name}" }) { key ->
-                        PageIn(tab = key.tab, landed = landed) {
+                        PageIn(tab = key.tab, landed = landed, ready = model.surfaceReady, fadeIn = launch.finished) {
                             when (key.tab) {
                                 AppTab.TODAY -> TodayScreen(
                                     appModel = model,
@@ -471,7 +449,6 @@ private fun MainTabs(
 @Composable
 private fun ShellToasts(model: AppModel, modifier: Modifier = Modifier) {
     val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val undo = model.undo
 
     ToastHost(
         // Profile lists every failed change with its own Retry and Discard, so the banner there
@@ -481,13 +458,10 @@ private fun ShellToasts(model: AppModel, modifier: Modifier = Modifier) {
         syncRetryAvailable = SyncCenter.canRetryAny,
         onRetrySync = { SyncCenter.retryAll() },
         onDiscardSync = { SyncCenter.discardAll() },
-        errorToast = model.errorToast,
-        notice = model.notice,
-        // The undo's identity, so a second mark REPLACES the first rather than extending it: the
-        // transition replays and the live region speaks again.
-        undoKey = undo?.id,
-        undoMessage = undo?.message,
-        onUndo = { model.undo?.let { model.undoTapped(it) } },
+        // The lane's one item (a failure, a lane-placed undo, a notice); a mark's receipt lands in
+        // place under its control instead.
+        laneItem = model.laneItem,
+        onUndo = { model.undoTapped(it) },
         modifier = modifier
             .padding(horizontal = ThemeMetrics.gutter)
             .padding(bottom = ThemeMetrics.bottomChromeHeight + navBarInset + ThemeMetrics.cardGap),
@@ -561,14 +535,20 @@ private fun ProfileSheet(
 private fun PageIn(
     tab: AppTab,
     landed: MutableList<String>,
+    ready: Boolean,
+    fadeIn: Boolean,
     content: @Composable () -> Unit,
 ) {
     val reduceMotion = LocalReduceMotion.current
     val already = remember(tab) { landed.contains(tab.name) }
     var shown by remember(tab) { mutableStateOf(already) }
 
-    LaunchedEffect(tab) {
-        if (!already) {
+    // The first landing waits for the launch: the tab arrives as the ident's ground lifts, not
+    // underneath it.
+    // The first landing waits for the launch: the tab arrives as the ident pushes through, not
+    // underneath it.
+    LaunchedEffect(tab, ready) {
+        if (!already && ready) {
             landed.add(tab.name)
             shown = true
         }
@@ -580,9 +560,11 @@ private fun PageIn(
         label = "pageIn",
     )
 
+    // The launch's arrival is the app emerging through the ident, so that page-in only rises:
+    // an alpha ramp over the whole hero tree is an offscreen pass on every frame.
     Box(
         Modifier.graphicsLayer {
-            alpha = progress
+            alpha = if (fadeIn) progress else 1f
             translationY = if (reduceMotion) 0f else (1f - progress) * PAGE_IN_TRAVEL * density
         },
     ) {

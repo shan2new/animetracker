@@ -30,6 +30,10 @@ import com.anitrack.app.design.ThemeSpace
 import com.anitrack.app.ui.image.ArtBlur
 import com.anitrack.app.ui.image.ArtImage
 import com.anitrack.app.ui.image.ArtMaxPixel
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 
 /**
  * A cinematic, edge-to-edge art header with content laid over its lower third — **the one billboard
@@ -76,6 +80,15 @@ fun ArtHeader(
     focus: Alignment = Alignment.TopCenter,
     portraitSource: Boolean = false,
     drift: Boolean = false,
+    /**
+     * Today only, and only while the name is set in TYPE (i3-1): the sharp cover starts under the
+     * wordmark band instead of behind it, blended in over [INSET_BLEND]. With a logo the art keeps
+     * the full bleed — a hard edge under the band cut every poster; a soft one is a picture
+     * arriving under the chrome.
+     */
+    topInset: Dp = 0.dp,
+    /** Fires once the sharp layer has decoded: the launch ident waits on the first billboard. */
+    onLoaded: (() -> Unit)? = null,
     overlay: @Composable ColumnScope.() -> Unit = {},
 ) {
     // Null on every non-drifting hero — and the modifier below is then absent entirely rather than
@@ -121,13 +134,19 @@ fun ArtHeader(
                 // 2048, not the ground's 1024: the billboard draws this layer at ~1770 px tall, and
                 // capping the decode below that softened the one sharp asset in the frame. The
                 // blurred ground stays small — it is blurred.
+                val inset = topInset > 0.dp
                 HeroArt(
                     url = url,
                     maxPixel = ArtMaxPixel.HERO_PORTRAIT_SHARP,
-                    fill = false,
+                    // Under the band the frame is shorter than the cover's 2:3 and the cover fills
+                    // it (its top under the blend); the full-bleed cover is fitted whole.
+                    fill = inset,
                     alignment = focus,
+                    onLoaded = onLoaded,
                     modifier = Modifier
                         .matchParentSize()
+                        .padding(top = topInset)
+                        .then(if (inset) Modifier.blendTop(INSET_BLEND) else Modifier)
                         .then(driftLayer),
                 )
             } else {
@@ -175,10 +194,10 @@ object Billboard {
     const val today = 0.72f
 
     /**
-     * Detail's. 0.68 rather than Today's 0.72 so the state block and its capsule land above the tab
-     * bar on the first screen.
+     * Detail's — Today's 0.72 (5 Sep): the state block that used to sit under the art is inside the
+     * lockup now, so nothing below the hero has to land on the first screen.
      */
-    const val detail = 0.68f
+    const val detail = 0.72f
 }
 
 /**
@@ -302,11 +321,13 @@ private fun HeroArt(
     alignment: Alignment,
     modifier: Modifier,
     transformations: List<Transformation> = emptyList(),
+    onLoaded: (() -> Unit)? = null,
 ) {
     ArtImage(
         url = url,
         maxPixel = maxPixel,
         modifier = modifier,
+        onLoaded = onLoaded,
         contentScale = if (fill) ContentScale.Crop else ContentScale.Fit,
         alignment = alignment,
         // The header already drew the palette ground beneath this; a gradient placeholder on top of
@@ -343,3 +364,21 @@ private fun HeroArt(
 /** The veil over the blurred ground, so the sharp cover reads as the subject and not as a duplicate. */
 private val portraitGroundVeil = Color.Black.copy(alpha = 0.28f)
 
+
+/** The inset cover's top edge, faded in from nothing over [INSET_BLEND] so it never cuts. */
+private val INSET_BLEND = 56.dp
+
+private fun Modifier.blendTop(depth: Dp): Modifier = this
+    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+    .drawWithContent {
+        drawContent()
+        drawRect(
+            brush = Brush.verticalGradient(
+                0f to Color.Transparent,
+                1f to Color.Black,
+                startY = 0f,
+                endY = depth.toPx(),
+            ),
+            blendMode = BlendMode.DstIn,
+        )
+    }

@@ -79,6 +79,17 @@ final class ImageCache: @unchecked Sendable {
         let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
         cache.setObject(image, forKey: ImageCache.key(url, bucket), cost: cost)
     }
+
+    /// A bitmap DERIVED from a decode — a pre-blur (`BlurredImages`) — filed beside the decodes
+    /// under its own key, so it lives and dies with them.
+    func derived(_ key: String) -> UIImage? {
+        cache.object(forKey: "derived|\(key)" as NSString)
+    }
+
+    func storeDerived(_ image: UIImage, key: String) {
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+        cache.setObject(image, forKey: "derived|\(key)" as NSString, cost: cost)
+    }
 }
 
 // Serializes in-flight requests so two cells asking for the same poster share one fetch+decode.
@@ -129,18 +140,40 @@ struct CachedAsyncImage: View {
     /// Where a `.fill` image anchors inside the frame; hosts with their own ground hide the placeholder.
     var alignment: Alignment
     var placeholderHidden: Bool
+    /// The frame's aspect ratio (w/h) a `.fit` image may SNAP TO FILL against. Posters aspect-fit
+    /// by rule, but a cover whose ratio misses the slot's by a couple of per cent left a 2-pt
+    /// tinted sliver along one edge — read on every shelf as a rendering artifact, not as the
+    /// deliberate letterbox mat the rule is for. Within `fitSnapTolerance` the crop is invisible
+    /// (≤ ~2 % of one axis) and the image fills; a real mismatch keeps the honest fit + mat.
+    var fitSnapAspect: CGFloat?
+    /// A contact shadow under a `.fit` image, drawn by a shape the size of the FITTED picture and
+    /// rasterised with it. `.shadow` on the image layer itself was an offscreen pass per
+    /// composited card per frame (5 Sep).
+    var fitShadow: ShadowToken?
+
+    // 0.08, not 0.05: AniList's standard cover is 460×654 (0.703) against the 2:3 slot (0.667) —
+    // a 5.4 % miss, i.e. exactly the sliver this exists to remove. At 8 % the fill crops ≤4 % per
+    // edge, still imperceptible on a poster; genuine lockups and stills miss by far more.
+    private static let fitSnapTolerance: CGFloat = 0.08
 
     @State private var image: UIImage?
     @State private var loadedURL: URL?
     @State private var didFail = false
 
+    /// Called once an image is on screen — from the cache on the first frame, or when a load lands.
+    var onLoaded: (() -> Void)? = nil
+
     init(url: URL?, maxPixel: CGFloat = 700, contentMode: ContentMode = .fill,
-         alignment: Alignment = .center, placeholderHidden: Bool = false) {
+         alignment: Alignment = .center, placeholderHidden: Bool = false,
+         fitSnapAspect: CGFloat? = nil, fitShadow: ShadowToken? = nil, onLoaded: (() -> Void)? = nil) {
         self.url = url
         self.maxPixel = maxPixel
         self.contentMode = contentMode
         self.alignment = alignment
         self.placeholderHidden = placeholderHidden
+        self.fitSnapAspect = fitSnapAspect
+        self.fitShadow = fitShadow
+        self.onLoaded = onLoaded
         // Synchronous cache hit → first frame already shows the poster, so recycled cells don't
         // flash. `atLeast:` so a hero never inherits a thumbnail-sized decode as its first frame.
         _image = State(initialValue: url.flatMap { ImageCache.shared.image(for: $0, atLeast: maxPixel) })
@@ -159,9 +192,17 @@ struct CachedAsyncImage: View {
         Color.clear
             .overlay(alignment: alignment) {
                 if let image {
+                    let mode = resolvedContentMode(for: image)
                     Image(uiImage: image)
                         .resizable()
-                        .aspectRatio(contentMode: contentMode)
+                        .aspectRatio(contentMode: mode)
+                        // The fitted picture's own frame, so the shadow shape needs no geometry.
+                        .background {
+                            if let fitShadow, mode == .fit {
+                                Rectangle().fill(Color.black.shadow(.drop(color: fitShadow.color, radius: fitShadow.radius,
+                                                                          x: 0, y: fitShadow.y)))
+                            }
+                        }
                         .transition(.opacity)
                 } else if !placeholderHidden {
                     GradientPlaceholder()
@@ -169,6 +210,16 @@ struct CachedAsyncImage: View {
             }
             .clipped()
             .task(id: url) { await load() }
+            // The synchronous cache hit is on screen from the first frame.
+            .onAppear { if image != nil { onLoaded?() } }
+    }
+
+    /// `.fit` that would leave only a sliver of mat snaps to `.fill` — see `fitSnapAspect`.
+    private func resolvedContentMode(for image: UIImage) -> ContentMode {
+        guard contentMode == .fit, let target = fitSnapAspect, target > 0,
+              image.size.height > 0 else { return contentMode }
+        let aspect = image.size.width / image.size.height
+        return abs(aspect / target - 1) <= Self.fitSnapTolerance ? .fill : .fit
     }
 
     private func load() async {
@@ -178,6 +229,7 @@ struct CachedAsyncImage: View {
         if let cached = ImageCache.shared.image(for: url, atLeast: maxPixel) {
             image = cached
             loadedURL = url
+            onLoaded?()
             return
         }
 
@@ -185,7 +237,13 @@ struct CachedAsyncImage: View {
         didFail = false
         do {
             let loaded = try await ImageLoader.shared.image(for: url, maxPixel: maxPixel)
-            withAnimation(ThemeMotion.uiGentle) { image = loaded }
+            // Reported when the fade COMPLETES, not when it begins (review i3): the launch's
+            // gate opened on the fade's first frame and the app emerged mid-decode.
+            withAnimation(ThemeMotion.uiGentle, completionCriteria: .logicallyComplete) {
+                image = loaded
+            } completion: {
+                onLoaded?()
+            }
             loadedURL = url
         } catch {
             if !Task.isCancelled { didFail = true }

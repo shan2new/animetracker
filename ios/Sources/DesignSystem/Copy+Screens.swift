@@ -9,9 +9,11 @@ extension Copy.Action {
     static let revealEpisodeTitle = "Reveal episode title"
     static let hideEpisodeTitle = "Hide episode title"
     static let revealEpisodeTitlesAndStills = "Reveal episode titles and stills"
-    static let markSeriesWatched = "Mark series as watched"
+    static let markSeriesWatched = "Mark every season as watched"
     static let markRewatchComplete = "Mark this rewatch complete"
     static let stopRewatch = "Stop this rewatch\u{2026}"
+    static let stopRewatchTitle = "Stop this rewatch?"
+    static let stopRewatchConfirm = "Stop rewatch"
     static let signOut = "Sign out"
     static let deleteAccount = "Delete account"
     static let privacyPolicy = "Privacy Policy"
@@ -25,6 +27,7 @@ extension Copy.Action {
 extension Copy {
     enum Recap {
         static let whileYouWereAway = "While you were away"
+        static func andMore(_ n: Int) -> String { "and \(n) more" }
         /// "Since your last visit, 23 Jul" — the window always names its anchor.
         static func sinceYourLastVisit(_ phrase: String) -> String {
             let tail = phrase.hasPrefix("Since ") ? String(phrase.dropFirst(6)) : phrase
@@ -44,12 +47,14 @@ extension Copy {
         static let deleteConfirm = "Delete account"
         static let deleteFailedTitle = "Couldn\u{2019}t delete your account"
         static let upToDate = "Up to date"
-        static let couldNotReachServer = "Couldn\u{2019}t reach the server"
+        static let couldNotReachServer = "Couldn\u{2019}t connect"
         static let offlineSupporting = "Changes sync when you reconnect"
-        static let showingSavedCopy = "Showing the copy saved on this device"
-        static let signedInWithClerk = "Signed in with Clerk"
+        static let showingSavedCopy = "Showing what was saved on this device"
+        static let signedInWithClerk = "Signed in"
+        static let signOutFailedTitle = "Couldn\u{2019}t sign out"
+        static let signOutFailedMessage = "Check your connection and try again."
         static func discardChangesTitle(_ n: Int) -> String { "Discard \(Copy.changes(n))?" }
-        static let discardChangesMessage = "They never reached the server. Your library here stays as it is."
+        static let discardChangesMessage = "They were never saved to your account. Your library here stays as it is."
         static func discardChangesConfirm(_ n: Int) -> String { "Discard \(Copy.changes(n))" }
     }
 }
@@ -92,6 +97,17 @@ extension Copy {
         static let ticker = "Days"
         static let selected = "Selected"
         static let noEpisodes = "No episodes"
+        /// The bar control that brings the month grid down over the feed. ONE label in both
+        /// states — the state is its `accessibilityValue`, so VoiceOver announces a toggle rather
+        /// than two different buttons.
+        static let calendar = "Calendar"
+        static let calendarShown = "Shown"
+        static let calendarHidden = "Hidden"
+        static let previousMonth = "Previous month"
+        static let nextMonth = "Next month"
+        /// A day in the grid past the end of the feed's window. Not "no episodes" — the app does
+        /// not know yet, and saying it does is a different claim.
+        static let beyondHorizon = "Not scheduled yet"
         /// The collapsed block of aired days above today — "the last seven days" without saying
         /// so twice: its value line counts them.
         static let earlier = "Earlier"
@@ -103,5 +119,40 @@ extension Copy {
         static func everythingThrough(_ date: String) -> String { "That\u{2019}s everything through \(date)" }
         /// "3 to watch" — the unwatched count in the Earlier block's value line.
         static func toWatch(_ n: Int) -> String { "\(n) to watch" }
+    }
+}
+
+extension Copy {
+    /// The trailer shelf's vocabulary: what kind of video a card is.
+    enum Video {
+        static func kind(_ kind: FranchiseVideo.Kind) -> String {
+            switch kind {
+            case .trailer: return "Trailer"
+            case .teaser: return "Teaser"
+            case .announcement: return "Announcement"
+            case .featurette: return "Featurette"
+            case .clip: return "Clip"
+            case .other: return "Video"
+            }
+        }
+    }
+
+    /// Role words for the people the catalogue lists without one.
+    enum People {
+        static let creator = "Creator"
+        static let director = "Director"
+    }
+
+    /// The streaming row's words. The providers' marks carry the names; these are for VoiceOver
+    /// and for the attribution the provider data requires.
+    enum Watch {
+        static func access(_ access: WatchProvider.Access) -> String {
+            switch access {
+            case .subscription: return "Subscription"
+            case .free: return "Free"
+            case .ads: return "Free with ads"
+            }
+        }
+        static func attribution(_ provider: String) -> String { "Streaming availability by \(provider)" }
     }
 }

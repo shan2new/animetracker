@@ -136,16 +136,27 @@ enum EpisodeCopy {
 struct EpisodeStill: View {
     /// The episode's own still.
     let url: String?
+    /// The season's (or the show's) TRUE 16:9 landscape (`FranchisePart.stillLandscape(within:)`)
+    /// — the first fallback, because it fills a 16:9 tile the way a still does. An AniList banner
+    /// is never passed here: its middle third in this tile is a pair of eyes.
+    var landscape: String? = nil
     /// The season's (or the show's) poster — the fallback ART, never a glyph.
     let poster: String?
     /// The palette ground under both, so the slot is never grey.
     var tint: Color? = nil
     /// `nil` fills the width it is offered (the accessibility-size card); a number pins the slot.
     var width: CGFloat? = EpisodeArtwork.slot.width
+    /// The episode's number, drawn on the FALLBACK tile only. A season the catalogue did not
+    /// illustrate gets its own cover behind the numeral that is the episode's whole identity, so
+    /// a column of tiles reads 11, 12, 13 instead of one poster eighteen times — which is what
+    /// kept every anime season a wall of bare text rows. A real still is never labelled; the
+    /// row's text is 8 pt away.
+    var number: Int? = nil
 
     @State private var stillTint: Color?
 
     private var hasStill: Bool { !(url ?? "").isEmpty }
+    private var hasLandscape: Bool { !(landscape ?? "").isEmpty }
     private var hasPoster: Bool { !(poster ?? "").isEmpty }
 
     var body: some View {
@@ -155,6 +166,13 @@ struct EpisodeStill: View {
             if hasStill {
                 RemoteImageView(url: url, contentMode: .fill, maxPixel: (width ?? 400) * 3,
                                 placeholderHidden: true)
+            } else if hasLandscape {
+                // A banner fills the tile the way a still does; the numeral still says which
+                // episode, because one banner eighteen times is not eighteen episodes.
+                RemoteImageView(url: landscape, contentMode: .fill, maxPixel: (width ?? 400) * 3,
+                                alignment: .center, placeholderHidden: true)
+                LinearGradient(colors: [.black.opacity(0.20), .black.opacity(0.46)],
+                               startPoint: .top, endPoint: .bottom)
             } else if hasPoster {
                 // A backdrop crop of the poster: `.top`, because a 2:3 cover carries the face in
                 // its upper half and the logotype band in its lower one.
@@ -168,6 +186,14 @@ struct EpisodeStill: View {
                 LinearGradient(colors: [.black.opacity(0.10), .black.opacity(0.34)],
                                startPoint: .top, endPoint: .bottom)
             }
+            if let number, !hasStill {
+                Text("\(number)")
+                    .font(.system(size: 17, weight: .bold).monospacedDigit())
+                    .foregroundStyle(ThemeColor.textPrimary)
+                    .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .padding(7)
+            }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         .frame(width: width)
@@ -175,79 +201,18 @@ struct EpisodeStill: View {
         .clipShape(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
             .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-        .task(id: url ?? poster) {
-            stillTint = DetailTint.quiet(await PaletteCache.shared.resolve(url: url ?? poster, maxPixel: 288))
+        .task(id: url ?? landscape ?? poster) {
+            stillTint = DetailTint.quiet(await PaletteCache.shared.resolve(url: url ?? landscape ?? poster, maxPixel: 288))
         }
         .accessibilityHidden(true)
     }
 }
 
 // MARK: - The floating toolbar's own edge
-
-/// The veil that covers the FLOATING TOOLBAR band, over and above the status-bar veil every root
-/// screen gets from `scrollEdgeChrome`.
-///
-/// `ScrollEdgeChrome` holds full canvas across the status bar and then ramps out — right for a
-/// screen whose only top chrome is the clock. This screen's chrome is a glass toolbar sitting
-/// 20–42 pt *below* the status bar, and the ramp runs straight through it: a season row rendered
-/// at ~50 % in the gap between the back button and the status pill, its amber line level with the
-/// `···`. Raising `topHeight` cannot fix that — the primitive's full-canvas hold is pinned to the
-/// safe-area inset and a taller veil only lengthens the ramp.
-///
-/// It cannot simply be on all the time either: a veil that holds opaque canvas for 108 pt blanks
-/// the top third of the hero photograph, which is the thing the screen exists for. So it behaves
-/// the way a native navigation bar behaves — absent while there is artwork behind the bar, faded
-/// in the moment there is *content* there. Same construction as the primitive (canvas veil plus an
-/// identically-masked `.ultraThinMaterial`, material dropped under Reduce Transparency), with one
-/// number changed: where the hold ends.
-///
-/// `ScrollEdgeChrome` wants a `holdHeight:` of its own; filed as a shared-file request, and this
-/// collapses into one call when it lands.
-struct FloatingToolbarVeil: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    /// Status bar plus the floating toolbar's 44-pt band and the 4 pt it clears it by.
-    private static var hold: CGFloat { ThemeMetrics.topSafeInset + 46 }
-    /// The ramp. 40 pt left a poster fragment surviving at ~50 % alpha directly under the back
-    /// button on the seasons list — a sliced piece of artwork reading as a rendering error. 58 pt
-    /// puts the whole art sliver inside the dissolve, and matches the episode list one push deeper,
-    /// which gets the same treatment from its real navigation bar.
-    private static let ramp: CGFloat = 58
-    private static var height: CGFloat { hold + ramp }
-    private var holdFraction: CGFloat { Self.hold / Self.height }
-
-    private var veil: LinearGradient {
-        LinearGradient(stops: [
-            .init(color: ThemeColor.chromeVeil, location: 0),
-            .init(color: ThemeColor.chromeVeil, location: holdFraction),
-            .init(color: ThemeColor.chromeVeil.opacity(0.34), location: holdFraction + (1 - holdFraction) * 0.45),
-            .init(color: ThemeColor.chromeVeil.opacity(0), location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-    }
-
-    private var blurMask: LinearGradient {
-        LinearGradient(stops: [
-            .init(color: .black, location: 0),
-            .init(color: .black, location: holdFraction * 0.92),
-            .init(color: .black.opacity(0.42), location: holdFraction + (1 - holdFraction) * 0.45),
-            .init(color: .clear, location: 1),
-        ], startPoint: .top, endPoint: .bottom)
-    }
-
-    var body: some View {
-        ZStack {
-            if !reduceTransparency {
-                Rectangle().fill(.ultraThinMaterial).mask(blurMask)
-            }
-            veil
-        }
-        .frame(height: Self.height)
-        .frame(maxWidth: .infinity)
-        .ignoresSafeArea(edges: .top)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
+//
+// `FloatingToolbarVeil` folded into the shared primitive (cohesion pass, 30 Aug):
+// `ScrollEdgeChrome(side: .top, holdHeight:)` is the parameter it existed to change,
+// and Detail now calls it directly.
 
 // MARK: - Art-derived colour, made fit to be a ground
 
@@ -295,10 +260,51 @@ enum DetailTint {
                      opacity: 1)
     }
 
+    /// The hardened bar's ink for a show page: the art colour kept as a HUE, dark enough to be a
+    /// bar (OKLab lightness 0.26–0.32 — canvas is ~0.10, `quiet` sits at 0.40–0.46 for a tile), a
+    /// little more chroma than a tile so the colour survives the material. Painted at
+    /// `chromeBarOpacity` over the blur it is the show's own glass; the flat canvas veil read as a
+    /// black slab over the picture ("too blackish anyway, should be glassish", user, 4 Sep).
+    static func chrome(_ color: Color?) -> Color? {
+        guard let color, let (r, g, b) = components(color) else { return color }
+        var (l, ca, cb) = PaletteCache.oklab(r: r, g: g, b: b)
+        let chroma = (ca * ca + cb * cb).squareRoot()
+        let maxChroma = 0.085
+        if chroma > maxChroma, chroma > 0 {
+            ca *= maxChroma / chroma
+            cb *= maxChroma / chroma
+        }
+        l = min(max(l, 0.26), 0.32)
+        let (qr, qg, qb) = PaletteCache.srgb(l: l, a: ca, b: cb)
+        return Color(.sRGB, red: qr, green: qg, blue: qb, opacity: 1)
+    }
+
     /// The opacity at which `quiet` sits over the card ground to read as that ground lifted ~6 %
     /// in luminance — the no-still tile's fill. Composited rather than computed, so the tile
     /// tracks the ground's own gradient and radial highlight instead of guessing one value for it.
     static let tileOverGround: Double = 0.35
+
+    /// The show page's GROUND (6 Sep): the art colour as a HUE at canvas depth, so the whole page
+    /// sits in the show's atmosphere instead of stepping from the billboard onto #09090B. OKLab
+    /// lightness pinned to `lightness` — `groundTopLightness` under the hero, about `surfaceFlat`'s
+    /// depth; `groundFootLightness` at the foot, a breath above canvas (≈ 0.14) so the bottom
+    /// chrome's canvas veil lands on it without a step — and chroma ≤ 0.06: a deep navy for a blue
+    /// show, a deep umber for a warm one, never a coloured slab. Nil (art still loading) is canvas.
+    static let groundTopLightness = 0.19
+    static let groundFootLightness = 0.155
+
+    static func ground(_ color: Color?, lightness: Double) -> Color {
+        guard let color, let (r, g, b) = components(color) else { return ThemeColor.canvas }
+        var (_, ca, cb) = PaletteCache.oklab(r: r, g: g, b: b)
+        let chroma = (ca * ca + cb * cb).squareRoot()
+        let maxChroma = 0.06
+        if chroma > maxChroma, chroma > 0 {
+            ca *= maxChroma / chroma
+            cb *= maxChroma / chroma
+        }
+        let (qr, qg, qb) = PaletteCache.srgb(l: lightness, a: ca, b: cb)
+        return Color(.sRGB, red: qr, green: qg, blue: qb, opacity: 1)
+    }
 
     private static func components(_ color: Color) -> (Double, Double, Double)? {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -343,5 +349,579 @@ struct WithheldStillTile: View {
             .overlay(RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
                 .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
             .accessibilityHidden(true)
+    }
+}
+
+
+// MARK: - The episode rows
+
+/// One season's episodes, as rows — on the show page and, for the run an extra opens, on the
+/// season screen. One row anatomy, one mark control, one spoiler model, defined once.
+///
+/// **The list OPENS WHERE YOU ARE** (6 Sep, chosen from three photographed directions after
+/// "what about the most recent episode? … otherwise it's a bigger scroll", user): a season of
+/// more than `wholeBelow` rows opens on the next episode with `windowBefore` watched rows above
+/// it for context and `windowAfter` ahead, and everything earlier is one in-place tap up
+/// ("Show earlier episodes", `growBy` a tap — Mail's "Load Earlier Messages"). Measured before
+/// the change: Slime S4 (21 of 24 watched) put the next episode 1,842 pt down the list, 2.2
+/// screens of watched rows and 3.1 from the top of the page. Plex users file the same thing as a
+/// bug when a long season fails to advance to the on-deck episode (plex-media-player #914).
+/// Two directions were built, photographed and rejected: a whole season from Episode 1 with an
+/// in-page "Jump to episode 22" link (NN/g's in-page link — the reader keeps control, but the
+/// season's first twenty rows are still the first thing on the screen), and newest-first (Apple
+/// Podcasts' EPISODIC order — but Apple itself puts the first episode at the top for SERIAL
+/// shows, and a TV season is serial, so the numbers counted down as you read).
+///
+/// Rebuilt on 6 Sep ("built extremely poorly… causes a lot of confusion rather than solving the
+/// problem", user). The show page drew six rows from the next episode with an "All 24 episodes ›"
+/// door to a second screen: a list that began at Episode 19 with the season's first eighteen on
+/// another page was the tangent, not the season. The rules now:
+///  • **The row opens, the ring marks.** Tapping a row never writes progress — Apple TV's tile
+///    plays and its description opens the episode, Podcasts keeps "Mark as Played" off the row,
+///    Reminders completes on the circle alone — so a viewer curious about an episode cannot mark
+///    it by accident. A row with something to show (an overview, a withheld title) expands in
+///    place; a bare row is inert.
+///  • **The control is the receipt.** A mark fills its own ring — accent, the check drawn, one
+///    pulse — and settles into the show's colour while the accent ring moves to the next row
+///    (HIG: status feedback belongs beside the item it describes; confirmations are for the
+///    significant). No "✓ Episode 7 watched · Undo" line: the ring says it, and its undo is the
+///    ring itself — the last watched episode toggles back with one tap. Batch marks and batch
+///    unmarks confirm with their exact count and take their Undo to the lane.
+///  • **No numeral in the ring.** The row states the episode 14 pt away.
+struct EpisodeList: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let franchise: Franchise
+    let part: FranchisePart
+    /// The whole-list spoiler switch (the season screen's overflow owns it).
+    var revealAll: Bool = false
+    /// The show's colour, already quieted (`DetailTint.quiet`), under the still tiles and on the
+    /// watched discs.
+    var tint: Color? = nil
+    /// The episode a route asked for (a Schedule card): the window opens on it.
+    var focusEpisode: Int? = nil
+
+    /// A season this short is ALWAYS drawn whole: six to twelve rows is a screen and a half, and
+    /// folding three of Thrones' six episodes to save half a screen is a fold for its own sake.
+    /// Above it the list opens on a window around the next episode — `windowBefore` rows of
+    /// history for context, `windowAfter` ahead — and grows in place by `growBy` a tap, Mail's
+    /// "Load Earlier Messages": the list gets longer where it is, nothing is pushed.
+    static let wholeBelow = 12
+    static let windowBefore = 3
+    static let windowAfter = 8
+    static let growBy = 12
+
+    @State private var revealed: Set<Int> = []
+    @State private var expanded: Set<Int> = []
+    @State private var prompt: FranchiseDetailView.WritePrompt?
+    /// The row whose ring is in its commit beat (accent, the check drawing) before it settles.
+    @State private var committing: Int?
+    @State private var committingTask: Task<Void, Never>?
+    /// A batch mark plays its discs in order: rows above this number are drawn unmarked until the
+    /// cascade reaches them (the model has already moved).
+    @State private var cascadeThrough: Int?
+    @State private var cascadeTask: Task<Void, Never>?
+    /// The rows a long run shows; nil until the first expander is tapped.
+    @State private var shown: ClosedRange<Int>?
+
+    private var now: Int64 { appModel.now }
+
+    /// How many rows a season has: what the catalogue lists, what has aired, or what the user has
+    /// marked — whichever is largest.
+    static func count(_ part: FranchisePart, now: Int64) -> Int {
+        max(part.renderableEpisodeCount(now: now), part.progress, part.episodes.map(\.number).max() ?? 0)
+    }
+
+    private var total: Int { max(1, Self.count(part, now: now)) }
+
+    /// The episode the list is ABOUT: the one a route asked for, else the next to watch, else —
+    /// on a season with nothing left — its beginning (a finished season is a browse, not a queue).
+    private var anchorEpisode: Int {
+        if let focusEpisode { return focusEpisode }
+        return part.progress < total ? part.progress + 1 : 1
+    }
+
+    /// The row that wears NEW: the newest AIRED episode, while it is still unwatched, on a season
+    /// that is actually running and whose latest drop is recent. All three conditions are load-
+    /// bearing — without the last two, The Witcher's finished 2023 season tagged its Episode 8
+    /// "NEW" (captured 6 Sep), which is a label for news, not for the end of a list.
+    private var freshEpisode: Int? {
+        guard part.isReleasing else { return nil }
+        let aired = min(max(part.provenAiredCount(now: now), part.airedEpisodes), total)
+        guard aired > part.progress, aired >= 1 else { return nil }
+        guard let at = part.lastAired(now: now, anchor: franchise.timeAnchor),
+              now - at <= Self.freshWindow else { return nil }
+        return aired
+    }
+
+    /// How long a drop stays news: a fortnight, so a weekly show's newest episode carries the tag
+    /// until the one after it lands, and a show that stopped mid-cour does not wear NEW for months.
+    static let freshWindow: Int64 = 14 * 24 * 60 * 60 * 1000
+
+    /// The rows to draw: the whole season when it is short, else the window around the anchor —
+    /// grown by whatever the reader has opened.
+    private var range: ClosedRange<Int> {
+        let total = total
+        if let shown { return Self.clamp(shown, total: total) }
+        if total <= Self.wholeBelow { return 1...total }
+        return Self.initialWindow(anchor: anchorEpisode, total: total)
+    }
+
+    static func initialWindow(anchor: Int, total: Int) -> ClosedRange<Int> {
+        let a = min(max(1, anchor), total)
+        return clamp((a - windowBefore)...(a + windowAfter), total: total)
+    }
+
+    static func clamp(_ r: ClosedRange<Int>, total: Int) -> ClosedRange<Int> {
+        let lower = min(max(1, r.lowerBound), total)
+        return lower...min(total, max(lower, r.upperBound))
+    }
+
+    var body: some View {
+        let range = range
+        // A plain stack: the window keeps a long run to a dozen rows, and an eager stack is what
+        // lets `scrollTo("ep-n")` land on a row that has not been on screen yet (a Schedule card).
+        VStack(spacing: 0) {
+            if range.lowerBound > 1 {
+                expander(Copy.Action.showEarlierEpisodes, glyph: "chevron.up") { grow(earlier: true) }
+            }
+            ForEach(range, id: \.self) { n in
+                row(franchise, part: part, n: n, isLast: n == range.upperBound)
+                    .id("ep-\(n)")
+            }
+            if range.upperBound < total {
+                expander(Copy.Action.showMoreEpisodes, glyph: "chevron.down") { grow(earlier: false) }
+            }
+        }
+        .confirmationDialog(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
+                            titleVisibility: .visible, presenting: prompt) { p in
+            Button(p.confirm, role: p.destructive ? .destructive : nil) { p.perform() }
+            Button(Copy.Confirm.cancel, role: .cancel) {}
+        } message: { p in
+            Text(p.message)
+        }
+        .onDisappear {
+            committingTask?.cancel()
+            cascadeTask?.cancel()
+        }
+    }
+
+    /// The newest aired episode's tag: amber, the app's one colour for state, at the eyebrow's
+    /// size. A tag rather than a coloured title — the row's ink means watched / not watched.
+    private var newTag: some View {
+        Text(Copy.Label.newTag)
+            .type(ThemeType.sectionLabel)
+            .fixedSize()
+            .foregroundStyle(ThemeColor.onAccent)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(ThemeColor.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+    }
+
+    /// A long run's in-place door: a quiet centred link in `interactive` ink, like "Read more".
+    private func expander(_ title: String, glyph: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(title)
+                Image(systemName: glyph).font(.system(size: 11, weight: .semibold))
+            }
+        }
+        .buttonStyle(InlineLinkButtonStyle())
+        .frame(maxWidth: .infinity)
+    }
+
+    private func grow(earlier: Bool) {
+        let current = range
+        let next = earlier ? (current.lowerBound - Self.growBy)...current.upperBound
+                           : current.lowerBound...(current.upperBound + Self.growBy)
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
+            shown = Self.clamp(next, total: total)
+        }
+    }
+
+    // MARK: Row
+
+    private func row(_ f: Franchise, part: FranchisePart, n: Int, isLast: Bool) -> some View {
+        let episode = part.episodes.first { $0.number == n }
+        let progress = part.progress
+        let watched = n <= progress
+        // A batch plays its discs one after another; a row the cascade has not reached is still
+        // drawn unmarked (the model has already moved).
+        let drawnWatched = watched && (cascadeThrough.map { n <= $0 } ?? true)
+        let aired = !part.isReleasing || n <= part.provenAiredCount(now: now) || n <= part.airedEpisodes
+        let isNext = n == progress + 1 && aired
+        let spoilerSafe = watched || isNext || revealAll || revealed.contains(n)
+        let interactive = appModel.isInLibrary(f.id) && aired
+        let cleanTitle = EpisodeCopy.title(episode?.title, franchise: f.title)
+        let canReveal = !spoilerSafe && (cleanTitle != nil || episode?.still != nil)
+        let overview = Formatting.stripHtml(episode?.overview)
+        // A row OPENS when it has something to show: an overview to read, or a withheld title to
+        // reveal. A bare "Episode 12" row is inert — a tap that does nothing is honest; a tap
+        // that marks is a trap.
+        let opens = !overview.isEmpty || canReveal
+        let isOpen = expanded.contains(n) && spoilerSafe && !overview.isEmpty
+        let content = HStack(alignment: .center, spacing: ThemeMetrics.artGap) {
+            tile(f, part: part, n: n, episode: episode, spoilerSafe: spoilerSafe, aired: aired)
+            VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
+                HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let t = cleanTitle, spoilerSafe {
+                            // Apple TV's row: the number is an EYEBROW over the title, never
+                            // "Episode 10 · Mhysa" on one line (user, 4 Sep). The newest aired
+                            // episode you have not watched wears NEW on that eyebrow — amber for
+                            // STATE, the one thing on the row that is news.
+                            HStack(spacing: ThemeSpace.x1) {
+                                Text(Copy.episode(n))
+                                    .type(ThemeType.sectionLabel)
+                                    .textCase(.uppercase)
+                                    .foregroundStyle(ThemeColor.textTertiary)
+                                if n == freshEpisode { newTag }
+                            }
+                            Text(t)
+                                .type(ThemeType.rowTitle)
+                                .foregroundStyle(drawnWatched ? ThemeColor.textSecondary : ThemeColor.textPrimary)
+                                .lineLimit(isOpen ? nil : 2)
+                                // An identity title never ellipsises.
+                                .minimumScaleFactor(0.92)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else {
+                            HStack(spacing: ThemeSpace.x2) {
+                                Text(Copy.episode(n))
+                                    .type(ThemeType.rowTitle)
+                                    .foregroundStyle(drawnWatched ? ThemeColor.textSecondary : ThemeColor.textPrimary)
+                                    .lineLimit(1)
+                                    // The title keeps its characters; the tag and the reveal glyph
+                                    // give way ("Episo… NEW", captured 6 Sep).
+                                    .layoutPriority(1)
+                                if n == freshEpisode { newTag }
+                            }
+                        }
+                    }
+                    // The spoiler control belongs to the TITLE it is hiding, not to the trailing
+                    // control column — a row has one control column, not a toolbar.
+                    if canReveal { revealGlyph(n) }
+                }
+                if let sub = rowSubtitle(f, part: part, episode: episode, n: n, aired: aired, isNext: isNext, watched: drawnWatched) {
+                    Text(sub.text)
+                        .type(sub.accent ? ThemeType.rowMetaLead : ThemeType.rowMeta)
+                        .foregroundStyle(sub.accent ? ThemeColor.accent : ThemeColor.textSecondary)
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        // The title dims and "Next up" moves on with the mark, on the settle spring.
+        .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: drawnWatched)
+        .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: isNext)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: ThemeSpace.x2) {
+                if opens {
+                    Button { open(n, reveal: canReveal, hasOverview: !overview.isEmpty) } label: { content }
+                        .buttonStyle(RowPressStyle())
+                        .accessibilityHint(isOpen ? Copy.Accessibility.hidesEpisodeDetails : Copy.Accessibility.showsEpisodeDetails)
+                } else {
+                    content
+                }
+                if aired {
+                    mark(f, part: part, n: n, watched: watched, drawnWatched: drawnWatched, isNext: isNext, interactive: interactive)
+                }
+            }
+            .padding(.vertical, 6)
+            // One pitch down the column: the tile's own height.
+            .frame(minHeight: ThemeMetrics.rowEpisode, alignment: .center)
+            if isOpen {
+                details(episode, overview: overview, watched: watched)
+                    .transition(.opacity.combined(with: .offset(y: -6)))
+            }
+        }
+        // Unaired rows recede as a GROUP, one opacity (0.72 ≈ 5.4:1 and still steps back).
+        .opacity(aired ? 1 : 0.72)
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
+                    .padding(.leading, EpisodeArtwork.slot.width + ThemeMetrics.artGap)
+            }
+        }
+    }
+
+    /// EVERY row carries a tile: the episode's still, a withheld still, or the season's own cover
+    /// under the episode's number. The list used to drop the art column for any season under a
+    /// third illustrated — most anime — and became a column of bare "Episode 12 / Aired 3 Jul"
+    /// text (user, 2 Sep: "not there yet"). The numbered cover is the episode's face where the
+    /// catalogue gave it none.
+    @ViewBuilder
+    private func tile(_ f: Franchise, part: FranchisePart, n: Int, episode: Episode?, spoilerSafe: Bool, aired: Bool) -> some View {
+        if spoilerSafe {
+            EpisodeStill(url: episode?.still, landscape: part.stillLandscape(within: f),
+                         poster: part.portraitArt ?? f.portraitArt, tint: tint, number: n)
+        } else if aired, episode?.still?.isEmpty == false {
+            // Withheld, and it says so: `eye.slash`, the glyph on the control that reverses it.
+            WithheldStillTile(tint: tint)
+        } else {
+            EpisodeStill(url: nil, landscape: part.stillLandscape(within: f),
+                         poster: part.portraitArt ?? f.portraitArt, tint: tint, number: n)
+        }
+    }
+
+    /// The ONE mark control, in its list form (`MarkRing.Style.settled`): history as discs in the
+    /// show's colour, the next episode the one accent ring, no numeral.
+    private func mark(_ f: Franchise, part: FranchisePart, n: Int, watched: Bool, drawnWatched: Bool,
+                      isNext: Bool, interactive: Bool) -> some View {
+        let last = n == part.progress
+        let hint: String = {
+            guard interactive else { return "" }
+            if watched { return last ? "Marks as unwatched" : "Marks this and the episodes after it as unwatched" }
+            return isNext ? "Marks as watched" : "Marks the episodes up to this one as watched"
+        }()
+        return MarkRing(marked: drawnWatched, style: .settled, lead: isNext, fill: tint,
+                        committing: committing == n,
+                        label: Copy.Action.markEpisodeWatched(n),
+                        markedLabel: Copy.Progress.episodeWatched(n)) {
+            if interactive { tapped(f, part: part, n: n, watched: watched) }
+        }
+        .disabled(!interactive)
+        .accessibilityValue(watched ? "Watched" : "Not watched")
+        .accessibilityHint(hint)
+    }
+
+    /// What a row opens to: the overview, with the runtime and — on a watched row, whose second
+    /// line is empty by rule — the air date. Set under the title column, clear of the ring.
+    private func details(_ episode: Episode?, overview: String, watched: Bool) -> some View {
+        var facts: [String] = []
+        if let r = episode?.runtime, r > 0 { facts.append(Copy.minutes(r)) }
+        if watched, let d = episode?.airDateLabel { facts.append(d) }
+        return VStack(alignment: .leading, spacing: ThemeSpace.x1) {
+            if !facts.isEmpty {
+                Text(facts.joined(separator: " \u{00B7} "))
+                    .type(ThemeType.metadata)
+                    .foregroundStyle(ThemeColor.textTertiary)
+            }
+            Text(overview)
+                .type(ThemeType.prose)
+                .lineSpacing(4)
+                .foregroundStyle(ThemeColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.leading, EpisodeArtwork.slot.width + ThemeMetrics.artGap)
+        .padding(.trailing, 44 + ThemeSpace.x2)
+        .padding(.bottom, ThemeSpace.x3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func open(_ n: Int, reveal: Bool, hasOverview: Bool) {
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
+            if reveal { revealed.insert(n) }
+            guard hasOverview else { return }
+            if expanded.contains(n) { expanded.remove(n) } else { expanded = [n] }
+        }
+    }
+
+    private func revealGlyph(_ n: Int) -> some View {
+        Button {
+            _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { revealed.insert(n) }
+        } label: {
+            Image(systemName: "eye")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(ThemeColor.textTertiary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(MarkPressStyle())
+        // The 44-pt target is held by the frame; the row is pulled back optically so a hidden
+        // title does not sit 30 pt taller than the row beneath it.
+        .padding(.vertical, -14)
+        .accessibilityLabel(DetailCopy.revealEpisodeTitle)
+    }
+
+    private func rowSubtitle(_ f: Franchise, part: FranchisePart, episode: Episode?, n: Int, aired: Bool,
+                             isNext: Bool, watched: Bool) -> (text: String, accent: Bool)? {
+        // One rule per row. A WATCHED row says nothing: the disc says it, and its air date is a
+        // fact about the past (it returns in the row's details). The show page's window used to
+        // mix four grammars in six rows (4 Sep).
+        if watched { return nil }
+        if isNext { return (Copy.Label.nextUp, true) }
+        if !aired {
+            if n == part.airedEpisodes + 1, let at = part.scheduledAiring(now: now, anchor: f.source.timeAnchor) {
+                return (TemporalCopy.airs(at: at, now: now, source: f.source), false)
+            }
+            // Nothing: "Upcoming" says only what the row's position below the dated ones says.
+            return nil
+        }
+        if let d = episode?.airDate { return (TemporalCopy.aired(at: d, now: now, source: .tmdb), false) }
+        // DERIVED, because the app demonstrably knows: the part's own air window plus the weekly
+        // cadence. Where neither anchor exists the row prints nothing — an invented date is worse
+        // than a blank.
+        if let at = derivedAirDate(part, n: n) {
+            return (TemporalCopy.aired(at: at, now: now, source: f.source), false)
+        }
+        return nil
+    }
+
+    /// One week per episode, anchored on whichever real instant the part carries. Conservative:
+    /// never runs forward past an anchor, never fires without one.
+    private func derivedAirDate(_ part: FranchisePart, n: Int) -> Int64? {
+        let week: Int64 = 7 * 24 * 60 * 60 * 1000
+        if let next = part.nextAiringAt, let nextNumber = part.nextEpisodeNumber, nextNumber > n {
+            return next - Int64(nextNumber - n) * week
+        }
+        if let last = part.lastAiredAt, part.airedEpisodes >= n {
+            return last - Int64(part.airedEpisodes - n) * week
+        }
+        return nil
+    }
+
+    // MARK: Marks
+
+    private func tapped(_ f: Franchise, part: FranchisePart, n: Int, watched: Bool) {
+        if watched {
+            if n == part.progress {
+                // The ring's own undo: the last watched episode toggles back — the disc opens
+                // into the accent ring again. No confirmation, no receipt.
+                endCommit()
+                appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: n - 1)
+            } else {
+                promptUnmark(f, part: part, to: n - 1)
+            }
+        } else if n == part.progress + 1 {
+            let completes = n >= part.markTarget(now: now) && !part.isReleasing && part.totalEpisodes > 0
+            guard let undo = appModel.markNext(franchiseId: f.id, mediaId: part.mediaId,
+                                               haptic: completes ? .success : .commitLight) else { return }
+            beginCommit(n)
+            // The one receipt a single mark still earns: the series finishing ("Series finished ·
+            // Moved to Watched") — a milestone, said once, in the lane.
+            if undo.customMessage != nil { appModel.presentUndo(undo) }
+        } else {
+            promptMark(f, part: part, through: n)
+        }
+    }
+
+    /// The commit beat: THIS ring is accent with its check drawing for ~0.55 s (0.25 s under
+    /// Reduce Motion), then settles into the show's colour on the settle spring.
+    private func beginCommit(_ n: Int) {
+        committingTask?.cancel()
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { committing = n }
+        committingTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 250 : 550))
+            guard !Task.isCancelled else { return }
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) { committing = nil }
+        }
+    }
+
+    private func endCommit() {
+        committingTask?.cancel()
+        committing = nil
+    }
+
+    /// A batch plays its discs in order — a row every ~40 ms, the whole run inside 0.6 s, the
+    /// accent beat travelling down the column — so twelve checks read as twelve marks made, not a
+    /// list re-rendered.
+    private func cascade(from: Int, through: Int) {
+        cascadeTask?.cancel()
+        committingTask?.cancel()
+        guard through >= from, !reduceMotion else { cascadeThrough = nil; committing = nil; return }
+        let count = through - from + 1
+        let step = max(1, Int((Double(count) / 14).rounded(.up)))
+        cascadeThrough = from - 1
+        cascadeTask = Task { @MainActor in
+            var n = from - 1
+            while n < through {
+                try? await Task.sleep(for: .milliseconds(42))
+                guard !Task.isCancelled else { return }
+                n = min(through, n + step)
+                withAnimation(ThemeMotion.uiMicro) {
+                    cascadeThrough = n
+                    committing = n
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            withAnimation(ThemeMotion.uiSettle) {
+                cascadeThrough = nil
+                committing = nil
+            }
+        }
+    }
+
+    private func promptMark(_ f: Franchise, part: FranchisePart, through: Int) {
+        let count = through - part.progress
+        guard count > 0 else { return }
+        prompt = .init(title: Copy.Confirm.batchMarkTitle(count), message: Copy.Confirm.batchMarkMessage(from: part.progress, to: through),
+                       confirm: Copy.Confirm.batchMarkConfirm(count)) {
+            let prev = part.progress
+            appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: through)
+            cascade(from: prev + 1, through: through)
+            // A batch's Undo rides the lane: the rows are busy being the receipt.
+            appModel.presentUndo(UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev, title: f.title, episode: through, count: count))
+        }
+    }
+
+    private func promptUnmark(_ f: Franchise, part: FranchisePart, to: Int) {
+        let count = part.progress - to
+        guard count > 0 else { return }
+        let message = to == 0 ? Copy.Confirm.resetSeason(label: part.canonicalLabel, total: count)
+                              : Copy.Confirm.batchMarkMessage(from: part.progress, to: to)
+        prompt = .init(title: to == 0 ? Copy.Confirm.resetSeasonTitle(count) : "Mark \(Copy.episodes(count)) as unwatched?",
+                       message: message, confirm: to == 0 ? Copy.Confirm.resetSeasonConfirm(count) : "Mark \(Copy.episodes(count)) as unwatched",
+                       destructive: true) {
+            let prev = part.progress
+            endCommit()
+            appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: to)
+            appModel.presentUndo(UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev, title: f.title, episode: to, count: count,
+                                           customMessage: to == 0 ? "\(part.canonicalLabel) marked as unwatched" : "\(Copy.episodes(count)) marked as unwatched"))
+        }
+    }
+}
+
+// MARK: - The season pill · the folded watched row
+
+/// The season as a capsule menu — "Season 4 ⌄" — the ONE control that chooses a season, on the
+/// show page's Episodes header and on the season screen. The same capsule family as the bar's
+/// status menu, drawn on the canvas: `surfaceFloating` ground, a crisp stroke, `metadataEmphasis`.
+/// It lists SEASONS (`Franchise.seasonPartsInOrder`), never the catalogue. The season's name used
+/// to BE the section title, set in the section face with a small stacked chevron, and did not
+/// read as a control (4 Sep); every streaming app draws the selector as a pill beside "Episodes".
+struct SeasonPill: View {
+    let current: FranchisePart
+    let seasons: [FranchisePart]
+    let onPick: (Int) -> Void
+
+    /// The source's own label, else the part's title. Never derived from `sequence`.
+    static func name(_ part: FranchisePart) -> String {
+        part.canonicalLabel.isEmpty ? part.title : part.canonicalLabel
+    }
+
+    var body: some View {
+        Menu {
+            ForEach(seasons) { season in
+                Button { onPick(season.mediaId) } label: {
+                    if season.mediaId == current.mediaId {
+                        Label(Self.name(season), systemImage: "checkmark")
+                    } else {
+                        Text(Self.name(season))
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(Self.name(current))
+                    .type(ThemeType.metadataEmphasis)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(ThemeColor.textPrimary)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 34)
+            .background(ThemeColor.surfaceFloating, in: Capsule())
+            // `strokeBorder`: a centred stroke straddles the edge and smears (see
+            // `SecondaryButtonStyle2`).
+            .overlay(Capsule().strokeBorder(ThemeColor.stroke, lineWidth: 1))
+            .contentShape(Capsule())
+            .frame(minHeight: 44)
+        }
+        .accessibilityLabel("Season, \(Self.name(current))")
+        .accessibilityHint("Chooses another season")
     }
 }

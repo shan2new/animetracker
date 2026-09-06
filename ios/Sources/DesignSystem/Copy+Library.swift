@@ -6,37 +6,27 @@ import Foundation
 extension Copy {
     enum Library {
         static let title = "Library"
-        static let overview = "Overview"
-        static let continueWatching = "Continue watching"
-        static let continueWatchingEyebrow = "CONTINUE WATCHING"
-
-        /// The root's four-section tab strip. Counts are part of the label, as in the selected
-        /// reference, so the user can judge each list before switching into it.
-        static func statusTab(_ status: WatchStatus, count: Int) -> String {
-            "\(Copy.Status(status)) \(count)"
-        }
-        static let overviewTabHint = "Shows your library overview"
-        static func statusTabHint(_ status: WatchStatus) -> String {
-            "Shows titles in \(Copy.Status(status))"
-        }
-
-        static let noWatchingTab = EmptyStateCopy(
-            symbol: "bookmark",
-            title: "No titles in Watching",
-            supporting: "Move a title to Watching and it will appear here.")
-        static let noPlannedTab = EmptyStateCopy(
-            symbol: "calendar",
-            title: "Nothing planned yet",
-            supporting: "Titles you plan to watch will appear here.")
-        static let noWatchedTab = EmptyStateCopy(
-            symbol: "checkmark",
-            title: "No watched titles yet",
-            supporting: "Finished titles will appear here.")
+        // The same shelf Today heads "Next up" (review i4): one object, one name across rooms.
+        static let continueWatching = "Next up"
+        // The root's tab-strip strings went with the tabs (30 Aug): every bucket is a shelf, and
+        // an empty bucket simply has no shelf — no per-status empty state to name.
 
         /// The anticipation shelf. Board 05's word, and the word its captions use ("Returns Oct 2026").
         static let returning = "Returning"
         /// A sequel exists and nobody has said when. The absence of a date is the content.
         static let announced = "Announced"
+        /// An unconfirmed report, said as one: "Season 3 rumored". Never a date, never amber.
+        static func rumored(next: String?) -> String {
+            guard let next, !next.isEmpty else { return "Rumoured" }
+            // The curated `next` sometimes already says it — "New anime film (rumored)" — and
+            // two adjacent pages stated one class of fact in two grammars (Attack on Titan,
+            // Thrones, 5 Sep). One: strip the parenthetical, then say it once, our way.
+            let bare = next.replacingOccurrences(of: #"\s*\((?:rumou?red)\)\s*"#, with: " ",
+                                                 options: [.regularExpression, .caseInsensitive])
+                .trimmingCharacters(in: .whitespaces)
+            if bare.range(of: "rumou?red", options: [.regularExpression, .caseInsensitive]) != nil { return bare }
+            return "\(bare) rumoured"
+        }
         static let allTitlesHint = "Opens your whole library, with search, sorting and filters"
         static func allTitlesCount(_ count: Int) -> String { "All \(count)" }
         static func allTitlesAccessibility(_ count: Int) -> String {
@@ -44,17 +34,13 @@ extension Copy {
         }
         static let searchPrompt = "Search your library"
 
-        static let viewAll = "View all"
-        static func viewAllSection(_ section: String) -> String { "View all \(section.lowercased())" }
+        // "View all" is gone (30 Aug): section actions say "See all" everywhere
+        // (`Copy.Action.seeAll`) — one verb for one gesture, Today's and Library's alike.
         static let focusTitleHint = "Shows this title in the centre"
 
         static func partProgress(_ label: String, watched: Int, total: Int) -> String {
             let progress = Copy.Progress.watchedOf(watched, total)
             return label.isEmpty ? progress : "\(label) \u{00B7} \(progress)"
-        }
-
-        static func progressCompact(_ watched: Int, _ total: Int) -> String {
-            "\(watched) of \(total)"
         }
 
         // MARK: Sort & filter

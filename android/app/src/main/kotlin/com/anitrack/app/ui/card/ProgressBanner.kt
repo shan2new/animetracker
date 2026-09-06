@@ -26,6 +26,7 @@ import com.anitrack.app.design.ThemeSpace
 import com.anitrack.app.design.shadowToken
 import com.anitrack.app.ui.art.LandscapeArt
 import com.anitrack.app.ui.control.ProgressBar
+import com.anitrack.app.ui.section.OverArtLabel
 
 
 /** The bar's inset from the art's edges, on three sides. */
@@ -39,6 +40,10 @@ private val progressBannerScrimHeight = 56.dp
 
 /** Wide art at the width a Continue card and a season header actually render. */
 private const val PROGRESS_BANNER_MAX_PIXEL = 900
+
+/** The bar's height, which the episode pill clears when both are drawn. */
+private val progressBarThickness = 3.dp
+
 
 /** The edge of artwork: `posterEdge` (white 9 %), never `stroke`. */
 private val progressBannerEdgeWidth = ThemeMetrics.hairline
@@ -67,6 +72,16 @@ fun ProgressBanner(
     portraitSource: Boolean = false,
     progress: Float? = null,
     maxPixel: Int = PROGRESS_BANNER_MAX_PIXEL,
+    /**
+     * The EPISODE on the art — "EPISODE 21" as a pill in the BOTTOM-start corner, above the bar
+     * when there is one ("the episode number can be fitted right into the image itself … otherwise
+     * it's tough to read", then "move the episode pill to the bottom-left so it stops covering
+     * faces", user, 4 Sep). The ONE pill a card wears; what it says beneath is the moment or the
+     * season.
+     */
+    episode: String? = null,
+    /** See [LandscapeArt]'s `ultraWide`. */
+    ultraWide: Boolean = false,
 ) {
     Box(
         modifier = modifier
@@ -82,6 +97,7 @@ fun ProgressBanner(
             portraitSource = portraitSource,
             maxPixel = maxPixel,
             modifier = Modifier.fillMaxSize(),
+            ultraWide = ultraWide,
         )
 
         Box(
@@ -103,6 +119,20 @@ fun ProgressBanner(
                         bottom = progressBannerInset,
                     )
                     .fillMaxWidth(),
+            )
+        }
+
+        if (episode != null) {
+            OverArtLabel(
+                text = episode,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(
+                        start = progressBannerInset,
+                        // Above the bar (3 dp) by a step when the card carries one.
+                        bottom = if (progress == null) progressBannerInset
+                                 else progressBannerInset + progressBarThickness + ThemeSpace.x2,
+                    ),
             )
         }
 

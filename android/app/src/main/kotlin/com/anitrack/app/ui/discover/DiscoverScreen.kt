@@ -1066,6 +1066,7 @@ private fun TrendingCard(
         modifier = Modifier.width(PosterSize.ShelfMedium.width),
     ) {
         ShelfCard(
+            reserveTitleLines = true,
             title = item.title,
             onClick = { onOpen(item) },
             caption = caption,
@@ -1080,9 +1081,11 @@ private fun TrendingCard(
             placement = AddControlPlacement.OverArt,
             appModel = appModel,
             onAdd = { onAdd(item) },
+            // On the poster's foot (i3/i4): the top corner of a poster is where a face is, and
+            // the card's bottom corner is the caption.
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .overArtBadgePosition(),
+                .overArtFootPosition(PosterSize.ShelfMedium.width / PosterSize.posterAspectRatio),
         )
     }
 }

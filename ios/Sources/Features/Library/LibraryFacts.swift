@@ -121,7 +121,17 @@ struct ReturnFact {
     private static func ms(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
 
     private static func known(_ text: String, at: Int64?, now: Int64) -> ReturnFact {
-        ReturnFact(text: text, dated: true, soon: at.map { $0 - now <= soonHorizon } ?? false)
+        let soon = at.map { $0 - now <= soonHorizon } ?? false
+        // Inside the horizon the verb and the amber ("Returns 3 Oct" — a step); outside it the
+        // window alone, grey ("Jan 2027"): one verb in two inks read as a rule the reader had
+        // to guess (review i5). The section header already says Returning.
+        let shown = soon ? text : Self.capitalisedFirst(text.replacingOccurrences(of: "^Returns ", with: "", options: .regularExpression))
+        return ReturnFact(text: shown, dated: true, soon: soon)
+    }
+
+    private static func capitalisedFirst(_ s: String) -> String {
+        guard let first = s.first else { return s }
+        return first.uppercased() + s.dropFirst()
     }
 
     /// `TemporalCopy.returns`'s verb over a window it has no instant for — a month, a year, "late
@@ -139,6 +149,12 @@ struct ReturnFact {
         }
         if let at = appModel.nextPremiere(of: f) {
             return known(TemporalCopy.returns(at: at, now: now, source: f.source), at: at, now: now)
+        }
+        // An unconfirmed report is not a schedule (docs/api-contract.md): the server resolves its
+        // window to `unknown`, and the caption says what it is — "Season 3 rumored" — rather than
+        // filing a rumour under "No date announced", which reads as a confirmed sequel.
+        if let upcoming = f.upcoming, upcoming.isRumored {
+            return ReturnFact(text: Copy.Library.rumored(next: upcoming.next), dated: false, soon: false)
         }
         guard let upcoming = f.upcoming, let window = upcoming.releaseWindow,
               window.precision != .unknown, let parts = window.parts else { return unknown() }
@@ -218,6 +234,9 @@ enum LibraryDates {
 struct LibraryRowFacts {
     var lead: String?
     var meta: String?
+    /// A forward fact appended to `meta` in accent — "Watched · Returns 3 Oct" on ONE line. Two
+    /// lines under one title lifted it out of the list's column (review, 5 Sep).
+    var metaLead: String? = nil
 
     /// LIBRARY ROOT — a shelf, not a catalogue. Progress only: the status word is already the
     /// section heading 10 pt above, and printing it again is a row telling you what you just read.
@@ -317,7 +336,11 @@ struct LibraryRowFacts {
         // difference, so it decides.
         let fact = ReturnFact.of(f, appModel: appModel)
         if fact.dated, LibraryShelving.section(of: f, appModel: appModel) == .returning {
-            if fact.soon { return LibraryRowFacts(lead: fact.text, meta: compact ? nil : state) }
+            if fact.soon {
+                // The state and the date on ONE line, the date in accent.
+                if compact || state == nil { return LibraryRowFacts(lead: fact.text, meta: nil) }
+                return LibraryRowFacts(lead: nil, meta: state, metaLead: fact.text)
+            }
             return LibraryRowFacts(lead: nil, meta: joined(fact.text))
         }
         if let settled = settled(f, now: appModel.nowMinute) {

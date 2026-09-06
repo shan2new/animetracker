@@ -252,6 +252,13 @@ object ThemeType {
      */
     val sectionLabel: TextStyle = annotate(11f, FontWeight.Medium, tracking = 1.0f, lineHeight = 14f)
 
+    /**
+     * The BILLBOARD's badge — "NEW EPISODE", "4 EPISODES BEHIND", "TRENDING" — the streaming apps'
+     * filled tag, 11-sp bold caps on an amber ground (`HeroBadge`, 4 Sep). A ground, so no amber
+     * word is drawn. iOS: `heroBadge` = SF caption2 bold, tracking +0.6.
+     */
+    val heroBadge: TextStyle = annotate(11f, FontWeight.Bold, tracking = 0.6f, lineHeight = 14f)
+
     val caption: TextStyle = annotate(11f, FontWeight.Normal, lineHeight = 14f)
 
     /** Tabular. A counter that re-flows while it counts is a bug you can see. */

@@ -125,6 +125,8 @@ object CopyDetail {
 
     /** The films toggle's spoken action. */
     const val togglesWatched = "Toggles watched"
+    /** The hint on an extras-shelf card that is a RUN of episodes (an OVA series, an ONA, a spin-off). */
+    const val opensEpisodes = "Opens its episodes"
 
     /**
      * The SINGULAR word for a part's kind — what this one thing IS.

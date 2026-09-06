@@ -4,12 +4,19 @@ import ClerkKit
 
 @main
 struct AniTrackApp: App {
+    /// The orientation gate (`OrientationGate`): portrait everywhere but the system video player.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var auth = AuthManager()
     @State private var appModel: AppModel
 
     init() {
+        #if DEBUG
+        // A regex that fails to compile fails loudly, not silently (review i3).
+        assert(CatalogPerson(source: .tmdb, externalId: 0, name: "n", role: "A 'B' C", image: nil).displayRole == "A C")
+        #endif
         Self.applyBrandFont()
         AppAppearance.install()
+        PerfProbe.start()
         // Configure Clerk synchronously so Clerk.shared is valid before the view hierarchy builds.
         if AppConfig.isClerkConfigured {
             Clerk.configure(publishableKey: AppConfig.clerkPublishableKey)
@@ -22,6 +29,12 @@ struct AniTrackApp: App {
         // Delegates must be installed before launch completes, or an alert arriving while the
         // app is open is dropped without ever being presented.
         EpisodeNotifications.shared.registerForegroundPresenter()
+        EpisodeNotifications.shared.onOpen = { [weak model] id in model?.pendingOpen = id }
+        #if DEBUG
+        // `-openDetail <franchiseId>` (DEBUG, like `-openTab`): land on a show page for a capture,
+        // through the same route a tapped episode alert takes.
+        if let id = UserDefaults.standard.string(forKey: "openDetail"), !id.isEmpty { model.pendingOpen = id }
+        #endif
         _auth = State(initialValue: auth)
         _appModel = State(initialValue: model)
     }
@@ -32,7 +45,10 @@ struct AniTrackApp: App {
                 .environment(auth)
                 .environment(appModel)
                 .preferredColorScheme(.dark)
-                .tint(ThemeColor.accent)
+                // Amber is not an action colour (`ThemeColor.interactive`): system chrome — back
+                // chevrons, alert buttons, the search field's Cancel and caret — draws in ink.
+                // The tab bar re-tints itself amber (a selected tab is STATE), see `MainTabView`.
+                .tint(ThemeColor.interactive)
                 // Outfit as the inherited default so any text not already using `.scaledFont`
                 // (and SwiftUI TextField input) still renders in the brand typeface, scaled.
                 .font(.custom("Outfit-Regular", size: 17, relativeTo: .body))

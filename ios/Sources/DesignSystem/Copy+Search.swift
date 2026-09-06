@@ -80,7 +80,7 @@ extension Copy {
 
         // MARK: The add control
 
-        static let inLibrary = "In library"
+        static let inLibrary = "In Library"
         static let notInLibrary = "Not in library"
         static let addHint = "Adds it to your library"
         static let ownedHint = "Change its status or remove it"
@@ -97,8 +97,8 @@ extension Copy {
 
         // MARK: The notification primer
 
-        static let primerTitle = "Get told when an episode drops"
-        static let primerBody = "Previously. can alert you the moment a new episode of a show you\u{2019}re watching airs."
+        static let primerTitle = "Episode alerts"
+        static let primerBody = "Know the moment a new episode airs."
         static let primerTurnOn = "Turn on"
         /// "Not now", not "No thanks": iOS raises its own alert once ever, so the honest offer is
         /// a deferral — and Profile → Notifications keeps it available for good.
@@ -117,9 +117,28 @@ extension EmptyStateCopy {
                        primaryLabel: Copy.Search.showAll)
     }
 
+    /// The launchpad when the SCOPE, not the world, emptied the chart: trending loaded, but none
+    /// of it is in the selected scope. Shown where the scope bar is NOT on screen (the field is
+    /// unfocused), so it names the filter and carries the same one-tap way out `noScopeMatches`
+    /// has — without it the launchpad fell through to "Find your next show", copy that flatly
+    /// contradicts an active TV-only scope and offers nothing to do about it.
+    static func noScopeTrending(scope: String) -> EmptyStateCopy {
+        EmptyStateCopy(symbol: "line.3.horizontal.decrease",
+                       title: "Nothing trending in \(scope)",
+                       supporting: "Switch the scope to \(Copy.Filter.all) to see what everyone is watching.",
+                       primaryLabel: Copy.Search.showAll)
+    }
+
     /// The launchpad with no connection and no chart. The SAME title as `offlineCached` — one
     /// state has one name — with a supporting line that says what this screen cannot do about it.
     /// "Find your next show" over a chart that will never load is a promise, not a state.
+    /// The catalogue answered with a failure while the device is online. Named after SEARCH — the
+    /// screen used the library's "Couldn't load your library" here (captured 2 Sep).
+    static let searchUnavailable = EmptyStateCopy(
+        symbol: "exclamationmark.circle",
+        title: "Couldn\u{2019}t search right now",
+        supporting: "Something went wrong. Try again in a moment.",
+        primaryLabel: Copy.Action.tryAgain)
     static let searchOffline = EmptyStateCopy(
         symbol: "wifi.slash",
         title: "You\u{2019}re offline",

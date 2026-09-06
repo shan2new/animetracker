@@ -239,11 +239,19 @@ fun LandscapeArt(
     maxPixel: Int = LandscapeArtDefaults.maxPixel,
     alignment: Alignment = Alignment.TopCenter,
     modifier: Modifier = Modifier,
+    /**
+     * The banner is an AniList 1900×400 (`WideArt.ultraWide`): decode it at its native width. A
+     * 16:9 frame shows only the middle ~37 % of a 4.75:1 banner, so a decode budgeted for the
+     * frame's longest edge was drawn at ~2.5× — every anime card was soft while TMDB's 16:9
+     * backdrops beside them were sharp (4 Sep). 1900 px is a 3 MB decode. The crop itself stays:
+     * compositing the cover on the blurred banner was tried the same day and reverted.
+     */
+    ultraWide: Boolean = false,
 ) {
     if (!portraitSource) {
         ArtImage(
             url = url,
-            maxPixel = maxPixel,
+            maxPixel = if (ultraWide) maxOf(maxPixel, ULTRA_WIDE_MAX_PIXEL) else maxPixel,
             modifier = modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
             alignment = alignment,
@@ -312,8 +320,12 @@ fun LandscapeArt(
         maxPixel = maxPixel,
         alignment = alignment,
         modifier = modifier,
+        ultraWide = art.ultraWide,
     )
 }
+
+/** An AniList banner's native width. See [LandscapeArt]'s `ultraWide`. */
+private const val ULTRA_WIDE_MAX_PIXEL = 1900
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. Episode artwork

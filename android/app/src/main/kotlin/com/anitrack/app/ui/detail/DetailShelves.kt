@@ -83,6 +83,7 @@ import com.anitrack.model.portraitArt
 import com.anitrack.model.releasingPart
 import com.anitrack.model.timeAnchor
 import java.util.Locale
+import com.anitrack.app.ui.AutoSizeText
 
 /*
  * DETAIL'S SHELVES — the port of `ios/Sources/Features/FranchiseDetail/DetailEnrichment.swift`,
@@ -224,6 +225,7 @@ fun MoviesAndExtrasShelf(
     now: Long,
     inLibrary: Boolean,
     onToggle: (FranchisePart) -> Unit,
+    onOpen: (FranchisePart) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (parts.isEmpty()) return
@@ -235,6 +237,7 @@ fun MoviesAndExtrasShelf(
                 now = now,
                 inLibrary = inLibrary,
                 onToggle = { onToggle(part) },
+                onOpen = { onOpen(part) },
             )
         }
     }
@@ -247,8 +250,12 @@ private fun ExtraCard(
     now: Long,
     inLibrary: Boolean,
     onToggle: () -> Unit,
+    onOpen: () -> Unit,
 ) {
     val isExtra = part.kind == PartKind.SPECIAL || part.kind == PartKind.MUSIC
+    // A run of episodes (an OVA series, an ONA, a spin-off) is marked episode by episode on its
+    // own screen; a single unit toggles whole.
+    val episodic = !isExtra && part.totalEpisodes > 1
     val facts = remember(part, now, franchise) { partFacts(franchise, part, now) }
     // A FINISHED unit says nothing: the tick is the statement.
     val settled = !isExtra && part.isComplete && !part.isReleasing
@@ -267,8 +274,19 @@ private fun ExtraCard(
             captionIsLead = facts.lead != null,
             poster = part.portraitArt ?: franchise.portraitArt,
             slot = PosterSize.ShelfMedium,
-            hint = if (!isExtra && inLibrary) Copy.Detail.togglesWatched else null,
-            onClick = { if (!isExtra && inLibrary) onToggle() },
+            hint = when {
+                isExtra -> null
+                episodic -> Copy.Detail.opensEpisodes
+                inLibrary -> Copy.Detail.togglesWatched
+                else -> null
+            },
+            onClick = {
+                when {
+                    isExtra -> Unit
+                    episodic -> onOpen()
+                    inLibrary -> onToggle()
+                }
+            },
             modifier = Modifier
                 .alpha(if (isExtra) 0.6f else 1f)
                 .semantics { if (settled) stateDescription = Copy.Accessibility.complete },
@@ -403,19 +421,21 @@ val FranchiseVideo.displayTitle: String
  * Note the title guard: when the catalogue gave **no** title, [displayTitle] *is* the kind word, and
  * the kind is not repeated here — the caption is then just the part label, or absent.
  */
-fun trailerMeta(video: FranchiseVideo): String? {
+fun trailerMeta(video: FranchiseVideo, name: String?): String {
     val bits = ArrayList<String>(2)
     val kind = Copy.Video.kind(video.kind.wire)
-    val title = video.title
-    if (title != null && !title.contains(kind, ignoreCase = true)) bits.add(kind)
+    // "Official Series Trailer" over "Trailer" said it twice (i4).
+    if (name == null || !name.contains(kind, ignoreCase = true)) bits.add(kind)
     video.partLabel?.let { bits.add(it) }
-    return if (bits.isEmpty()) null else bits.joinToString(" · ")
+    if (bits.isNotEmpty()) return bits.joinToString(" · ")
+    return providerName(video.site) ?: kind
 }
 
 @Composable
-fun TrailerCard(video: FranchiseVideo, onPlay: () -> Unit, modifier: Modifier = Modifier) {
-    val meta = remember(video) { trailerMeta(video) }
-    val spoken = listOfNotNull(video.displayTitle, meta).joinToString(", ")
+fun TrailerCard(video: FranchiseVideo, onPlay: () -> Unit, modifier: Modifier = Modifier, showTitle: String? = null) {
+    val name = remember(video, showTitle) { video.titleCleanedFor(showTitle) ?: video.displayTitle }
+    val meta = remember(video, name) { trailerMeta(video, name) }
+    val spoken = listOfNotNull(name, meta).joinToString(", ")
     Column(
         modifier = modifier
             .width(trailerCardWidth)
@@ -468,8 +488,11 @@ fun TrailerCard(video: FranchiseVideo, onPlay: () -> Unit, modifier: Modifier = 
             verticalArrangement = Arrangement.spacedBy(ThemeSpace.x0_5),
         ) {
             BasicText(
-                text = video.displayTitle,
+                text = name,
                 style = ThemeType.shelfTitle.copy(color = ThemeColor.textPrimary),
+                // Two lines held (i3): a one-line name beside a two-line one put the shelf's
+                // captions on two baselines.
+                minLines = 2,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -490,7 +513,7 @@ fun TrailerCard(video: FranchiseVideo, onPlay: () -> Unit, modifier: Modifier = 
 // =================================================================================================
 
 private val personDisc = 72.dp
-private val personCardWidth = 92.dp
+private val personCardWidth = 100.dp
 
 /** The figure drawn when a person has no portrait, at its iOS point size. */
 private val personFallbackGlyph = 26.dp
@@ -519,10 +542,15 @@ fun FranchisePeople.orderedPeople(): List<CatalogPerson> {
         }
         if (seen.add(resolved.id)) out.add(resolved)
     }
+    // CAST first (i1-F7) — the faces a viewer recognises are the row's reason — then the
+    // creators, then only the directors who direct (the server files camera and AD crew under
+    // `directors`). Capped at 16.
+    val keep = setOf("director", "creator", "showrunner", "writer", "executive producer", "series director")
+    cast.take(10).forEach { add(it, null) }
     creators.forEach { add(it, Copy.People.creator) }
-    directors.forEach { add(it, Copy.People.director) }
-    cast.forEach { add(it, null) }
-    return out
+    directors.filter { p -> p.role?.lowercase()?.let { it in keep } ?: true }
+        .forEach { add(it, Copy.People.director) }
+    return out.take(16)
 }
 
 /**
@@ -571,16 +599,18 @@ fun PersonCard(person: CatalogPerson, modifier: Modifier = Modifier) {
             verticalArrangement = Arrangement.spacedBy(ThemeSpace.x0_5),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            BasicText(
+            // One line at a step of scale (i1, iOS's rule): a name that wrapped put the roles on
+            // two baselines across the shelf.
+            AutoSizeText(
                 text = person.name,
                 style = ThemeType.shelfTitle.copy(
                     color = ThemeColor.textPrimary,
                     textAlign = TextAlign.Center,
                 ),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                minScale = 0.85f,
+                maxLines = 1,
             )
-            val role = person.role
+            val role = person.displayRole
             if (role != null) {
                 BasicText(
                     text = role,
@@ -588,7 +618,7 @@ fun PersonCard(person: CatalogPerson, modifier: Modifier = Modifier) {
                         color = ThemeColor.textSecondary,
                         textAlign = TextAlign.Center,
                     ),
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -619,6 +649,7 @@ fun RelatedCard(
     ShelfCard(
         title = related.title,
         caption = related.identityLine,
+        reserveTitleLines = true,
         poster = related.portraitArt,
         slot = PosterSize.ShelfMedium,
         hint = Copy.Accessibility.opensTheShowHint,
@@ -719,3 +750,11 @@ internal fun providerInitials(name: String): String =
 
 /** The gutter every non-shelf block on the show page pads itself by. */
 internal val detailGutter: Dp = ThemeMetrics.gutter
+
+/** The provider's name as it is written, from the wire's lowercase `site` ("youtube"). */
+private fun providerName(site: String?): String? = when (site?.trim()?.lowercase()) {
+    null, "" -> null
+    "youtube" -> "YouTube"
+    "vimeo" -> "Vimeo"
+    else -> site.replaceFirstChar { it.uppercase() }
+}

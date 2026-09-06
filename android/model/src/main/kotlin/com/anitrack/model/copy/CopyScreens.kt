@@ -158,7 +158,7 @@ object CopyAccount {
     const val couldNotReachServer = "Couldn’t connect"
 
     const val offlineSupporting = "Changes sync when you reconnect"
-    const val showingSavedCopy = "Showing the copy saved on this device"
+    const val showingSavedCopy = "Showing what was saved on this device"
     const val signedInWithClerk = "Signed in"
     const val signOutFailedTitle = "Couldn’t sign out"
     const val signOutFailedMessage = "Check your connection and try again."

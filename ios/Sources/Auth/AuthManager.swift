@@ -38,15 +38,38 @@ final class AuthManager: TokenProvider {
 
     // MARK: - Lifecycle
 
+    /// Set once the first sign-in answer is known. The root holds the splash on it: handing off
+    /// to the sign-in screen while Clerk is still restoring a session would show a returning
+    /// user the wrong screen for a beat, or for good.
+    private(set) var bootstrapped = false
+    private var sessionWatch: Task<Void, Never>?
+
     /// Derive initial sign-in state. Clerk.configure() is called earlier in AniTrackApp.init().
+    ///
+    /// The session used to be read exactly once, the instant this ran — before Clerk had
+    /// necessarily restored it — and never re-derived, so a returning user could land on
+    /// sign-in with a valid session and nothing to correct it. Now: wait (briefly) for Clerk to
+    /// load, read, then follow every session change it reports for the life of the app.
     func bootstrap() async {
         if AppConfig.isClerkConfigured {
+            let deadline = Date().addingTimeInterval(3)
+            while !Clerk.shared.isLoaded, Date() < deadline {
+                try? await Task.sleep(for: .milliseconds(80))
+            }
             refreshClerkSignInState()
+            bootstrapped = true
+            sessionWatch?.cancel()
+            sessionWatch = Task { [weak self] in
+                for await event in Clerk.shared.auth.events {
+                    if case .sessionChanged = event { self?.refreshClerkSignInState() }
+                }
+            }
         } else {
             // Dev mode: signed in iff we already have a remembered dev id.
             if case let .dev(clerkId) = mode {
                 isSignedIn = !clerkId.isEmpty
             }
+            bootstrapped = true
         }
     }
 
@@ -72,16 +95,22 @@ final class AuthManager: TokenProvider {
         lastError = nil
     }
 
-    func signOut() async {
+    /// `false` when the session is still standing afterwards — Clerk could not end it (no
+    /// connection, usually). The caller says so; before, the spinner simply stopped and the
+    /// Profile sheet sat there signed in with nothing to explain why.
+    @discardableResult
+    func signOut() async -> Bool {
         lastError = nil
         switch mode {
         case .clerk:
-            try? await Clerk.shared.auth.signOut()
+            do { try await Clerk.shared.auth.signOut() } catch {}
             refreshClerkSignInState()
+            return !isSignedIn
         case .dev:
             UserDefaults.standard.removeObject(forKey: devIdDefaultsKey)
             mode = AppConfig.isClerkConfigured ? .clerk : .dev(clerkId: "")
             isSignedIn = false
+            return true
         }
     }
 

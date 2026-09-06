@@ -251,7 +251,7 @@ class ShellNavigator internal constructor(
         }
         lastChangeWasTabSwitch = true
         this.tab = tab
-        FeedbackCoordinator.fire(FeedbackToken.SELECTION)
+        // No haptic on a tab switch (i1-F14): a haptic is a signature for a WRITE.
     }
 
     /** Re-selecting the active tab. Truncates its stack and, on Library, drops All titles too. */

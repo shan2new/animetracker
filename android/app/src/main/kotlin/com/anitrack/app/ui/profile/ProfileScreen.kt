@@ -80,7 +80,7 @@ import com.anitrack.app.design.ThemeMetrics
 import com.anitrack.app.design.ThemeSpace
 import com.anitrack.app.design.ThemeType
 import com.anitrack.app.design.brand.AccountDisc
-import com.anitrack.app.design.brand.MarkDetail
+import com.anitrack.app.design.brand.BrandWord
 import com.anitrack.app.design.brand.PreviouslyMark
 import com.anitrack.app.design.shadowToken
 import com.anitrack.app.ui.AutoSizeText
@@ -118,6 +118,11 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
+import com.anitrack.model.behind
+import com.anitrack.model.releasingPart
+import com.anitrack.model.timeAnchor
+import com.anitrack.model.lastAired
+import com.anitrack.model.ShelfWindows
 
 // =====================================================================================
 // THE ACCOUNT SHEET — the port of `ios/Sources/Features/Profile/ProfileView.swift`.
@@ -276,11 +281,8 @@ fun ProfileScreen(
             syncFailureCount = 0,
             onRetrySync = { SyncCenter.retryAll() },
             onDiscardSync = { SyncCenter.discardAll() },
-            errorToast = appModel.errorToast,
-            notice = appModel.notice,
-            undoKey = appModel.undo?.id,
-            undoMessage = appModel.undo?.message,
-            onUndo = { appModel.undo?.let { appModel.undoTapped(it) } },
+            laneItem = appModel.laneItem,
+            onUndo = { appModel.undoTapped(it) },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = ToastGutter)
@@ -651,11 +653,13 @@ private fun IdentityRow(
                 minScale = AccountNameMinScale,
                 maxLines = 1,
             )
-            BasicText(
-                text = provenance,
-                style = ThemeType.metadata.copy(color = ThemeColor.textSecondary),
-                maxLines = 1,
-            )
+            if (provenance != null) {
+                BasicText(
+                    text = provenance,
+                    style = ThemeType.metadata.copy(color = ThemeColor.textSecondary),
+                    maxLines = 1,
+                )
+            }
             if (summary != null) {
                 BasicText(
                     text = summary,
@@ -690,7 +694,7 @@ private fun librarySummary(appModel: AppModel, snapshot: ProfileSnapshot): Strin
         val n = statusCount(appModel, snapshot, status) ?: continue
         if (n > 0) parts += statusPhrase(n, status)
     }
-    minorStatusLine(appModel, snapshot)?.let { parts += it }
+    // Three numerals, one line (i1-F11): the minor statuses wrapped "6 planned" onto a line of its own.
     return if (parts.isEmpty()) null else parts.joinToString(MiddotSeparator)
 }
 
@@ -790,6 +794,7 @@ private fun WatchingShelf(
                     captionIsLead = caption?.second ?: false,
                     poster = f.portraitArt,
                     slot = PosterSize.TodayShelf,
+                    reserveTitleLines = true,
                     hint = if (onOpenDetail == null) null else Copy.Accessibility.opensTheShowHint,
                     onClick = { onOpenDetail?.invoke(f.id) },
                 )
@@ -815,7 +820,13 @@ private fun shelfItems(appModel: AppModel): List<Franchise> {
  */
 private fun shelfCaption(appModel: AppModel, f: Franchise): Pair<String, Boolean>? =
     when (appModel.shelfState(f)) {
-        ShelfState.NEW_EPISODE -> Copy.Label.newEpisode to true
+        ShelfState.NEW_EPISODE -> {
+            // The count Today's badge carries at the same minute (i1-F11).
+            val behind = f.releasingPart?.behind(appModel.now, f.timeAnchor) ?: 0
+            // Amber only while the drop is today's fact (i4) — Today's rule verbatim.
+            val struck = f.lastAired(appModel.now)?.let { appModel.now - it <= ShelfWindows.NOW_BAR_LIVE } ?: false
+            if (behind > 1) Copy.Progress.behind(behind) to struck else Copy.Label.newEpisode to true
+        }
         ShelfState.BACKLOG -> f.resumePart?.let { Copy.Progress.episodeNext(it.progress + 1) to false }
         ShelfState.AIRING_WAIT -> {
             val at = f.nextAiring(appModel.now)
@@ -1185,19 +1196,15 @@ private fun Colophon(modifier: Modifier = Modifier) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
     ) {
-        // The shared lockup: one drawing of the logo for the whole app. **In-app the full stop is
-        // TEXT ink** — only the splash and the sign-in gate draw it in amber.
+        // The shared lockup: one drawing of the logo for the whole app, the full stop in the icon's
+        // coral everywhere the name is set.
         Row(
             horizontalArrangement = Arrangement.spacedBy(WordmarkGap),
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.semantics { contentDescription = WordmarkSpoken },
         ) {
-            PreviouslyMark(width = ColophonMarkWidth, detail = MarkDetail.None)
-            BasicText(
-                text = WordmarkText,
-                style = ThemeType.brandWordmark.copy(color = ThemeColor.textSecondary),
-                maxLines = 1,
-            )
+            PreviouslyMark(width = ColophonMarkWidth)
+            BrandWord(style = ThemeType.brandWordmark, ink = ThemeColor.textSecondary)
         }
         BasicText(
             text = version,
@@ -1217,10 +1224,9 @@ private fun Colophon(modifier: Modifier = Modifier) {
     }
 }
 
-private val ColophonMarkWidth = 11.dp
+private val ColophonMarkWidth = 9.dp
 private val WordmarkGap = 7.dp
 private val AttributionWidth = 330.dp
-private const val WordmarkText = "Previously."
 private const val WordmarkSpoken = "Previously"
 
 /** "1.0 (1)" — the version, then the build when there is one. */

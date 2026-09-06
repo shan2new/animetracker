@@ -72,12 +72,19 @@ enum TemporalCopy {
         }
     }
 
+    static let noDateAnnounced = "No date announced"
+    /// "Premieres Oct 2" — an announced first air date.
+    static func premieres(_ date: String) -> String { "Premieres \(date)" }
+
     /// "Returns tomorrow" · "Returns Friday" · "Returns Oct 2" · "Returns in 2027" · "No date announced".
+    /// A date that has passed says so ("Returned Jul 5") — the catalogue's note can outlive the
+    /// premiere by weeks, and every past day used to read "Returns today".
     static func returns(at ts: Int64?, now: Int64, source: MediaSource) -> String {
-        guard let ts else { return "No date announced" }
+        guard let ts else { return noDateAnnounced }
         let anchor = source.timeAnchor
         switch Formatting.dayDiff(ts: ts, now: now, anchor: anchor) {
-        case ..<1: return "Returns today"
+        case ..<0: return "Returned \(dateWord(ts, now: now, anchor: anchor))"
+        case 0: return "Returns today"
         case 1: return "Returns tomorrow"
         case 2...6: return "Returns \(Formatting.fmtDayLong(ts: ts, now: now, anchor: anchor))"
         default: return "Returns \(dateWord(ts, now: now, anchor: anchor))"

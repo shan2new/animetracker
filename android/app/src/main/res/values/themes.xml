@@ -21,14 +21,14 @@
     </style>
 
     <!--
-      The launcher theme, and the first half of the splash hand-off.
+      The launcher theme, and the first half of the launch.
 
-      At targetSdk 36 the platform ALWAYS draws its own splash before the first composable runs. It
-      cannot be skipped, only handed off from — so the two grounds must be the SAME BLACK, or the
-      app's very first frame carries a colour step straight into the 0.92 s ignite that
-      `ui/shell/SplashScreen.kt` spends its whole timeline on. `windowSplashScreenBackground` is
-      therefore `#000000` — true black for OLED, NOT `ThemeColor.canvas` (#09090B); see
-      `@color/launch_background`.
+      At targetSdk 36 the platform ALWAYS draws its own splash — the adaptive icon in a disc over
+      `windowSplashScreenBackground` — before the first composable runs. It cannot be skipped, only
+      handed off from: `MainActivity` holds it until the composition can draw, reads the icon's
+      frame in the exit listener, and `ui/shell/LaunchIdent.kt` draws the SAME picture (the same
+      launcher layers, clipped to the same disc, on the same canvas) as its first frame, then
+      releases the ribbon from it. So the ground here is `@color/launch_background` = the canvas.
 
       `postSplashScreenTheme` is what `installSplashScreen()` swaps in once the system frame leaves,
       so the Activity spends its life on `Theme.Previously` and this style exists only for the

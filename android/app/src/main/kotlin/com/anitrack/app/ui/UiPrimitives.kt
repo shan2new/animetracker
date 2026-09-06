@@ -181,7 +181,7 @@ private fun fittedStyle(
         style = style.scaledBy(scale),
         maxLines = maxLines,
         softWrap = true,
-        overflow = TextOverflow.Clip,
+        overflow = TextOverflow.Ellipsis,
         constraints = Constraints(maxWidth = widthPx),
     ).hasVisualOverflow
 

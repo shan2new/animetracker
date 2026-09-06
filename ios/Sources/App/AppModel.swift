@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import OSLog
 import Observation
 
 // The app's central state + view-model. Replaces the legacy React App.tsx state and the
@@ -20,7 +21,7 @@ final class AppModel {
     // knowledge never reached the live timer: `SyncCenter.toastSeconds` was declared, documented
     // and never called, while the sleep below used a hard-coded 6 — so an Undo a VoiceOver user
     // could not reach in time was still exactly 6 seconds long.
-    static let clockTick: TimeInterval = 20            // countdowns change at minute granularity
+    static let clockTick: TimeInterval = 60            // the clock ticks ON the minute (see `startClock`)
     static let recentsKey = "recentSearches"
     static let recentItemsKey = "recentSearchItems"
     static let maxRecents = 10
@@ -37,9 +38,13 @@ final class AppModel {
     var library: [Franchise] = [] {
         didSet {
             libraryIds = Set(library.map(\.id))
+            libraryIndex = Dictionary(library.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
             libraryVersion &+= 1
         }
     }
+    /// id → position in `library`, so `franchise(id:)` is a lookup, not a scan: Search's grid
+    /// asked it once per card per body (sampled under the field's focus, 5 Sep).
+    @ObservationIgnored private var libraryIndex: [String: Int] = [:]
     /// Bumped on every library write; the key the derived-feed caches (`scheduleDays`) hang off.
     @ObservationIgnored private var libraryVersion = 0
     private(set) var libraryIds: Set<String> = []
@@ -84,6 +89,9 @@ final class AppModel {
     // first visit to the search tab; a failure just leaves the shelf out (nothing to retry into).
     var trending: [FranchiseSummary] = []
     private var trendingTask: Task<Void, Never>?
+    /// The chart is on its way — Today's empty account holds its skeleton rather than flashing
+    /// the "Nothing to watch yet" card for the 300 ms before the billboard arrives.
+    var trendingLoading: Bool { trending.isEmpty && trendingTask != nil }
 
     /// A CTA elsewhere ("Add a show", the empty Schedule) asked for the search field itself, not
     /// just the Search tab. Consumed by `DiscoverView`, which presents the field and clears it.
@@ -113,6 +121,9 @@ final class AppModel {
     private var clockTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var ccTasks: [String: Task<Void, Never>] = [:]
+    /// One in-flight progress PUT per part, and the newest target waiting behind it.
+    private var progressLane: [Int: Task<Void, Never>] = [:]
+    private var progressQueued: [Int: ProgressWrite] = [:]
     private var undoTask: Task<Void, Never>?
     private var errorTask: Task<Void, Never>?
     // Set when the scene enters background; drives the staleness checks on return.
@@ -145,6 +156,13 @@ final class AppModel {
     /// Invoked when the server rejects our credentials. The auth layer owns the response — a 401
     /// means the session is gone, which is a sign-in problem, never a connectivity one.
     var onSessionExpired: (@MainActor () -> Void)?
+    /// A show a tapped episode alert asks to open; `MainTabView` consumes it.
+    var pendingOpen: String?
+    /// A neutral toast (`showNotice`): a receipt, not an error and not an Undo.
+    var notice: String?
+    private var noticeTask: Task<Void, Never>?
+
+    nonisolated static let log = Logger(subsystem: "app.previously", category: "model")
 
     init(api: APIClient) {
         self.api = api
@@ -159,15 +177,75 @@ final class AppModel {
 
     func start() {
         startClock()
+        // A failed change restored from a previous launch retries by replaying its write here.
+        SyncCenter.shared.replay = { [weak self] intent in await self?.replay(intent) }
+        // The offline copy first: the last library this device saw, so a launch with no network
+        // opens on the shows — stamped with their real age, so the stale strip and the inline
+        // notice tell the truth — rather than on an error where the library was. The app had no
+        // copy at all: a bad connection at launch was "Couldn't reach the server" over nothing,
+        // seconds after the library had been on screen (captured 2 Sep).
+        if library.isEmpty {
+            // Decoded OFF the main actor (5 Sep): the copy is the whole library, and decoding it
+            // here held the main thread for the ident's first frames (sampled: `JSONDecoder`
+            // under `start()`, ~300 ms on the simulator). The skeleton holds until it lands, and
+            // a reload that lands first wins.
+            Task { [weak self] in
+                let cached = await Task.detached(priority: .userInitiated) { Self.loadCachedLibrary() }.value
+                guard let self, let cached, self.library.isEmpty else { return }
+                self.library = cached.response.franchises
+                self.prevOpenedAt = max(self.prevOpenedAt, cached.response.prevOpenedAt)
+                self.lastLoadedAt = cached.savedAt
+            }
+        }
         Task { await stampOpened() }
         Task { await reload() }
+    }
+
+    // MARK: - Offline copy
+
+    nonisolated private static let cacheURL: URL = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("library-cache.json")
+    }()
+
+    private struct LibraryCache: Codable, Sendable {
+        let response: LibraryResponse
+        let savedAt: Int64
+    }
+
+    nonisolated private static func loadCachedLibrary() -> LibraryCache? {
+        guard let data = try? Data(contentsOf: cacheURL) else { return nil }
+        return try? JSONDecoder().decode(LibraryCache.self, from: data)
+    }
+
+    /// Written after every successful load, off the main actor. Atomic, so a launch can never
+    /// read a half-written file.
+    private static func persistLibrary(_ res: LibraryResponse, at ts: Int64) {
+        let cache = LibraryCache(response: res, savedAt: ts)
+        let url = cacheURL
+        Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(cache) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// The copy belongs to the account that fetched it; sign-out removes it.
+    private static func clearCachedLibrary() {
+        try? FileManager.default.removeItem(at: cacheURL)
     }
 
     private func startClock() {
         clockTask?.cancel()
         clockTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(AppModel.clockTick))
+                // To the next minute boundary, not every 20 s (5 Sep): every fact the clock
+                // feeds is minute-grained, and each tick re-evaluates every body that reads
+                // `now`. Three ticks a minute bought nothing and cost two full re-layouts — one
+                // of them, sooner or later, under a moving finger.
+                let ms = Int64.nowMs
+                let wait = Formatting.minuteMs - ms % Formatting.minuteMs + 50
+                try? await Task.sleep(for: .milliseconds(wait))
                 await MainActor.run { self?.now = .nowMs }
             }
         }
@@ -193,11 +271,16 @@ final class AppModel {
             // stale by definition; applying it would resurrect state we just tore down.
             guard seq == reloadSeq else { return }
             library = reconcileLocalProgress(res.franchises, seq: seq)
+            settleCompletedSeries()
             // Keep the larger of the two prevOpenedAt values we may have seen.
             if res.prevOpenedAt > 0 { prevOpenedAt = max(prevOpenedAt, res.prevOpenedAt) }
-            loadError = false
+            // Animated at the source: every screen's "couldn't refresh" footnote carries a fade
+            // transition that never ran, because nothing put an animation in the transaction —
+            // the line snapped in and shoved the queue under it 28 pt.
+            withAnimation(ThemeMotion.uiGentle) { loadError = false }
             loading = false
             lastLoadedAt = .nowMs
+            Self.persistLibrary(res, at: lastLoadedAt)
             await syncAmbient()
         } catch APIError.unauthorized {
             guard seq == reloadSeq else { return }
@@ -206,8 +289,12 @@ final class AppModel {
             handleSessionExpired()
         } catch {
             guard seq == reloadSeq else { return }
-            loadError = true
             loading = false
+            // A cancelled refresh (the pull's task torn down, a superseding reload) is not a
+            // failed one: it must not raise the "couldn't refresh" footnote over good content.
+            guard !error.isCancellation else { return }
+            AppModel.log.error("library reload failed: \(String(describing: error), privacy: .public)")
+            withAnimation(ThemeMotion.uiGentle) { loadError = true }
         }
     }
 
@@ -224,15 +311,26 @@ final class AppModel {
     /// would otherwise keep serving the previous account. Leaves the model in its launch state so
     /// the next sign-in opens on a loader, never on someone else's shows.
     func teardown() {
+        completedByMark = []
+        completionSweepDone = false
         RewatchStore.shared.reset()
         SeasonSweepLedger.reset()
+        Self.clearCachedLibrary()
         clockTask?.cancel(); clockTask = nil
         searchTask?.cancel(); searchTask = nil
         trendingTask?.cancel(); trendingTask = nil
         undoTask?.cancel(); undoTask = nil
         errorTask?.cancel(); errorTask = nil
+        noticeTask?.cancel(); noticeTask = nil
+        notice = nil
         ccTasks.values.forEach { $0.cancel() }
         ccTasks = [:]
+        progressLane.values.forEach { $0.cancel() }
+        progressLane = [:]
+        progressQueued = [:]
+        // The next account must not inherit this one's failed writes — a Retry there would send
+        // the previous user's mark into the new user's library.
+        SyncCenter.shared.teardown()
         // Invalidate every in-flight response so a late completion can't repopulate the model.
         searchSeq += 1
         reloadSeq += 1
@@ -285,6 +383,13 @@ final class AppModel {
         }
     }
 
+    /// Alerts were just allowed (the Search primer): arm them now, from the library already on
+    /// screen. They used to wait for the next reload — "Turn on" granted permission and scheduled
+    /// nothing, so the first alert could be a day away.
+    func alertsWereAllowed() async {
+        await syncAmbient()
+    }
+
     /// Push the current library into the ambient layers (pending episode notifications and the
     /// airing Live Activity) after any confirmed server-side change.
     private func syncAmbient() async {
@@ -296,6 +401,17 @@ final class AppModel {
 
     /// Surface a write failure. Every optimistic mutation calls this after rolling itself back,
     /// so the UI never silently disagrees with the server.
+    /// A quiet receipt with no action: "Episode alerts on". Shorter-lived than an Undo toast.
+    func showNotice(_ message: String) {
+        notice = message
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.5))
+            if Task.isCancelled { return }
+            await MainActor.run { self?.notice = nil }
+        }
+    }
+
     func showError(_ message: String) {
         FeedbackCoordinator.fire(.directError)
         errorToast = message
@@ -383,6 +499,11 @@ final class AppModel {
             return
         }
 
+        // Busy from the KEYSTROKE, not from the request (tried the other way on 5 Sep and filmed
+        // it): with the flag raised only after the debounce, the 300 ms between the last letter
+        // and the request drew "No results for …" over the trending grid, then the skeleton,
+        // then the answer. Raised here, a query with no answer yet is a skeleton and a list
+        // being refined steps back once and stays back until the new answer lands.
         searchBusy = true
         searchError = false
         searchTask = Task { [weak self] in
@@ -445,6 +566,13 @@ final class AppModel {
         }
     }
 
+    /// The pull on Search: refetch the chart, which also gives a failed first fetch its retry.
+    func refreshTrending() async {
+        trendingTask?.cancel()
+        trendingTask = nil
+        if let items = try? await api.trending(limit: 10), !items.isEmpty { trending = items }
+    }
+
     private func nextSeq() -> Int {
         searchSeq += 1
         return searchSeq
@@ -471,7 +599,12 @@ final class AppModel {
         searchResults.filter { matchesMediaFilter($0.source) }
     }
 
-    func franchise(id: String) -> Franchise? { library.first { $0.id == id } }
+    func franchise(id: String) -> Franchise? {
+        guard let i = libraryIndex[id], i < library.count, library[i].id == id else {
+            return library.first { $0.id == id }
+        }
+        return library[i]
+    }
 
     /// Which catalogue a franchise came from, resolved from whatever is loaded — the library, or
     /// the search/trending results an add can originate from. nil when we genuinely don't know
@@ -507,28 +640,38 @@ final class AppModel {
     /// "Out now" — releasing parts with a RECENTLY aired episode you haven't watched. Keyed on
     /// unwatched-ness + recency, not on `prevOpenedAt`: the old last-open comparison made a new
     /// episode vanish from Today the second time you opened the app, watched or not.
-    var outNow: [Franchise] {
+    var outNow: [Franchise] { memo(\.outNow) { computeOutNow() } }
+
+    private func computeOutNow() -> [Franchise] {
         airingFranchises
             .filter {
                 guard let part = $0.releasingPart else { return false }
-                // A just-caught-up row has to survive its celebration: `episodesBehind` drops to 0
-                // the instant progress is written, which would otherwise yank the row (and the
-                // frame its result state renders on) before it is ever seen.
-                guard part.episodesBehind > 0 || justCaught.contains($0.id) else { return false }
-                return now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow
+                // A just-caught-up row has to survive its celebration: `behind` drops to 0 the
+                // instant progress is written, which would otherwise yank the row (and the frame
+                // its result state renders on) before it is ever seen.
+                let behind = part.behind(now: now, anchor: $0.timeAnchor)
+                guard behind > 0 || justCaught.contains($0.id) else { return false }
+                return now - (part.lastAired(now: now, anchor: $0.timeAnchor) ?? 0) <= AppModel.outNowWindow
             }
-            .sorted { $0.lastAiredSortKey > $1.lastAiredSortKey }
+            .sorted { lastAiredKey($0) > lastAiredKey($1) }
     }
 
+    /// Descending recency for the live shelf — the airings-advanced `lastAired`, so an episode
+    /// that struck a minute ago leads a drop from last night (its catalogue field still says
+    /// last week until the next sync).
+    private func lastAiredKey(_ f: Franchise) -> Int64 { f.lastAired(now: now) ?? 0 }
+
     /// "Airing soon" — releasing parts with nextAiringAt within 48h, soonest first.
-    var soon: [Franchise] {
+    var soon: [Franchise] { memo(\.soon) { computeSoon() } }
+
+    private func computeSoon() -> [Franchise] {
         airingFranchises
             .filter {
-                guard let next = $0.releasingPart?.nextAiringAt else { return false }
+                guard let next = $0.nextAiring(now: now) else { return false }
                 let delta = next - now
                 return delta > 0 && delta <= AppModel.soonWindow
             }
-            .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
+            .sorted { ($0.nextAiring(now: now) ?? .max) < ($1.nextAiring(now: now) ?? .max) }
     }
 
     /// Soonest upcoming episode across all airing franchises (not just the 48h window). This is
@@ -537,19 +680,55 @@ final class AppModel {
     ///
     /// A date-only TV drop stays "up next" for the whole of its day — its clock time is
     /// synthesized, so there is no instant for it to be past, and the labels are day-granular.
-    /// An AniList slot is a real instant: once it passes, the episode is out. `scheduledAiring`
-    /// deliberately keeps such a slot alive for the rest of the day (it reads as "today"
-    /// elsewhere), but here it would sort ahead of the genuinely-next episode and be announced as
-    /// a future event — "lands Today 9:00 AM" at 8pm. Keep those strictly future.
-    var nextUp: Franchise? {
+    /// An AniList slot is a real instant: once it passes, the episode is out — `nextAiring` (via
+    /// `FranchisePart.upcomingAiring`) already moves on to the following slot, so a struck slot
+    /// can never be announced here as a future event ("lands Today 9:00 AM" at 8pm).
+    var nextUp: Franchise? { memo(\.nextUp) { computeNextUp() } }
+
+    private func computeNextUp() -> Franchise? {
         airingFranchises
-            .filter {
-                $0.timeAnchor.isDateOnly
-                    ? $0.nextAiring(now: now) != nil
-                    : ($0.releasingPart?.nextAiringAt ?? 0) > now
-            }
-            .sorted { $0.nextAiringSortKey < $1.nextAiringSortKey }
-            .first
+            .compactMap { f in f.nextAiring(now: now).map { (f, $0) } }
+            .min { $0.1 < $1.1 }?.0
+    }
+
+    // MARK: derived-collection memo
+
+    /// The derived collections above and below — `outNow`, `soon`, `nextUp`, `keepWatching`,
+    /// `watchingShelf`, `libraryShelves` — used to be bare computed properties, each a filter and
+    /// a sort over every `Franchise` (and its airings) on every read, and Today's body read them
+    /// about ten times per evaluation. They are pure functions of the library, the minute and
+    /// the celebration set, so that is the key (`scheduleDays` has hung off the same idea since
+    /// 24 Aug). A read on a warm key touches `library` once, for observation, and copies nothing.
+    private struct DerivedKey: Equatable {
+        let library: Int
+        let minute: Int64
+        let caught: Set<String>
+    }
+
+    private final class DerivedCache {
+        var key: DerivedKey?
+        var outNow: [Franchise]?
+        var soon: [Franchise]?
+        var nextUp: Franchise??
+        var keepWatching: [Franchise]?
+        var watchingShelf: [Franchise]?
+        var libraryShelves: [LibShelfSection]?
+    }
+
+    @ObservationIgnored private var derivedCache = DerivedCache()
+
+    private func memo<T>(_ slot: ReferenceWritableKeyPath<DerivedCache, T?>, _ build: () -> T) -> T {
+        // `library` is read on every path so a body that only reads a derived collection still
+        // observes the library it was derived from (`libraryVersion` is observation-ignored).
+        let key = DerivedKey(library: library.isEmpty ? -1 : libraryVersion, minute: nowMinute, caught: justCaught)
+        if derivedCache.key != key {
+            derivedCache = DerivedCache()
+            derivedCache.key = key
+        }
+        if let hit = derivedCache[keyPath: slot] { return hit }
+        let value = build()
+        derivedCache[keyPath: slot] = value
+        return value
     }
 
     // MARK: now bar
@@ -573,7 +752,7 @@ final class AppModel {
     /// which has no real instant to measure hours against); else NEXT = the soonest scheduled
     /// airing; else nil — the bar collapses to nothing (Today must not nag with an idle strip).
     var nowBarItem: NowBarItem? {
-        if let f = outNow.first, let last = f.releasingPart?.lastAiredAt {
+        if let f = outNow.first, let last = f.releasingPart?.lastAired(now: now, anchor: f.timeAnchor) {
             let fresh = f.timeAnchor.isDateOnly
                 ? f.dayDiff(of: last, now: now) == 0
                 : now - last <= AppModel.nowBarLiveWindow
@@ -588,7 +767,9 @@ final class AppModel {
     /// "Keep watching" — franchises you're mid-watch with an unwatched backlog NOT already surfaced
     /// in Out now (a binged TV season, or a show you've fallen behind on off its airing schedule).
     /// Most backlog first. An airing show can appear here AND in Up next (a new episode still comes).
-    var keepWatching: [Franchise] {
+    var keepWatching: [Franchise] { memo(\.keepWatching) { computeKeepWatching() } }
+
+    private func computeKeepWatching() -> [Franchise] {
         let outNowIds = Set(outNow.map(\.id))
         return Array(
             library
@@ -623,8 +804,8 @@ final class AppModel {
 
     /// The state that admits `f` to the shelf, or nil (dormant: caught up with nothing dated).
     func shelfState(of f: Franchise) -> ShelfState? {
-        if let part = f.releasingPart, part.episodesBehind > 0,
-           now - (part.lastAiredAt ?? 0) <= AppModel.outNowWindow { return .newEpisode }
+        if let part = f.releasingPart, part.behind(now: now, anchor: f.timeAnchor) > 0,
+           now - (part.lastAired(now: now, anchor: f.timeAnchor) ?? 0) <= AppModel.outNowWindow { return .newEpisode }
         if f.resumePart != nil { return .backlog }
         // A stale airing slot the source hasn't advanced is not a wait — `nextAiring` drops it (in
         // the franchise's OWN calendar, so a date-only TV slot doesn't expire a day early), so the
@@ -646,7 +827,9 @@ final class AppModel {
     /// "Currently watching" — every Watching-status show with a live claim on your attention:
     /// new episode > backlog > caught-up-airing > imminent premiere. Ties break most-actionable
     /// first (freshest drop / biggest backlog / soonest airing / soonest premiere).
-    var watchingShelf: [Franchise] {
+    var watchingShelf: [Franchise] { memo(\.watchingShelf) { computeWatchingShelf() } }
+
+    private func computeWatchingShelf() -> [Franchise] {
         library
             .filter { $0.effectiveStatus == .watching }
             .compactMap { f in shelfState(of: f).map { (f, $0) } }
@@ -712,7 +895,10 @@ final class AppModel {
     /// Identity of the current feed. Equal keys ⇒ identical `scheduleDays`, so a screen can key its
     /// own derivations on it instead of walking the feed again.
     struct ScheduleFeedKey: Equatable { let library: Int; let minute: Int64 }
-    var scheduleFeedKey: ScheduleFeedKey { ScheduleFeedKey(library: libraryVersion, minute: nowMinute) }
+    var scheduleFeedKey: ScheduleFeedKey {
+        // `library` read for observation (see `memo`).
+        ScheduleFeedKey(library: library.isEmpty ? -1 : libraryVersion, minute: nowMinute)
+    }
     @ObservationIgnored private var scheduleCache: (key: ScheduleFeedKey, days: [ScheduleDay])?
 
     /// Local noon of today, the anchor every day offset is measured from.
@@ -787,7 +973,10 @@ final class AppModel {
         if f.effectiveStatus == .watching { return .watching }
         // Coming back: nothing to watch right now, but a next installment is announced —
         // dated or TBA alike. This is the "when does it return" lookup made browsable.
-        if f.upcoming?.isFutureInstallment == true || nextPremiere(of: f) != nil {
+        // A day-dated installment whose date has passed has arrived (or slipped) — not "returning"
+        // any more, whatever the stale curated note says (`FranchiseUpcoming.hasArrived`).
+        let announced = f.upcoming.map { $0.isFutureInstallment && !$0.hasArrived(now: now) } ?? false
+        if announced || nextPremiere(of: f) != nil {
             return .comingBack
         }
         return .finished
@@ -802,7 +991,9 @@ final class AppModel {
     /// The crate, in shelf order; empty shelves are omitted. No filters — the Library root is one
     /// collection (All titles owns search and Arrange). The old `libQuery` filter here had no
     /// writer left anywhere in the app.
-    var libraryShelves: [LibShelfSection] {
+    var libraryShelves: [LibShelfSection] { memo(\.libraryShelves) { computeLibraryShelves() } }
+
+    private func computeLibraryShelves() -> [LibShelfSection] {
         return LibShelf.allCases.compactMap { shelf in
             let arr = sortedForShelf(library.filter { libShelf(of: $0) == shelf }, shelf: shelf)
             return arr.isEmpty ? nil : LibShelfSection(shelf: shelf, franchises: arr)
@@ -875,20 +1066,7 @@ final class AppModel {
 
         celebrate(franchiseId)
         scheduleUndoDismissal()
-
-        Task {
-            do {
-                _ = try await api.setProgress(mediaId: part.mediaId, episodes: aired)
-                settleLocalProgress(mediaId: part.mediaId, episodes: aired)
-            } catch {
-                // Roll back the optimistic write and retract the celebration/undo that now lie.
-                applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: prev)
-                settleLocalProgress(mediaId: part.mediaId, episodes: prev)
-                justCaught.remove(franchiseId)
-                if let cur = undo, !cur.added, cur.franchiseId == franchiseId { undo = nil }
-                showError("Couldn't save progress — check your connection.")
-            }
-        }
+        sendProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: aired)
     }
 
     /// Mark the next episode of the releasing (or resume) part as watched — the Focus card's primary
@@ -901,25 +1079,19 @@ final class AppModel {
         guard let part = chosen ?? f.currentPart ?? f.releasingPart ?? f.resumePart else { return nil }
         let target = min(part.progress + 1, part.progressCeiling)
         guard target > part.progress else { return nil }
-        FeedbackCoordinator.fire(haptic)
         let prev = part.progress
+        finishedByMark = nil
         applyLocalProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: target)
-        Task {
-            do {
-                _ = try await api.setProgress(mediaId: part.mediaId, episodes: target)
-                settleLocalProgress(mediaId: part.mediaId, episodes: target)
-            } catch {
-                // A mark is a fact about the user: it stays. The failure goes to the SyncBanner
-                // with a Retry that re-issues exactly this write.
-                SyncCenter.shared.record(command: Copy.Action.markAsWatched, title: f.title,
-                                         reason: Copy.Notice.reason(error)) {
-                    if let _ = try? await self.api.setProgress(mediaId: part.mediaId, episodes: target) {
-                        self.settleLocalProgress(mediaId: part.mediaId, episodes: target)
-                    }
-                }
-            }
-        }
-        return UndoState(mediaId: part.mediaId, franchiseId: franchiseId, prevProgress: prev, title: f.title, episode: target)
+        // The milestone signs the same way on every surface, decided HERE (review i5: Today's
+        // capsule tapped `.commitLight` for the mark that finished a series, the show page
+        // `.success`), and the move to Watched is told on the receipt.
+        let finished = finishedByMark == franchiseId
+        finishedByMark = nil
+        FeedbackCoordinator.fire(finished ? .success : haptic)
+        sendProgress(franchiseId: franchiseId, mediaId: part.mediaId, episodes: target)
+        var state = UndoState(mediaId: part.mediaId, franchiseId: franchiseId, prevProgress: prev, title: f.title, episode: target)
+        if finished { state.customMessage = Copy.Toast.finished }
+        return state
     }
 
     /// Present an Undo toast for a write that already happened (called when the card handoff settles).
@@ -932,6 +1104,11 @@ final class AppModel {
     /// The single choke point where every write is bounded to the part's episode count — an
     /// unbounded "+1" control otherwise walks progress off the end of a season (see
     /// `FranchisePart.progressCeiling`).
+    ///
+    /// Same failure policy as `markNext`: the mark stays and the failure goes to the SyncBanner.
+    /// This path used to roll back and flash a red toast, so the tick a user drew on an episode
+    /// row survived a bad connection while the batch they confirmed above it vanished — two
+    /// answers to one failure, on one screen.
     func setProgress(franchiseId: String, mediaId: Int, episodes: Int, haptic: Bool = true) {
         let part = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }
         let clamped = min(max(0, episodes), part?.progressCeiling ?? .max)
@@ -939,22 +1116,7 @@ final class AppModel {
         // One watch fact → commitLight; a contiguous range → commitMedium (spec: haptic vocabulary).
         if haptic { FeedbackCoordinator.fire(abs(clamped - (prev ?? clamped)) > 1 ? .commitMedium : .commitLight) }
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
-        Task {
-            do {
-                _ = try await api.setProgress(mediaId: mediaId, episodes: clamped)
-                settleLocalProgress(mediaId: mediaId, episodes: clamped)
-            } catch {
-                if let prev {
-                    applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: prev)
-                    settleLocalProgress(mediaId: mediaId, episodes: prev)
-                } else {
-                    // Marked on a franchise we hadn't loaded yet (a pending add) — there's no
-                    // previous value to restore, so drop the claim and let the server's win.
-                    forgetLocalProgress(mediaId: mediaId)
-                }
-                showError("Couldn't save progress — check your connection.")
-            }
-        }
+        sendProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
     }
 
     /// Subscribe to a franchise (POST /me/subscriptions). Status defaults server-side. The add is
@@ -996,7 +1158,8 @@ final class AppModel {
                 // re-issues exactly this add. It was the only write in the app that ended in a
                 // transient toast with no way back.
                 SyncCenter.shared.record(command: Copy.Action.add, title: title,
-                                         reason: Copy.Notice.reason(error)) {
+                                         reason: Copy.Notice.reason(error),
+                                         intent: .subscribe(franchiseId: franchiseId, title: title, status: status.rawValue)) {
                     self.addToLibrary(franchiseId: franchiseId, title: title, isReleasing: isReleasing)
                 }
                 return
@@ -1005,27 +1168,52 @@ final class AppModel {
         }
     }
 
-    func setStatus(franchiseId: String, status: WatchStatus, haptic: Bool = true) {
+    /// Move a show to another shelf. `present` draws the "Moved to Watching" toast with an Undo
+    /// that puts it back — the change used to be the one write in the app that acknowledged
+    /// nothing on screen: from Search or Detail the menu closed and that was all.
+    func setStatus(franchiseId: String, status: WatchStatus, haptic: Bool = true, present: Bool = true) {
         if haptic { FeedbackCoordinator.fire(.selection) }
+        let intent = WriteIntent.status(franchiseId: franchiseId, status: status.rawValue)
         guard let idx = library.firstIndex(where: { $0.id == franchiseId }) else {
-            // Not in the loaded library (e.g. a pending add) — fire and hope; reload reconciles.
-            Task { _ = try? await api.setStatus(franchiseId: franchiseId, status: status) }
+            // Not in the loaded library yet (a pending add). Nothing to roll back, but the failure
+            // is still a failure: it was fire-and-forget, the only silent write in the app.
+            Task {
+                do {
+                    _ = try await api.setStatus(franchiseId: franchiseId, status: status)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    SyncCenter.shared.record(command: Copy.Toast.movedTo(status.displayName), title: "",
+                                             reason: Copy.Notice.reason(error), intent: intent) {
+                        self.setStatus(franchiseId: franchiseId, status: status, haptic: false, present: false)
+                    }
+                }
+            }
             return
         }
         let prevStatus = library[idx].effectiveStatus
         guard prevStatus != status else { return }
         library[idx] = library[idx].withStatus(status)
+        let title = library[idx].title
+        if present {
+            presentUndo(UndoState(mediaId: nil, franchiseId: franchiseId, prevProgress: 0, title: title,
+                                  episode: 0, customMessage: Copy.Toast.movedTo(status.displayName),
+                                  undoAction: { [weak self] in
+                self?.setStatus(franchiseId: franchiseId, status: prevStatus, haptic: false, present: false)
+            }))
+        }
         Task {
             do {
                 _ = try await api.setStatus(franchiseId: franchiseId, status: status)
                 await syncAmbient()
             } catch {
+                guard !Task.isCancelled else { return }
                 if let i = library.firstIndex(where: { $0.id == franchiseId }) {
                     library[i] = library[i].withStatus(prevStatus)
                 }
-                SyncCenter.shared.record(command: Copy.Toast.movedTo(status.displayName), title: self.franchise(id: franchiseId)?.title ?? "",
-                                         reason: Copy.Notice.reason(error)) {
-                    self.setStatus(franchiseId: franchiseId, status: status)
+                if let cur = undo, cur.franchiseId == franchiseId, cur.customMessage != nil { undo = nil }
+                SyncCenter.shared.record(command: Copy.Toast.movedTo(status.displayName), title: title,
+                                         reason: Copy.Notice.reason(error), intent: intent) {
+                    self.setStatus(franchiseId: franchiseId, status: status, haptic: false, present: false)
                 }
             }
         }
@@ -1046,11 +1234,13 @@ final class AppModel {
                 _ = try await api.unsubscribe(franchiseId: franchiseId)
                 await syncAmbient()
             } catch {
+                guard !Task.isCancelled else { return }
                 if let removed, !library.contains(where: { $0.id == franchiseId }) {
                     library.insert(removed, at: min(idx ?? library.count, library.count))
                 }
                 SyncCenter.shared.record(command: Copy.Action.removeFromLibrary, title: removed?.title ?? "",
-                                         reason: Copy.Notice.reason(error)) {
+                                         reason: Copy.Notice.reason(error),
+                                         intent: .unsubscribe(franchiseId: franchiseId, title: removed?.title ?? "")) {
                     self.removeFromLibrary(franchiseId: franchiseId, haptic: false)
                 }
             }
@@ -1064,22 +1254,87 @@ final class AppModel {
             removeFromLibrary(franchiseId: fid, haptic: false)
         } else if let fid = u.franchiseId, let mediaId = u.mediaId, isInLibrary(fid) {
             applyLocalProgress(franchiseId: fid, mediaId: mediaId, episodes: u.prevProgress)
+            unsettleCompletion(franchiseId: fid)
             justCaught.remove(fid)
-            Task {
-                do {
-                    _ = try await api.setProgress(mediaId: mediaId, episodes: u.prevProgress)
-                    settleLocalProgress(mediaId: mediaId, episodes: u.prevProgress)
-                } catch {
-                    showError("Couldn't undo — check your connection.")
-                    // The undo never reached the server, so there is nothing to defend: drop the
-                    // claim BEFORE reloading or the overlay re-applies it over server truth.
-                    forgetLocalProgress(mediaId: mediaId)
-                    await reload()  // converge back to server truth
-                }
-            }
+            // An undo is a progress write like any other: it rides the part's lane behind the
+            // mark it reverses, so the server can never end on the mark after the user took it
+            // back, and a failure keeps the user's last word on screen with a Retry.
+            sendProgress(franchiseId: fid, mediaId: mediaId, episodes: u.prevProgress, command: Copy.Action.undo)
         }
         undo = nil
         undoTask?.cancel()
+    }
+
+    // MARK: - Progress writes: one lane per part
+
+    private struct ProgressWrite {
+        let franchiseId: String
+        let episodes: Int
+        let command: String
+        let title: String
+    }
+
+    /// Send a part's progress, serialised per part. Every mark used to spawn a bare `Task`, so
+    /// marking 12 then 13 quickly raced two PUTs: when 13's answer landed first, 12's landed
+    /// last, the server ended on 12 and the next reload walked the tick back. Now one PUT per
+    /// part is in flight at a time, the newest target waits behind it and anything it
+    /// superseded is dropped — the server always ends on the user's last word.
+    ///
+    /// Failure keeps the mark (a mark is a fact about the user — the write rule) and files it
+    /// in the SyncBanner with a Retry that re-issues exactly this write, from this launch or the
+    /// next (`WriteIntent`).
+    private func sendProgress(franchiseId: String, mediaId: Int, episodes: Int,
+                              command: String = Copy.Action.markAsWatched) {
+        let title = franchise(id: franchiseId)?.title ?? ""
+        progressQueued[mediaId] = ProgressWrite(franchiseId: franchiseId, episodes: episodes,
+                                                command: command, title: title)
+        guard progressLane[mediaId] == nil else { return }
+        progressLane[mediaId] = Task { [weak self] in
+            while let next = self?.progressQueued.removeValue(forKey: mediaId) {
+                await self?.putProgress(next, mediaId: mediaId)
+            }
+            self?.progressLane[mediaId] = nil
+        }
+    }
+
+    private func putProgress(_ write: ProgressWrite, mediaId: Int) async {
+        do {
+            _ = try await api.setProgress(mediaId: mediaId, episodes: write.episodes)
+            settleLocalProgress(mediaId: mediaId, episodes: write.episodes)
+        } catch {
+            // Teardown cancelled the lane, or a newer target is queued behind this one and will
+            // decide the outcome — either way this attempt has nothing to report.
+            guard !Task.isCancelled, progressQueued[mediaId] == nil else { return }
+            SyncCenter.shared.record(command: write.command, title: write.title,
+                                     reason: Copy.Notice.reason(error),
+                                     intent: .progress(franchiseId: write.franchiseId, mediaId: mediaId,
+                                                       episodes: write.episodes)) { [weak self] in
+                await self?.putProgress(write, mediaId: mediaId)
+            }
+        }
+    }
+
+    /// Re-issue a write restored from a previous launch (`SyncCenter.replay`). Progress replays
+    /// straight to the server — the local value it defends is already on screen if the library
+    /// still carries it; membership and status replays go through the live commands so their
+    /// optimistic state, rollback and toasts stay the app's one grammar.
+    func replay(_ intent: WriteIntent) async {
+        switch intent {
+        case .progress(let franchiseId, let mediaId, let episodes):
+            let write = ProgressWrite(franchiseId: franchiseId, episodes: episodes,
+                                      command: Copy.Action.markAsWatched,
+                                      title: franchise(id: franchiseId)?.title ?? "")
+            await putProgress(write, mediaId: mediaId)
+        case .status(let franchiseId, let raw):
+            if let status = WatchStatus(rawValue: raw) {
+                setStatus(franchiseId: franchiseId, status: status, haptic: false, present: false)
+            }
+        case .subscribe(let franchiseId, let title, let raw):
+            let status = WatchStatus(rawValue: raw) ?? .planned
+            addToLibrary(franchiseId: franchiseId, title: title, isReleasing: status == .watching)
+        case .unsubscribe(let franchiseId, _):
+            removeFromLibrary(franchiseId: franchiseId, haptic: false)
+        }
     }
 
     // MARK: - Internal mutation helpers
@@ -1092,6 +1347,40 @@ final class AppModel {
         localProgress[mediaId] = LocalWrite(episodes: episodes, settledAtSeq: nil)
         guard let fi = library.firstIndex(where: { $0.id == franchiseId }) else { return }
         library[fi] = library[fi].withUpdatedProgress(mediaId: mediaId, episodes: episodes)
+        settleCompletion(franchiseId: franchiseId)
+    }
+
+    /// The shows THIS session moved to Watched by marking their last episode — Undo of that
+    /// mark takes the move back too (`unsettleCompletion`).
+    private var completedByMark: Set<String> = []
+    /// The show `settleCompletion` just moved, for the mark that caused it to say so.
+    private var finishedByMark: String?
+    private var completionSweepDone = false
+
+    /// A finished series whose last episode has just been marked is filed under Watched (review
+    /// i4: Thrones read "Watching ⌄" in the bar over "COMPLETE · Watched once"), the way AniList,
+    /// MAL and Trakt file it. A status write like any other: it rolls back on failure.
+    private func settleCompletion(franchiseId: String) {
+        guard let f = franchise(id: franchiseId), f.effectiveStatus == .watching, f.isWatchedThrough else { return }
+        completedByMark.insert(franchiseId)
+        finishedByMark = franchiseId
+        setStatus(franchiseId: franchiseId, status: .completed, haptic: false, present: false)
+    }
+
+    private func unsettleCompletion(franchiseId: String) {
+        guard completedByMark.remove(franchiseId) != nil,
+              let f = franchise(id: franchiseId), f.effectiveStatus == .completed, !f.isWatchedThrough else { return }
+        setStatus(franchiseId: franchiseId, status: .watching, haptic: false, present: false)
+    }
+
+    /// Rows the server still files under Watching though every episode is watched and nothing is
+    /// coming (data from before the rule above): moved once per session, quietly.
+    private func settleCompletedSeries() {
+        guard !completionSweepDone else { return }
+        completionSweepDone = true
+        for f in library where f.effectiveStatus == .watching && f.isWatchedThrough {
+            setStatus(franchiseId: f.id, status: .completed, haptic: false, present: false)
+        }
     }
 
     /// The PUT for this part returned — success or failure, both are the end of the story. The
@@ -1194,17 +1483,10 @@ extension Franchise {
     func withUpdatedProgress(mediaId: Int, episodes: Int) -> Franchise {
         var newParts = parts
         if let idx = newParts.firstIndex(where: { $0.mediaId == mediaId }) {
-            let p = newParts[idx]
-            newParts[idx] = FranchisePart(
-                mediaId: p.mediaId, kind: p.kind, sequence: p.sequence, label: p.label,
-                title: p.title, cover: p.cover, banner: p.banner, format: p.format,
-                status: p.status, isReleasing: p.isReleasing, totalEpisodes: p.totalEpisodes,
-                airedEpisodes: p.airedEpisodes, nextEpisodeNumber: p.nextEpisodeNumber,
-                nextAiringAt: p.nextAiringAt, lastAiredAt: p.lastAiredAt, synopsis: p.synopsis,
-                genres: p.genres, progress: max(0, episodes),
-                year: p.year, studios: p.studios, nextAiringCount: p.nextAiringCount,
-                episodes: p.episodes, release: p.release
-            )
+            // `withProgress` carries EVERY field. The hand-built copy this replaces omitted
+            // `airings` (and would have omitted each field added after it), so one local mark
+            // silently took the show off the calendar until the next library reload.
+            newParts[idx] = newParts[idx].withProgress(episodes)
         }
         return Franchise(copying: self, parts: newParts)
     }
@@ -1212,13 +1494,10 @@ extension Franchise {
     /// Returns a copy with the watch status replaced (both the library field and the subscription
     /// mirror, so `effectiveStatus` flips immediately). Used for optimistic status updates.
     func withStatus(_ newStatus: WatchStatus) -> Franchise {
-        Franchise(id: id, source: source, title: title, cover: cover, banner: banner, synopsis: synopsis,
-                  genres: genres, isReleasing: isReleasing, partCounts: partCounts, parts: parts,
+        Franchise(copying: self, parts: parts,
                   // `addedAt` is a fact about the account, not about the status: an optimistic
                   // status flip must not erase when the user added the show.
                   subscription: Subscription(status: newStatus, addedAt: subscription?.addedAt),
-                  upcoming: upcoming,
-                  year: year, studios: studios,
-                  status: newStatus, behind: behind, newParts: newParts)
+                  status: newStatus)
     }
 }

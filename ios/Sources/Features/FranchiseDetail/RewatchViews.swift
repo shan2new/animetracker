@@ -62,7 +62,7 @@ struct StartRewatchSheet: View {
                     // its own artwork, before it asks anything. A modal that opens on a grey
                     // sentence and a list of radio rows could be about anything.
                     HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
-                        PosterSlot(url: franchise.cover, .queue)
+                        PosterSlot(url: franchise.portraitArt, .queue)
                         VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                             Text(franchise.title)
                                 .type(ThemeType.showTitleM)
@@ -79,14 +79,14 @@ struct StartRewatchSheet: View {
                         SectionLabel(text: "Scope")
                         LazyVStack(spacing: 0) {
                             scopeRow(title: DetailCopy.everything, count: everythingCount,
-                                     poster: franchise.cover,
+                                     poster: franchise.portraitArt,
                                      selected: scope == .franchise, separator: !parts.isEmpty) {
                                 scope = .franchise
                             }
                             ForEach(Array(parts.enumerated()), id: \.element.id) { i, part in
                                 scopeRow(title: part.canonicalLabel.isEmpty ? part.title : part.canonicalLabel,
                                          count: part.totalEpisodes > 0 ? Copy.episodes(part.totalEpisodes) : nil,
-                                         poster: part.cover ?? franchise.cover,
+                                         poster: part.portraitArt ?? franchise.portraitArt,
                                          selected: scope == .part(mediaId: part.mediaId),
                                          separator: i < parts.count - 1) {
                                     scope = .part(mediaId: part.mediaId)
@@ -126,7 +126,9 @@ struct StartRewatchSheet: View {
                 .padding(.horizontal, ThemeMetrics.gutter)
                 .padding(.top, ThemeSpace.x3)
                 .padding(.bottom, ThemeSpace.x2)
-                .background(.ultraThinMaterial)
+                // The one raw material in Features: it ignored Reduce Transparency, which
+                // `chromeGlass` honours.
+                .chromeGlass(in: Rectangle())
             }
             .navigationTitle(Copy.Action.startRewatch)
             .navigationBarTitleDisplayMode(.inline)
@@ -139,9 +141,12 @@ struct StartRewatchSheet: View {
                         // action. `body`, not `listAction`: a sheet's Cancel is a navigation
                         // control and iOS sets it at the sheet title's own size. `.plain` also gave
                         // the sheet's only visible control no press state at all.
+                        // `interactive`, like every bare toolbar action (the app's one toolbar
+                        // recipe: confirm = `bodyEmphasis` + interactive, dismiss = `body` +
+                        // interactive). This was the one Cancel in the app set in secondary ink.
                         Text(Copy.Action.cancel)
                             .type(ThemeType.body)
-                            .foregroundStyle(ThemeColor.textSecondary)
+                            .foregroundStyle(ThemeColor.interactive)
                             .lineLimit(1)
                             .fixedSize()
                     }
@@ -152,7 +157,7 @@ struct StartRewatchSheet: View {
                 // every item its own glass capsule, which is what rendered rgb(26,27,29) behind
                 // this word on a rgb(13,14,17) sheet. The shared background has to be dropped
                 // from the item, not from the button inside it.
-                .sharedBackgroundVisibility(.hidden)
+                .chromeSharedBackgroundHidden()
             }
         }
     }
@@ -178,7 +183,9 @@ struct WatchHistoryView: View {
         ZStack {
             ThemeColor.canvas.ignoresSafeArea()
             if let f = franchise {
-                ArtBackdrop(url: f.banner ?? f.cover, height: 280, intensity: 0.55)
+                // The one wash spec (this screen carried a private 280/0.55).
+                ArtBackdrop(url: f.landscapeArt ?? f.portraitArt, height: ThemeMetrics.rootWashHeight,
+                            intensity: ThemeMetrics.rootWashIntensity)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .ignoresSafeArea(edges: .top)
             }
@@ -250,8 +257,8 @@ struct WatchHistoryView: View {
         // A real navigation bar with a real material, and the show's own name on it: the shipped
         // screen was a hand-built row over hidden chrome, titled "Watch history" and nothing else,
         // so the name of the show whose history it was never appeared anywhere on it.
-        .navigationTitle(franchise?.title ?? Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
-        .navigationSubtitle(historySubtitle)
+        .navigationTitle(franchise?.displayTitle ?? Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
+        .chromeNavigationSubtitle(historySubtitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarRole(.editor)
         .toolbar(.visible, for: .navigationBar)
@@ -359,9 +366,9 @@ struct WatchHistoryView: View {
     /// The artwork for one session: the season it covers, or the show.
     private func sessionPoster(_ session: WatchSession) -> String? {
         switch session.scope {
-        case .franchise: return franchise?.cover
+        case .franchise: return franchise?.portraitArt
         case .part(let mediaId):
-            return franchise?.parts.first { $0.mediaId == mediaId }?.cover ?? franchise?.cover
+            return franchise?.parts.first { $0.mediaId == mediaId }?.portraitArt ?? franchise?.portraitArt
         }
     }
 
@@ -467,7 +474,7 @@ struct SessionDetailView: View {
                     // both a value and a field label in adjacent rows while proving nothing the
                     // completion date did not already prove.
                     HStack(alignment: .top, spacing: ThemeMetrics.artGap) {
-                        PosterSlot(url: franchise?.cover, .row)
+                        PosterSlot(url: franchise?.portraitArt, .row)
                         VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                             Text(franchise?.title ?? session.title)
                                 .type(ThemeType.showTitleM)
@@ -578,13 +585,13 @@ struct SessionDetailView: View {
                     } label: {
                         Text(Copy.Action.done)
                             .type(ThemeType.bodyEmphasis)
-                            .foregroundStyle(ThemeColor.accent)
+                            .foregroundStyle(ThemeColor.interactive)
                             .lineLimit(1)
                             .fixedSize()
                     }
                     .buttonStyle(RowPressStyle(radius: ThemeRadius.compactControl))
                 }
-                .sharedBackgroundVisibility(.hidden)
+                .chromeSharedBackgroundHidden()
             }
             .confirmationDialog(Copy.Confirm.deleteSessionTitle, isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button(Copy.Confirm.deleteSessionConfirm, role: .destructive) {
@@ -600,7 +607,8 @@ struct SessionDetailView: View {
             // does not use the destructive verb's copy.
             .confirmationDialog("Stop this rewatch?", isPresented: $confirmStop, titleVisibility: .visible) {
                 Button("Stop rewatch", role: .destructive) {
-                    FeedbackCoordinator.fire(.destructive)
+                    // Stopping keeps the record: a commit, not a deletion (review i2).
+                    FeedbackCoordinator.fire(.commitLight)
                     store.cancel(session.id, atEpisode: stoppedAtEpisode, at: now)
                     dismiss()
                 }

@@ -1067,5 +1067,13 @@ fun SearchScopeBar(
  * The badge sits OUTSIDE the card's own button on purpose: a button nested inside another button's
  * label is a coin-toss for which one gets the tap.
  */
-internal fun Modifier.overArtBadgePosition(): Modifier =
-    offset(x = overArtOutset, y = -overArtOutset)
+internal fun Modifier.overArtBadgePosition(bottom: Boolean = false): Modifier =
+    offset(x = overArtOutset, y = if (bottom) overArtOutset else -overArtOutset)
+
+/**
+ * The disc on the POSTER's bottom-trailing corner (i4): anchored at the card's top and offset by
+ * the poster's height, so it lands where a poster keeps its credits and never on the caption —
+ * while staying outside the card's own button.
+ */
+internal fun Modifier.overArtFootPosition(posterHeight: Dp): Modifier =
+    offset(x = 0.dp, y = posterHeight - minimumTapTarget + (minimumTapTarget - overArtDisc) / 2 - ThemeSpace.x2)

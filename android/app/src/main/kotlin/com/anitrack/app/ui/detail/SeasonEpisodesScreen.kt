@@ -72,9 +72,11 @@ import com.anitrack.model.canonicalLabel
 import com.anitrack.model.copy.Copy
 import com.anitrack.model.displayTitle
 import com.anitrack.model.episodicPartsInOrder
+import com.anitrack.model.seasonPartsInOrder
 import com.anitrack.model.landscapeArt
 import com.anitrack.model.markTarget
 import com.anitrack.model.portraitArt
+import com.anitrack.model.wideArt
 import com.anitrack.model.withEpisodes
 import kotlin.math.max
 import kotlin.math.min
@@ -197,7 +199,11 @@ fun SeasonEpisodesScreen(
                         SeasonHeader(
                             franchise = franchise,
                             part = part,
-                            seasons = franchise.episodicPartsInOrder,
+                            // The seasons, as the show page's pill lists them; an extra opened
+                            // from the shelf keeps the whole episodic run as its siblings.
+                            seasons = franchise.seasonPartsInOrder.let { seasons ->
+                                if (seasons.any { it.mediaId == part.mediaId }) seasons else franchise.episodicPartsInOrder
+                            },
                             onSelect = { selectedMediaId = it },
                             modifier = Modifier
                                 .padding(horizontal = ThemeMetrics.gutter)
@@ -474,7 +480,8 @@ private fun SeasonHeader(
     val total = part.headerTotal()
     val watched = min(part.progress, max(total, part.progress))
     val wide = remember(part, franchise) {
-        WideArt.from(part.landscapeArt, part.portraitArt ?: franchise.portraitArt)
+        // A TRUE 16:9 at either level before any banner — see FranchisePart.wideArt(within).
+        part.wideArt(franchise)
     }
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -492,84 +499,30 @@ private fun SeasonHeader(
             part = part,
             seasons = seasons,
             total = total,
-            watched = watched,
             onSelect = onSelect,
         )
     }
 }
 
 /**
- * Byte for byte the show page's `episodesHeader`, with two differences: the label has no "Episodes"
- * fallback here (the screen is about one season, which has a name or a title), and there is an extra
- * count branch for a season whose length the catalogue has never stated.
+ * The show page's season pill, leading, as this screen's heading — the banner above carries the
+ * bar, so only a season whose length the catalogue never stated says its count in words.
  */
 @Composable
 private fun SeasonPickerRow(
     part: FranchisePart,
     seasons: List<FranchisePart>,
     total: Int,
-    watched: Int,
     onSelect: (Int) -> Unit,
 ) {
-    var open by remember { mutableStateOf(false) }
     val label = part.canonicalLabel.ifEmpty { part.title }
-
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics(mergeDescendants = false) { },
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (seasons.size > 1) {
-            Box(Modifier.weight(1f, fill = false)) {
-                Row(
-                    modifier = Modifier
-                        .clickable(
-                            interactionSource = null,
-                            indication = PressStyle.textAction,
-                            role = Role.Button,
-                            onClick = { open = true },
-                        )
-                        .semantics(mergeDescendants = true) {
-                            heading()
-                            contentDescription = Copy.Detail.seasonPicker(label)
-                        }
-                        .height(minimumTapTarget),
-                    horizontalArrangement = Arrangement.spacedBy(DetailMetrics.glyphGap),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AutoSizeText(
-                        text = label,
-                        style = ThemeType.sectionTitle.copy(color = ThemeColor.textPrimary),
-                        minScale = 0.85f,
-                        maxLines = 1,
-                    )
-                    Image(
-                        imageVector = rememberSymbol(PreviouslyIcons.UnfoldMore),
-                        contentDescription = null,
-                        modifier = Modifier.size(materialGlyphBox(DetailMetrics.pickerGlyph)),
-                        colorFilter = ColorFilter.tint(ThemeColor.textTertiary),
-                    )
-                }
-                DetailMenu(expanded = open, onDismiss = { open = false }) {
-                    seasons.forEach { season ->
-                        DetailMenuItem(
-                            label = season.canonicalLabel.ifEmpty { season.title },
-                            symbol = if (season.mediaId == part.mediaId) {
-                                PreviouslyIcons.Check
-                            } else {
-                                null
-                            },
-                        ) {
-                            open = false
-                            // No animation wrapper here, where the show page's picker uses one: the
-                            // whole list is re-keyed on the choice and there is nothing to tween.
-                            onSelect(season.mediaId)
-                        }
-                    }
-                }
-            }
+            SeasonPill(current = part, seasons = seasons, onPick = onSelect)
         } else {
             AutoSizeText(
                 text = label,
@@ -582,20 +535,8 @@ private fun SeasonPickerRow(
             )
         }
         Spacer(Modifier.weight(1f))
-        when {
-            total > 0 -> BasicText(
-                text = Copy.Progress.watchedOfCount(watched, total),
-                style = ThemeType.metadata.copy(
-                    color = ThemeColor.textTertiary,
-                    fontFeatureSettings = "tnum",
-                ),
-                maxLines = 1,
-                modifier = Modifier.semantics {
-                    contentDescription = Copy.Progress.watchedOf(watched, total)
-                },
-            )
-
-            part.progress > 0 -> BasicText(
+        if (total == 0 && part.progress > 0) {
+            BasicText(
                 text = Copy.episodesWatched(part.progress),
                 style = ThemeType.metadata.copy(color = ThemeColor.textTertiary),
                 maxLines = 1,

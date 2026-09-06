@@ -77,7 +77,7 @@ import com.anitrack.model.watchContext
  *
  * The next card therefore **peeks**, and that peek is the point.
  */
-private fun cardWidth(container: Dp, count: Int, span: Int, spacing: Dp): Dp {
+internal fun cardWidth(container: Dp, count: Int, span: Int, spacing: Dp): Dp {
     if (count <= 1) return container
     val unit = (container - spacing * (count - 1)) / count
     return unit * span + spacing * (span - 1)
@@ -140,7 +140,8 @@ fun LibraryContinueShelf(
             val width = cardWidth(
                 container = container,
                 count = if (isAX) AX_COUNT else CONTINUE_COUNT,
-                span = if (isAX) AX_SPAN else CONTINUE_SPAN,
+                // A shelf of one runs gutter to gutter (i1-F12).
+                span = if (isAX) AX_SPAN else if (items.size == 1) CONTINUE_COUNT else CONTINUE_SPAN,
                 spacing = ThemeMetrics.shelfGap,
             )
             LazyRow(
@@ -222,6 +223,7 @@ private fun LibraryContinueCard(
             url = wide.url,
             portraitSource = wide.portraitSource,
             progress = if (total > 0) ratio else null,
+            ultraWide = wide.ultraWide,
         )
         Column(verticalArrangement = Arrangement.spacedBy(ThemeSpace.x0_5)) {
             BasicText(

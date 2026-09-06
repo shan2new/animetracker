@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -49,11 +50,12 @@ import com.anitrack.app.ui.art.LandscapeArt
 import com.anitrack.app.ui.control.PressStyle
 import com.anitrack.app.ui.control.materialGlyphBox
 import com.anitrack.app.ui.image.ArtMaxPixel
-import com.anitrack.app.ui.section.OverArtLabel
 import com.anitrack.model.Franchise
 import com.anitrack.model.copy.Copy
 import com.anitrack.model.displayTitle
 import com.anitrack.model.wideArt
+import com.anitrack.app.ui.state.ReceiptLine
+import androidx.compose.foundation.layout.Spacer
 
 // =====================================================================================
 // THE AIRING CARD — Schedule's row, and the only row anatomy the calendar has.
@@ -92,17 +94,14 @@ import com.anitrack.model.wideArt
 /** A watched airing keeps its place on the calendar and recedes. */
 private const val WATCHED_DIM = 0.72f
 
-/** The pill, the bell and the tick are all inset this far from the art's own edges. */
+/** The tick is inset this far from the art's own edges. */
 private val overArtInset = ThemeSpace.x3
 
-/** Between the pill and the reminder bell beside it. */
-private val overArtGap = ThemeSpace.x2
+/** The caption row's clock column — "12:30 AM" at `time`'s 15 sp with a hair to spare. */
+private val timeColumnWidth = 66.dp
 
-/** The bell's glyph at its iOS point size; [materialGlyphBox] does the SF → Material conversion. */
-private val bellGlyph = 11.dp
-
-/** The bell's disc padding around that glyph. */
-private val bellDiscPadding = 7.dp
+/** The reminder bell's glyph at its iOS point size; [materialGlyphBox] does the SF → Material conversion. */
+private val bellGlyph = 10.dp
 
 /** The tick badge's disc. */
 private val tickBadgeDiameter = 26.dp
@@ -130,8 +129,6 @@ private val artEdgeWidth = ThemeMetrics.hairline
  * @param aired the moment has passed. **This is the pill's colour rule** — amber ahead, ink behind.
  * @param watched dims the whole card and puts a tick on the art. A finished thing is a tick, not
  *   the word "Watched".
- * @param dateOnly the source publishes a date and no clock. With no [time] the pill says what the
- *   drop is ("New episode") instead of inventing a clock.
  * @param hasReminder a local episode alert is armed for this exact episode. **Passive, never a
  *   control** — there is no tap target on the bell; it is spoken through the card's own value.
  * @param trailing the mark ring, while there is something to mark. Empty otherwise.
@@ -143,15 +140,13 @@ fun AiringCard(
     time: String?,
     aired: Boolean,
     watched: Boolean,
-    dateOnly: Boolean,
     hasReminder: Boolean,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The card's in-place receipt host (5 Sep): the ring's mark lands under the caption. */
+    receiptHost: String? = null,
     trailing: @Composable () -> Unit = {},
 ) {
-    // "'7:30 PM' for a timed slot; a date-only drop says what it is instead of inventing a clock."
-    val pill = time ?: if (dateOnly) Copy.Label.newEpisode else null
-
     // Animated in a layer, never in the body: the mark's commit dims the card, and a dim that
     // recomposed the row would recompose it once per animation frame for a value only the
     // compositor needs.
@@ -162,7 +157,7 @@ fun AiringCard(
     )
 
     // VoiceOver hears the FULL title, never the shortened one.
-    val spokenLabel = listOfNotNull(franchise.title, meta, pill).joinToString(", ")
+    val spokenLabel = listOfNotNull(franchise.title, meta, time).joinToString(", ")
     val spokenValue = when {
         watched -> Copy.Accessibility.complete
         time != null && hasReminder -> "$time, ${Copy.Schedule.reminderSet}"
@@ -187,10 +182,7 @@ fun AiringCard(
     ) {
         CardArt(
             franchise = franchise,
-            pill = pill,
-            aired = aired,
             watched = watched,
-            hasReminder = hasReminder,
             onOpen = onOpen,
         )
 
@@ -199,6 +191,33 @@ fun AiringCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
         ) {
+            if (time != null) {
+                // The CLOCK, in a column the eye can run down the page — a calendar's own grammar.
+                // Amber while the episode is still ahead (the app's one colour rule for a time),
+                // ink once aired. It was an 11-sp pill on the art (3 Sep), the least legible place
+                // on the card for the fact a schedule exists to give (4 Sep). On the title's first
+                // line whatever the caption wraps to.
+                Row(
+                    modifier = Modifier
+                        .width(timeColumnWidth)
+                        .align(Alignment.Top)
+                        .padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x1),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BasicText(
+                        text = time,
+                        style = ThemeType.time,
+                        maxLines = 1,
+                        color = ColorProducer { if (aired) ThemeColor.textPrimary else ThemeColor.accent },
+                    )
+                    if (hasReminder) ReminderBell()
+                }
+            } else {
+                // A date-only airing keeps the column (i4): Calendar prints "all-day" there;
+                // titles and facts share one edge down the feed.
+                Spacer(Modifier.width(timeColumnWidth))
+            }
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -229,6 +248,13 @@ fun AiringCard(
             }
             trailing()
         }
+        if (receiptHost != null) {
+            ReceiptLine(
+                host = receiptHost,
+                compact = true,
+                modifier = Modifier.padding(start = timeColumnWidth + ThemeSpace.x3),
+            )
+        }
     }
 }
 
@@ -245,10 +271,7 @@ fun AiringCard(
 @Composable
 private fun CardArt(
     franchise: Franchise,
-    pill: String?,
-    aired: Boolean,
     watched: Boolean,
-    hasReminder: Boolean,
     onOpen: () -> Unit,
 ) {
     Box(
@@ -274,23 +297,6 @@ private fun CardArt(
             maxPixel = ArtMaxPixel.AIRING_CARD,
             modifier = Modifier.fillMaxSize(),
         )
-
-        if (pill != null) {
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(overArtInset),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(overArtGap),
-            ) {
-                // THE colour rule: amber while the episode is still ahead, ink once it has aired.
-                OverArtLabel(
-                    text = pill,
-                    tint = if (aired) ThemeColor.textPrimary else ThemeColor.accent,
-                )
-                if (hasReminder) ReminderBell()
-            }
-        }
 
         if (watched) {
             TickBadge(
@@ -328,12 +334,9 @@ private fun ReminderBell() {
         imageVector = rememberSymbol(PreviouslyIcons.NotificationsFilled),
         contentDescription = null,
         modifier = Modifier
-            .clip(CircleShape)
-            .background(ThemeColor.scrimStrong)
-            .padding(bellDiscPadding)
             .size(materialGlyphBox(bellGlyph))
             .clearAndSetSemantics {},
-        colorFilter = ColorFilter.tint(ThemeColor.textPrimary),
+        colorFilter = ColorFilter.tint(ThemeColor.textTertiary),
     )
 }
 

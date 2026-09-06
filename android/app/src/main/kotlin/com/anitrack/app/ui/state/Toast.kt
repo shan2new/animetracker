@@ -66,6 +66,17 @@ import com.anitrack.app.ui.control.minimumTapTarget
 import com.anitrack.app.ui.isAccessibilityTextSize
 import com.anitrack.model.copy.Copy
 import kotlinx.coroutines.delay
+import com.anitrack.app.LocalAppModel
+import com.anitrack.app.data.ReceiptPlacement
+import com.anitrack.app.data.UndoState
+import com.anitrack.app.ui.art.PosterSlot
+import com.anitrack.app.ui.control.DrawnCheck
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.anitrack.model.portraitArt
+import com.anitrack.model.shelfShortened
 
 // =====================================================================================
 // THE TOAST IS A CAPSULE, AND IT IS NEVER A SNACKBAR.
@@ -304,34 +315,6 @@ fun ToastView(
 /** The toast never spans the screen over content the user is reading. */
 val TOAST_MAX_WIDTH = 420.dp
 
-/**
- * A failure receipt. `ToastView(failure = true)` — the amber-free triangle plus the message.
- *
- * Note what this is *not*: a failed WRITE is never a transient toast. That is [SyncBanner], which
- * stays until it is retried or discarded.
- */
-@Composable
-fun ErrorToast(message: String, modifier: Modifier = Modifier) {
-    ToastView(message = message, failure = true, modifier = modifier)
-}
-
-/**
- * The canonical Undo toast: one action, and it lands when the handoff settles (see [HandoffUndo]).
- *
- * @param message `UndoState.message` — derived by the model in a fixed precedence
- *   (custom → removed → added → batch → single), never assembled here.
- */
-@Composable
-fun UndoToast(message: String, onUndo: () -> Unit, modifier: Modifier = Modifier) {
-    ToastView(
-        message = message,
-        actionLabel = Copy.Action.undo,
-        spokenOverride = "$message. ${Copy.Action.undo} available.",
-        onAction = onUndo,
-        modifier = modifier,
-    )
-}
-
 // -------------------------------------------------------------------------------------
 // The sync banner
 // -------------------------------------------------------------------------------------
@@ -568,16 +551,11 @@ fun ToastHost(
     syncFailureCount: Int,
     onRetrySync: () -> Unit,
     onDiscardSync: () -> Unit,
-    errorToast: String?,
-    notice: String?,
-    undoKey: Any?,
-    undoMessage: String?,
-    onUndo: () -> Unit,
+    laneItem: LaneItem?,
+    onUndo: (UndoState) -> Unit,
     modifier: Modifier = Modifier,
     syncRetryAvailable: Boolean = false,
 ) {
-    val reduceMotion = LocalReduceMotion.current
-
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -596,47 +574,191 @@ fun ToastHost(
             )
         }
 
-        // 2 — the error toast.
-        AnimatedVisibility(
-            visible = errorToast != null,
-            enter = ThemeMotion.toastEnter(reduceMotion),
-            exit = ThemeMotion.toastExit(reduceMotion),
-        ) {
-            ErrorToast(
-                message = errorToast.orEmpty(),
-                modifier = Modifier.padding(top = TOAST_STACK_GAP),
-            )
-        }
+        // 2 — the LANE (5 Sep): a removal, a move, an add, a notice or a failure, docked on the
+        // bottom chrome. A mark's receipt is not here — it lands in place, under the control
+        // that was pressed (`ReceiptLine`).
+        LaneHost(item = laneItem, onUndo = onUndo, modifier = Modifier.padding(top = TOAST_STACK_GAP))
+    }
+}
 
-        // 3 — the neutral receipt ("Episode alerts on"). No action, no glyph.
-        AnimatedVisibility(
-            visible = notice != null,
-            enter = ThemeMotion.toastEnter(reduceMotion),
-            exit = ThemeMotion.toastExit(reduceMotion),
-        ) {
-            ToastView(
-                message = notice.orEmpty(),
-                modifier = Modifier.padding(top = TOAST_STACK_GAP),
-            )
-        }
+// -------------------------------------------------------------------------------------
+// Receipts (5 Sep)
+// -------------------------------------------------------------------------------------
+//
+// The transient confirmation, rebuilt from the toast. A receipt is drawn in ONE of two places,
+// decided at the write (`UndoState.placement`):
+//   • IN PLACE — under the control that was pressed, when that control stays on screen: every
+//     mark from a capsule (Today's hero, the show page) or a ring (Schedule's cards, the Up next
+//     cards, the episode list). One quiet line, "✓ Episode 19 watched · Undo", for the window.
+//   • THE LANE — docked on the bottom chrome: the poster, the fact, the show, Undo. For everything
+//     whose object LEFT the screen or never had a control to hold the receipt, and for the notices
+//     and the write failures. (iOS docks it INTO the tab bar as its 26.1 accessory; the Android bar
+//     has no such lane, so it sits attached above it.)
 
-        // 4 — the undo toast, nearest the thumb. Keyed on the undo's identity so a second mark
-        // replaces the first rather than extending it.
-        AnimatedVisibility(
-            visible = undoMessage != null,
-            enter = ThemeMotion.toastEnter(reduceMotion),
-            exit = ThemeMotion.toastExit(reduceMotion),
+/** What the lane shows. One item at a time — the lane is one lane. */
+sealed class LaneItem {
+    data class Error(val message: String) : LaneItem()
+    data class Undo(val state: UndoState) : LaneItem()
+    data class Notice(val message: String) : LaneItem()
+
+    val key: String
+        get() = when (this) {
+            is Error -> "error/$message"
+            is Undo -> "undo/${state.id}"
+            is Notice -> "notice/$message"
+        }
+}
+
+/**
+ * The receipt IN the control: one line under the capsule or the row that was pressed. Drawn only
+ * while the live undo is placed at [host] (and, on a row, is about [episode]).
+ */
+@Composable
+fun ReceiptLine(
+    host: String,
+    modifier: Modifier = Modifier,
+    episode: Int? = null,
+    compact: Boolean = false,
+) {
+    val appModel = LocalAppModel.current
+    val reduceMotion = LocalReduceMotion.current
+    val undo = appModel.undo
+    val live = undo != null &&
+        undo.placement == ReceiptPlacement.InPlace(host) &&
+        (episode == null || undo.episode == episode)
+    // The last live state, kept for the exit so the line can leave with its words.
+    var shown by remember { mutableStateOf<UndoState?>(null) }
+    if (live) shown = undo
+    AnimatedVisibility(
+        visible = live,
+        enter = ThemeMotion.toastEnter(reduceMotion),
+        exit = ThemeMotion.toastExit(reduceMotion),
+        modifier = modifier,
+    ) {
+        val state = shown ?: return@AnimatedVisibility
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = if (compact) 32.dp else 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (compact) Arrangement.Start else Arrangement.Center,
         ) {
-            key(undoKey) {
-                UndoToast(
-                    message = undoMessage.orEmpty(),
-                    onUndo = onUndo,
-                    modifier = Modifier.padding(top = TOAST_STACK_GAP),
+            DrawnCheck(on = true, size = if (compact) 10.dp else 11.dp, tint = ThemeColor.accent)
+            BasicText(
+                text = state.receipt,
+                style = (if (compact) ThemeType.metadata else ThemeType.metadataEmphasis)
+                    .copy(color = ThemeColor.textSecondary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = if (compact) ThemeSpace.x1 else ThemeSpace.x2),
+            )
+            BasicText(
+                text = "·",
+                style = ThemeType.metadataEmphasis.copy(color = ThemeColor.textTertiary),
+                modifier = Modifier.padding(horizontal = ThemeSpace.x1),
+            )
+            ToastAction(label = Copy.Action.undo, onClick = { appModel.undoTapped(state) })
+        }
+    }
+}
+
+/** The lane's content: the poster (or a glyph), the fact, the show, and the one action. */
+@Composable
+fun ReceiptLane(item: LaneItem, onUndo: (UndoState) -> Unit, modifier: Modifier = Modifier) {
+    val appModel = LocalAppModel.current
+    val undo = (item as? LaneItem.Undo)?.state
+    val poster = undo?.franchiseId?.let { appModel.franchise(it)?.portraitArt }
+        ?: undo?.removedFranchise?.portraitArt
+    val fact = when (item) {
+        is LaneItem.Error -> item.message
+        is LaneItem.Notice -> item.message
+        is LaneItem.Undo -> item.state.receipt
+    }
+    val title = undo?.takeIf { it.title.isNotEmpty() && !it.added }?.title?.shelfShortened(fitting = LANE_TITLE_FIT)
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .padding(start = ThemeSpace.x3, end = ThemeSpace.x1),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
+    ) {
+        if (poster != null) {
+            PosterSlot(url = poster, width = 26.dp, height = 39.dp, radius = 4.dp)
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(28.dp)
+                    .background(ThemeColor.surfaceFloating, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (item is LaneItem.Error) {
+                    Image(
+                        imageVector = rememberSymbol(PreviouslyIcons.WarningFilled),
+                        contentDescription = null,
+                        colorFilter = ColorFilter.tint(ThemeColor.warning),
+                        modifier = Modifier.size(12.dp),
+                    )
+                } else {
+                    DrawnCheck(on = true, size = 12.dp, tint = ThemeColor.accent)
+                }
+            }
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(1.dp),
+        ) {
+            BasicText(
+                text = fact,
+                style = ThemeType.metadataEmphasis.copy(color = ThemeColor.textPrimary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+            if (title != null) {
+                BasicText(
+                    text = title,
+                    style = ThemeType.caption.copy(color = ThemeColor.textSecondary),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        if (undo != null) {
+            ToastAction(label = Copy.Action.undo, onClick = { onUndo(undo) })
+        }
+    }
+}
+
+/** The lane, docked on the bottom chrome: springs up from the bar, leaves on `uiDismiss`. */
+@Composable
+fun LaneHost(item: LaneItem?, onUndo: (UndoState) -> Unit, modifier: Modifier = Modifier) {
+    val reduceMotion = LocalReduceMotion.current
+    var shown by remember { mutableStateOf<LaneItem?>(null) }
+    if (item != null) shown = item
+    AnimatedVisibility(
+        visible = item != null,
+        enter = if (reduceMotion) fadeIn(motion(MotionToken.UI_REDUCED)) else
+            fadeIn(motion(MotionToken.UI_SNAPPY)) + slideInVertically(motion(MotionToken.UI_SNAPPY)) { it / 2 },
+        exit = ThemeMotion.toastExit(reduceMotion),
+        modifier = modifier,
+    ) {
+        val current = shown ?: return@AnimatedVisibility
+        key(current.key) {
+            ReceiptLane(
+                item = current,
+                onUndo = onUndo,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .shadowToken(ShadowToken.Floating, RoundedCornerShape(22.dp))
+                    .chromeGlass(RoundedCornerShape(22.dp)),
+            )
         }
     }
 }
 
 /** Between two stacked toasts. */
 val TOAST_STACK_GAP = 9.dp
+
+/** The lane's second line: two lines of caption beside a 26-dp poster (i3). */
+private const val LANE_TITLE_FIT = 30

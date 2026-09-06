@@ -68,6 +68,80 @@ public data class ArtworkSet(
 
 public object SafeArtworkSet : SafeSerializer<ArtworkSet>(ArtworkSet.serializer())
 
+/** `(try? c.decode(Double.self, …))`. */
+public object LenientDoubleOrNull : SafeSerializer<Double>(Double.serializer())
+
+/**
+ * One ranked artwork asset (server 518430b): url, provider, pixel size, language, score. The score,
+ * size and provider are informational — the app never re-ranks on them; the server's order is the
+ * order. An entry with no url is dropped by [ArtworkImageListSerializer].
+ */
+@Serializable
+public data class ArtworkImage(
+    @Serializable(with = LenientString::class) val url: String = "",
+    @Serializable(with = LenientStringOrNull::class) val source: String? = null,
+    @Serializable(with = LenientIntOrNull::class) val width: Int? = null,
+    @Serializable(with = LenientIntOrNull::class) val height: Int? = null,
+    @Serializable(with = LenientStringOrNull::class) val language: String? = null,
+    @Serializable(with = LenientDoubleOrNull::class) val score: Double? = null,
+)
+
+public object ArtworkImageListSerializer : SafeListSerializer<ArtworkImage>(ArtworkImage.serializer()) {
+    override fun keep(value: ArtworkImage): Boolean = value.url.isNotBlank()
+}
+
+/**
+ * The server's ranked artwork per orientation — `images.*` is its top pick, these are the
+ * alternatives, first entry first. A missing list is empty; a malformed list is empty too, and the
+ * accessors fall through to the legacy fields.
+ */
+@Serializable
+public data class ArtworkGallery(
+    @Serializable(with = ArtworkImageListSerializer::class) val portraits: List<ArtworkImage> = emptyList(),
+    @Serializable(with = ArtworkImageListSerializer::class) val landscapes: List<ArtworkImage> = emptyList(),
+    @Serializable(with = ArtworkImageListSerializer::class) val logos: List<ArtworkImage> = emptyList(),
+)
+
+public object SafeArtworkGallery : SafeSerializer<ArtworkGallery>(ArtworkGallery.serializer())
+
+/**
+ * What a billboard draws for the show's NAME, decided by what the art under it already says
+ * (iOS `BillboardName`).
+ *
+ * There is deliberately no "the art carries the name" case any more (5 Sep). It assumed the
+ * poster's logotype sits where the copy does; Re:ZERO's sits in the top band — under the back
+ * button, the status capsule and the top veil — so the page drew no name and hid the one on the
+ * poster, and on Today the wordmark band covers the same zone: a hero with no visible name at all.
+ * A name is ALWAYS drawn. Where the selected poster is titled and the gallery has no textless one
+ * it is drawn in TYPE, never as a logo — a logo would set the poster's own logotype twice in the
+ * same hand, while type beside titled key art is Crunchyroll's and Prime Video's ordinary caption.
+ */
+public sealed class BillboardName {
+    /**
+     * The show's logo treatment. `HeroTitle` draws it only at the headline's mass and sets the name
+     * in type otherwise.
+     */
+    public data class Logo(val image: ArtworkImage) : BillboardName()
+
+    /** The name set in type. */
+    public object Type : BillboardName()
+
+    public companion object {
+        public fun resolve(
+            portrait: String?,
+            textless: String?,
+            gallery: ArtworkGallery?,
+            logo: ArtworkImage?,
+        ): BillboardName {
+            if (textless == null && portrait != null) {
+                val selected = gallery?.portraits?.firstOrNull { it.url == portrait }
+                if (selected != null && ArtworkSet.nonEmpty(selected.language) != null) return Type
+            }
+            return if (logo != null) Logo(logo) else Type
+        }
+    }
+}
+
 /**
  * The one decision a wide frame makes: a landscape asset fills it; a portrait one is composited
  * whole on its own blurred ground. Callers pass both halves straight to the wide art surfaces and
@@ -80,11 +154,23 @@ public data class WideArt(
     val url: String?,
     /** [url] is a 2:3 cover, to be composited rather than cropped. */
     val portraitSource: Boolean,
+    /**
+     * [url] is an AniList banner — 1900×400 (some 1800×550), far wider than any frame that shows
+     * it — so a 16:9 frame must decode it at its native width or draw a ~2.5× upscale of the
+     * middle third (`LandscapeArt`'s `ultraWide`). Decided by the URL, not the source: an enriched
+     * anime franchise may carry a TMDB backdrop, and that IS 16:9. (Compositing the cover on the
+     * blurred banner instead of cropping was tried on 4 Sep and reverted — "the images were just
+     * fine".)
+     */
+    val ultraWide: Boolean = false,
 ) {
     public companion object {
         public fun from(landscape: String?, portrait: String?): WideArt =
-            if (landscape != null) WideArt(url = landscape, portraitSource = false)
-            else WideArt(url = portrait, portraitSource = true)
+            if (landscape != null) {
+                WideArt(url = landscape, portraitSource = false, ultraWide = landscape.contains("/anime/banner/"))
+            } else {
+                WideArt(url = portrait, portraitSource = true)
+            }
     }
 }
 
@@ -106,17 +192,21 @@ private fun legacyBanner(banner: String?, cover: String?): String? {
 // legacy cover when `images` exists but its `portrait` is null. That is intended.
 
 /** The 2:3 cover — `images.portrait`, else the legacy field an older server sends. */
-public val Franchise.portraitArt: String? get() = images?.portrait ?: ArtworkSet.nonEmpty(cover)
+public val Franchise.portraitArt: String? get() =
+    images?.portrait ?: artwork?.portraits?.firstOrNull()?.url ?: ArtworkSet.nonEmpty(cover)
 
 /** The landscape banner, or null when the catalogue has none. Never a portrait poster. */
-public val Franchise.landscapeArt: String? get() = images?.landscape ?: legacyBanner(banner, cover)
+public val Franchise.landscapeArt: String? get() =
+    images?.landscape ?: artwork?.landscapes?.firstOrNull()?.url ?: legacyBanner(banner, cover)
 
 /** Art for a wide frame: the banner, else the cover composited. */
 public val Franchise.wideArt: WideArt get() = WideArt.from(landscapeArt, portraitArt)
 
-public val FranchisePart.portraitArt: String? get() = images?.portrait ?: ArtworkSet.nonEmpty(cover)
+public val FranchisePart.portraitArt: String? get() =
+    images?.portrait ?: artwork?.portraits?.firstOrNull()?.url ?: ArtworkSet.nonEmpty(cover)
 
-public val FranchisePart.landscapeArt: String? get() = images?.landscape ?: legacyBanner(banner, cover)
+public val FranchisePart.landscapeArt: String? get() =
+    images?.landscape ?: artwork?.landscapes?.firstOrNull()?.url ?: legacyBanner(banner, cover)
 
 /**
  * This part's OWN art for a wide frame — its banner, else its cover composited. The season screen's
@@ -128,14 +218,75 @@ public val FranchisePart.wideArt: WideArt get() = WideArt.from(landscapeArt, por
  * The part's art with the show's behind it, for a card that is about the show as much as the season
  * (Library's Continue watching).
  */
-public fun FranchisePart.wideArt(within: Franchise): WideArt =
-    WideArt.from(landscapeArt ?: within.landscapeArt, portraitArt ?: within.portraitArt)
+public fun FranchisePart.wideArt(within: Franchise): WideArt {
+    // A TRUE 16:9 wins at either level before any AniList banner does: the season's
+    // `images.landscape` on production is its banner, and a 4.75:1 banner's middle third in a
+    // 16:9 card was a pair of eyes (Library's Continue card, 4 Sep) while the show had a real
+    // backdrop one level up. A banner still beats the poster composite.
+    val candidates = listOf(wideArt, within.wideArt)
+    candidates.firstOrNull { !it.portraitSource && !it.ultraWide }?.let { return it }
+    candidates.firstOrNull { !it.portraitSource }?.let { return it }
+    return WideArt.from(null, portraitArt ?: within.portraitArt)
+}
 
-public val FranchiseSummary.portraitArt: String? get() = images?.portrait ?: ArtworkSet.nonEmpty(cover)
+/**
+ * A TRUE 16:9 landscape for a 16:9 tile (the episode still's fallback): the season's, else the
+ * show's — never an AniList banner. A 4.75:1 banner filled into a 120×68 tile shows its middle
+ * third, which on production (4 Sep) was a pair of eyes eighteen times down the list.
+ */
+public fun FranchisePart.stillLandscape(within: Franchise): String? =
+    listOf(wideArt, within.wideArt).firstOrNull { !it.portraitSource && !it.ultraWide }?.url
 
-public val FranchiseSummary.landscapeArt: String? get() = images?.landscape ?: legacyBanner(banner, cover)
+public val FranchiseSummary.portraitArt: String? get() =
+    images?.portrait ?: artwork?.portraits?.firstOrNull()?.url ?: ArtworkSet.nonEmpty(cover)
+
+public val FranchiseSummary.landscapeArt: String? get() =
+    images?.landscape ?: artwork?.landscapes?.firstOrNull()?.url ?: legacyBanner(banner, cover)
 
 public val FranchiseSummary.wideArt: WideArt get() = WideArt.from(landscapeArt, portraitArt)
+
+/**
+ * The first poster the server ranked that carries no language — TMDB's textless key art. A
+ * per-surface FILTER on the server's order, not a re-rank: the billboard draws the name itself
+ * ([billboardLogo], else the title), so the selected poster's own logotype sat right under our
+ * title ("something is seriously wrong here", user, 4 Sep). Grids keep the selected poster.
+ */
+public val Franchise.textlessPortrait: String? get() = artwork?.textlessPortrait
+public val FranchiseSummary.textlessPortrait: String? get() = artwork?.textlessPortrait
+
+/**
+ * The first ranked portrait with no language tag, trusted ONLY when the gallery is tagged at all —
+ * at least one portrait carries a language. A missing tag means "textless" on a ranked gallery and
+ * means nothing on the older shape the server still sends for some rows (no scores, no sizes, no
+ * languages): Bleach's first titled poster passed as textless there and the text title landed on
+ * top of a 100-dp BLEACH logotype (5 Sep).
+ */
+public val ArtworkGallery.textlessPortrait: String?
+    get() {
+        if (portraits.none { ArtworkSet.nonEmpty(it.language) != null }) return null
+        return portraits.firstOrNull { ArtworkSet.nonEmpty(it.language) == null }?.url
+    }
+
+/**
+ * TMDB serves an image at the size named in its path, and the server hands out `w780` posters — a
+ * 780-px file that a billboard draws ~1080 px wide on a 3× phone, an upscale of the one sharp asset
+ * in the frame (measured 5 Sep; the original is 2000×3000). A billboard asks for `original`; every
+ * card keeps the size it was sent. Only TMDB paths are rewritten — AniList's CDN has no size ladder.
+ */
+public fun billboardResolution(url: String?): String? {
+    if (url == null || !url.contains("image.tmdb.org/t/p/w")) return url
+    return url.replace(Regex("/t/p/w\\d+/"), "/t/p/original/")
+}
+
+/** The show's logo treatment — the server's first-ranked logo — for the billboard's name. */
+public val Franchise.billboardLogo: ArtworkImage? get() = artwork?.logos?.firstOrNull()
+public val FranchiseSummary.billboardLogo: ArtworkImage? get() = artwork?.logos?.firstOrNull()
+
+/** What the billboard draws for the name — see [BillboardName]. */
+public val Franchise.billboardName: BillboardName
+    get() = BillboardName.resolve(portraitArt, textlessPortrait, artwork, billboardLogo)
+public val FranchiseSummary.billboardName: BillboardName
+    get() = BillboardName.resolve(portraitArt, textlessPortrait, artwork, billboardLogo)
 
 // ---------------------------------------------------------------------------------------------
 // MARK: - Videos
@@ -167,6 +318,29 @@ public data class FranchiseVideo(
     @Serializable(with = LenientStringOrNull::class) val publishedAt: String? = null,
     @Serializable(with = VideoScopeSerializer::class) val scope: Scope = Scope.Franchise,
 ) {
+    /**
+     * The provider's title without the show's name and its separator — "Game of Thrones | Official
+     * Series Trailer" under a lockup that already says the show said the name twice (i1-F6).
+     */
+    public fun titleCleanedFor(show: String?): String? {
+        var t = title?.trim().orEmpty()
+        if (t.isEmpty()) return null
+        val seps = " |-–—:·"
+        if (!show.isNullOrEmpty()) {
+            val lower = t.lowercase(); val name = show.lowercase()
+            if (lower.startsWith(name)) t = t.drop(show.length).trim { it in seps }
+            else if (lower.endsWith(name)) t = t.dropLast(show.length).trim { it in seps }
+        }
+        val bar = t.lastIndexOf(" | ")
+        if (bar >= 0 && t.length - bar - 3 <= 24) t = t.substring(0, bar)
+        // A trailing "(Provider)" credit is the provider's too, and its straight quotes are set
+        // as the app sets them (i4).
+        t = t.replace(PROVIDER_CREDIT, "")
+        t = t.replace(STRAIGHT_QUOTES) { "\u201C${it.groupValues[1]}\u201D" }
+        t = t.trim()
+        return t.ifEmpty { null }
+    }
+
     @Serializable
     public enum class Kind(public val wire: String) {
         @SerialName("trailer")
@@ -333,6 +507,15 @@ public data class CatalogPerson(
 ) {
     /** One person can appear once per role (a director who also acts). */
     public val id: String get() = "${source.wire}:$externalId:${role ?: ""}"
+
+    /** The role without a quoted nickname — "Tyrion 'The Halfman' Lannister" lost its surname to the quote (i2-10). */
+    public val displayRole: String?
+        get() {
+            val r = role ?: return null
+            val bare = r.replace(Regex("\\s*['\"\u201C\u2018][^'\"\u201D\u2019]*['\"\u201D\u2019]\\s*"), " ")
+                .replace("  ", " ").trim()
+            return if (bare.isEmpty()) r else bare
+        }
 }
 
 public object PersonListSerializer : SafeListSerializer<CatalogPerson>(CatalogPerson.serializer()) {
@@ -518,3 +701,6 @@ public object AppRegion {
             return if (code.length == 2 && code.all { it.isLetter() }) code else "US"
         }
 }
+
+private val PROVIDER_CREDIT = Regex("""\s*\([A-Za-z][\w+ ]{1,20}\)$""")
+private val STRAIGHT_QUOTES = Regex("\"([^\"]*)\"")

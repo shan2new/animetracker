@@ -601,6 +601,12 @@ public data class FranchisePart(
     @Serializable(with = LenientStringOrNull::class) val banner: String? = null,
     /** Raw catalogue format, e.g. "TV". */
     @Serializable(with = LenientStringOrNull::class) val format: String? = null,
+    /**
+     * How the catalogue relates this part to the work — "SEQUEL", "PREQUEL", "SIDE_STORY",
+     * "SPIN_OFF", "SUMMARY", "OTHER"… (AniList's relation type, as the server sends it). Read for
+     * one decision only: a spin-off is an extra, not a season (`isSpinOff`).
+     */
+    @Serializable(with = LenientStringOrNull::class) val relationship: String? = null,
     /** Raw catalogue status, e.g. "FINISHED", "NOT_YET_RELEASED". */
     @Serializable(with = LenientStringOrNull::class) val status: String? = null,
     @Serializable(with = LenientBool::class) val isReleasing: Boolean = false,
@@ -641,6 +647,8 @@ public data class FranchisePart(
     @Serializable(with = AiringListSerializer::class) val airings: List<Airing> = emptyList(),
     /** Artwork with its orientation stated. Null from a server that predates the field. */
     @Serializable(with = SafeArtworkSet::class) val images: ArtworkSet? = null,
+    /** The server's ranked alternatives per orientation (`ArtworkGallery`). Empty from an older server. */
+    @Serializable(with = SafeArtworkGallery::class) val artwork: ArtworkGallery? = null,
     /** Trailers and teasers scoped to this exact part. `[]` from an older server. */
     @Serializable(with = VideoListSerializer::class) val videos: List<FranchiseVideo> = emptyList(),
 ) {
@@ -845,6 +853,8 @@ public data class Franchise(
     // Catalogue enrichment. Every one of these is EMPTY, not absent, on a server older than the
     // field or a row the server's background pass has not reached yet.
     @Serializable(with = SafeArtworkSet::class) val images: ArtworkSet? = null,
+    /** The server's ranked alternatives per orientation (`ArtworkGallery`). Empty from an older server. */
+    @Serializable(with = SafeArtworkGallery::class) val artwork: ArtworkGallery? = null,
     /** Spoiler-screened. */
     @Serializable(with = StringListSerializer::class) val themes: List<String> = emptyList(),
     /** The server's pick. */
@@ -885,6 +895,8 @@ public data class FranchiseSummary(
     @Serializable(with = SafeUpcoming::class) val upcoming: FranchiseUpcoming? = null,
     @Serializable(with = LenientIntOrNull::class) val year: Int? = null,
     @Serializable(with = SafeArtworkSet::class) val images: ArtworkSet? = null,
+    /** The server's ranked alternatives per orientation (`ArtworkGallery`). Empty from an older server. */
+    @Serializable(with = SafeArtworkGallery::class) val artwork: ArtworkGallery? = null,
     @Serializable(with = StringListSerializer::class) val themes: List<String> = emptyList(),
     @Serializable(with = SafeVideo::class) val featuredVideo: FranchiseVideo? = null,
 

@@ -113,7 +113,7 @@ object CopySearch {
 
     // MARK: The add control
 
-    const val inLibrary = "In library"
+    const val inLibrary = "In Library"
     const val notInLibrary = "Not in library"
     const val addHint = "Adds it to your library"
     const val ownedHint = "Change its status or remove it"

@@ -12,10 +12,17 @@ struct RemoteImageView: View {
     var alignment: Alignment = .center
     /// Hosts that draw their own ground (palette tint, art backdrop) hide the opaque placeholder.
     var placeholderHidden: Bool = false
+    /// Frame aspect a near-matching `.fit` image snaps to fill against — see `CachedAsyncImage`.
+    var fitSnapAspect: CGFloat? = nil
+    /// A contact shadow under a `.fit` image — see `CachedAsyncImage.fitShadow`.
+    var fitShadow: ShadowToken? = nil
+    /// Called once the image is on screen (the launch waits for the hero's picture).
+    var onLoaded: (() -> Void)? = nil
 
     var body: some View {
         CachedAsyncImage(url: parsedURL, maxPixel: maxPixel, contentMode: contentMode,
-                         alignment: alignment, placeholderHidden: placeholderHidden)
+                         alignment: alignment, placeholderHidden: placeholderHidden,
+                         fitSnapAspect: fitSnapAspect, fitShadow: fitShadow, onLoaded: onLoaded)
     }
 
     private var parsedURL: URL? {

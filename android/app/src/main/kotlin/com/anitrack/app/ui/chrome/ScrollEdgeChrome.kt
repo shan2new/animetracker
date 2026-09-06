@@ -103,8 +103,17 @@ fun TopScrollEdgeChrome(
     height: Dp = ThemeMetrics.topChromeHeight(),
     soft: Boolean = false,
     holdHeight: Dp? = null,
+    /**
+     * The bar's ink when it is not the canvas — a show page passes its art colour
+     * (`DetailTint.chrome`) so the hardened bar is the show's own glass, not a black slab over the
+     * picture ("too blackish anyway, should be glassish", user, 4 Sep). Ignored where there is no
+     * material for a colour to be glass over.
+     */
+    ink: Color? = null,
 ) {
     val topSafeInset = ThemeMetrics.topSafeInset()
+    val canUseMaterial = LocalCanUseMaterial.current
+    val veilInk = (if (canUseMaterial) ink else null) ?: ThemeColor.chromeVeil
 
     // `hold` is a gradient STOP — a fraction of `height` — not a length.
     val hold = ((holdHeight ?: topSafeInset) / height.coerceAtLeast(1.dp)).coerceIn(0f, 1f)
@@ -113,11 +122,11 @@ fun TopScrollEdgeChrome(
     // softening what is under the veil, so it goes opaque: a 74 % veil over bare content is the
     // half-lit row under "Library" that the hardened bar was built to end.
     val bar =
-        if (LocalCanUseMaterial.current) ThemeMetrics.chromeBarOpacity
+        if (canUseMaterial) ThemeMetrics.chromeBarOpacity
         else ThemeMetrics.chromeBarOpacityOpaque
 
     val blurMask = remember(soft, hold) { topBlurMask(soft, hold) }
-    val veil = remember(soft, hold, bar) { topVeil(soft, hold, bar) }
+    val veil = remember(soft, hold, bar, veilInk) { topVeil(soft, hold, bar, veilInk) }
 
     Box(
         modifier
@@ -136,7 +145,7 @@ fun TopScrollEdgeChrome(
  *
  * All stops are [ThemeColor.chromeVeil] — the canvas itself — so the handover is invisible.
  */
-private fun topVeil(soft: Boolean, hold: Float, bar: Float): Brush = if (soft) {
+private fun topVeil(soft: Boolean, hold: Float, bar: Float, ink: Color = ThemeColor.chromeVeil): Brush = if (soft) {
     Brush.verticalGradient(
         0f to ThemeColor.chromeVeil.copy(alpha = 0.55f),
         0.5f to ThemeColor.chromeVeil.copy(alpha = 0.30f),
@@ -144,10 +153,10 @@ private fun topVeil(soft: Boolean, hold: Float, bar: Float): Brush = if (soft) {
     )
 } else {
     Brush.verticalGradient(
-        0f to ThemeColor.chromeVeil.copy(alpha = bar),
-        hold to ThemeColor.chromeVeil.copy(alpha = bar),
-        (hold + (1f - hold) * 0.45f) to ThemeColor.chromeVeil.copy(alpha = bar * 0.45f),
-        1f to ThemeColor.chromeVeil.copy(alpha = 0f),
+        0f to ink.copy(alpha = bar),
+        hold to ink.copy(alpha = bar),
+        (hold + (1f - hold) * 0.45f) to ink.copy(alpha = bar * 0.45f),
+        1f to ink.copy(alpha = 0f),
     )
 }
 

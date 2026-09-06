@@ -4,13 +4,11 @@
     <color name="canvas">#FF09090B</color>
 
     <!--
-      The LAUNCH frame, and it is deliberately not `canvas`.
-
-      iOS's `LaunchBackground.colorset` is r/g/b 0.000 — true black, for OLED continuity: the pixels
-      are off, and the splash ident's own base is the same black, so there is no step between the
-      system's launch frame and the app's first drawn frame. #09090B here would put a visible
-      colour change in front of the one frame the brand ident exists for (PLAN §4.7 states this
-      once, and errata-patches the research note that said `@color/canvas`).
+      The LAUNCH frame: the canvas, and nothing else. The platform draws its splash — the adaptive
+      icon in a disc on this colour — and `ui/shell/LaunchIdent.kt` starts from that exact picture,
+      so the ground must be `canvas` (#09090B), the colour every screen stands on: any other value
+      is a colour step on the app's very first frame. (It was true black once, for an ident that
+      had a black base of its own; that ident is gone.)
     -->
-    <color name="launch_background">#FF000000</color>
+    <color name="launch_background">#FF09090B</color>
 </resources>

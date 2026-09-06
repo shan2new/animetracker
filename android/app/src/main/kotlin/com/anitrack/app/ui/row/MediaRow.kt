@@ -44,6 +44,10 @@ import com.anitrack.app.ui.control.PressStyle
 import com.anitrack.app.ui.control.ProgressBar
 import com.anitrack.app.ui.control.SymbolIcon
 import com.anitrack.app.ui.isAccessibilityTextSize
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 
 /**
  * Width a list reserves along its trailing edge for chrome that floats over it — today that is
@@ -118,6 +122,8 @@ fun MediaRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     meta: String? = null,
+    /** A forward fact appended to [meta] in accent, on the same line (i1-F10). */
+    metaLead: String? = null,
     lead: String? = null,
     poster: String? = null,
     slot: PosterSize = PosterSize.Row,
@@ -201,7 +207,10 @@ fun MediaRow(
             }
             if (meta != null) {
                 BasicText(
-                    text = meta,
+                    text = if (metaLead == null) AnnotatedString(meta) else buildAnnotatedString {
+                        append(meta); append(" · ")
+                        withStyle(SpanStyle(color = ThemeColor.accent)) { append(metaLead) }
+                    },
                     style = ThemeType.rowMeta.copy(color = ThemeColor.textSecondary),
                     modifier = Modifier.wrapContentHeight(align = Alignment.Top, unbounded = true),
                 )

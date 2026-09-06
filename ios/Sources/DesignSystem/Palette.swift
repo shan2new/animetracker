@@ -11,13 +11,29 @@ import UIKit
 final class PaletteCache {
     static let shared = PaletteCache()
     private var cache: [String: Color] = [:]
-    private var inFlight: Set<String> = []
+    /// The art's mean OKLab lightness (0…1), filled by the same extraction as the tint. The
+    /// hero's protection scales with it (`HeroProtection`): a veil drawn for a bright cover
+    /// buries a dark one ("the overlay on hero is too dark as the new images are themselves
+    /// dark", user, 5 Sep).
+    private var lightness: [String: Double] = [:]
+    /// One resolve per URL at a time; a second caller AWAITS the first instead of being told
+    /// "not available". The old `Set` answered the second caller with `cache[url]` — nil — and
+    /// `resolve` turned that into the neutral fallback for good: Detail asks for the same poster
+    /// twice (`tint` and `heroTint`, since the billboard went portrait-first), and its hardened
+    /// bar came out the ember's warm grey on every show (measured (31,29,27) three times, 4 Sep).
+    private var inFlight: [String: Task<Color?, Never>] = [:]
 
     nonisolated static let fallback = Color(hex: 0x1C1A17)   // neutral warm surface
 
     func tint(for url: String?) -> Color? {
         guard let url else { return nil }
         return cache[url]
+    }
+
+    /// The art's mean lightness, once its tint has been resolved; nil before.
+    func lightness(for url: String?) -> Double? {
+        guard let url else { return nil }
+        return lightness[url]
     }
 
     /// Resolves the tint for `url`, using the already-decoded poster when the image cache has it.
@@ -31,41 +47,50 @@ final class PaletteCache {
     func resolveIfAvailable(url: String?, maxPixel: CGFloat) async -> Color? {
         guard let url, !url.isEmpty else { return nil }
         if let hit = cache[url] { return hit }
-        guard !inFlight.contains(url) else { return cache[url] }
-        inFlight.insert(url)
-        defer { inFlight.remove(url) }
-        guard let u = URL(string: url) else { return nil }
-        let image: UIImage?
-        if let cached = ImageCache.shared.image(for: u, atLeast: maxPixel) {
-            image = cached
-        } else {
-            image = try? await ImageLoader.shared.image(for: u, maxPixel: maxPixel)
+        if let running = inFlight[url] { return await running.value }
+        let task = Task<Color?, Never> { [self] in
+            guard let u = URL(string: url) else { return nil }
+            let image: UIImage?
+            if let cached = ImageCache.shared.image(for: u, atLeast: maxPixel) {
+                image = cached
+            } else {
+                image = try? await ImageLoader.shared.image(for: u, maxPixel: maxPixel)
+            }
+            guard let image else { return nil }
+            let analysed = await Task.detached(priority: .utility) { PaletteCache.analyse(image) }.value
+            self.cache[url] = analysed.tint
+            self.lightness[url] = analysed.lightness
+            return analysed.tint
         }
-        guard let image else { return nil }
-        let color = await Task.detached(priority: .utility) { PaletteCache.dominantTint(of: image) }.value
-        cache[url] = color
-        return color
+        inFlight[url] = task
+        defer { inFlight[url] = nil }
+        return await task.value
     }
 
     // MARK: - Extraction (runs off-main)
 
-    nonisolated static func dominantTint(of image: UIImage) -> Color {
-        guard let cg = image.cgImage else { return fallback }
+    nonisolated static func dominantTint(of image: UIImage) -> Color { analyse(image).tint }
+
+    /// The dominant tint and the mean OKLab lightness of the picture, from one 32×32 sample.
+    nonisolated static func analyse(_ image: UIImage) -> (tint: Color, lightness: Double) {
+        guard let cg = image.cgImage else { return (fallback, 0.5) }
         let w = 32, h = 32
         var pixels = [UInt8](repeating: 0, count: w * h * 4)
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return fallback }
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return (fallback, 0.5) }
         ctx.interpolationQuality = .medium
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
 
         // Bucket candidate colours in OKLab, weighted by population; skip near-black, near-white,
         // transparent and neutral pixels.
         var buckets: [Int: (l: Double, a: Double, b: Double, n: Int)] = [:]
+        var lightSum = 0.0, lightCount = 0
         for i in stride(from: 0, to: pixels.count, by: 4) {
             let alpha = Double(pixels[i + 3]) / 255
             guard alpha >= 0.8 else { continue }
             let (l, a, b) = oklab(r: Double(pixels[i]) / 255, g: Double(pixels[i + 1]) / 255, b: Double(pixels[i + 2]) / 255)
+            lightSum += l; lightCount += 1
             guard l >= 0.08, l <= 0.92 else { continue }
             let chroma = (a * a + b * b).squareRoot()
             guard chroma >= 0.035 else { continue }
@@ -76,7 +101,8 @@ final class PaletteCache {
             e.l += l; e.a += a; e.b += b; e.n += 1
             buckets[key] = e
         }
-        guard let best = buckets.values.max(by: { $0.n < $1.n }), best.n > 0 else { return fallback }
+        let meanLightness = lightCount > 0 ? lightSum / Double(lightCount) : 0.5
+        guard let best = buckets.values.max(by: { $0.n < $1.n }), best.n > 0 else { return (fallback, meanLightness) }
         var l = best.l / Double(best.n), a = best.a / Double(best.n), bb = best.b / Double(best.n)
         // Clamp lightness and chroma, and lean the hue toward the brand's warmth so the app's
         // atmosphere never swings olive or steel from tab to tab.
@@ -100,7 +126,7 @@ final class PaletteCache {
             a = ua / un * cc; bb = ub / un * cc
         }
         let (r, g, b2) = srgb(l: l, a: a, b: bb)
-        return Color(.sRGB, red: r, green: g, blue: b2, opacity: 1)
+        return (Color(.sRGB, red: r, green: g, blue: b2, opacity: 1), meanLightness)
     }
 
     // sRGB ↔ OKLab (Björn Ottosson).
@@ -185,6 +211,21 @@ struct ArtBackdrop: View {
     /// fallback. The branded ember renders immediately; the artwork palette replaces it later.
     private var base: Color { tint ?? resolvedTint ?? ThemeColor.ambientBackdropFallback }
 
+    /// The blurred artwork is (about to be) contributing luminance to the band — the palette
+    /// resolve completes off the same decode the image view draws from.
+    private var artSettled: Bool { resolvedTint != nil }
+
+    /// The pre-art frame's strength. `ambientBackdropFallback` was made "visibly warmer than
+    /// canvas" for exactly this moment — but that fix was applied at Detail's intensity 1. At a
+    /// list root's 0.4 the same ember composites to ~rgb(38,36,32) on device: the status band
+    /// reads BLACK for the whole first load, then jumps to twice the luminance when the art
+    /// decodes (user, 30 Aug — "black, then it becomes flush"). Until the art is actually
+    /// contributing, the base gradient holds a floor independent of `intensity`, so the wash
+    /// looks like the wash from frame one; the art then arrives as a hue shift, not a light
+    /// switching on. Relaxation is animated (`uiGentle`) with the palette handover.
+    private var baseTop: Double { artSettled ? 0.60 * intensity : max(0.60 * intensity, 0.55) }
+    private var baseMid: Double { artSettled ? 0.10 * intensity : max(0.10 * intensity, 0.12) }
+
     var body: some View {
         ZStack(alignment: .top) {
             if let url, !url.isEmpty {
@@ -192,17 +233,18 @@ struct ArtBackdrop: View {
                 // fill its frame samples whatever corner the image happened to land in — which is
                 // why Profile drew no image at all — and it is why the wash lost its warmth even
                 // where an image was present.
-                RemoteImageView(url: url, contentMode: .fill, maxPixel: 320,
-                                placeholderHidden: true)
+                // A pre-blurred bitmap (`BlurredArt`), not `.blur(radius: 56)` on the layer:
+                // that was a Gaussian pass over a screen-wide texture on every scroll frame of
+                // every root screen.
+                BlurredArt(url: url, sourceMaxPixel: 320, fraction: 0.14)
                     .frame(maxWidth: .infinity)
                     .frame(height: height)
                     .clipped()
-                    .blur(radius: 56, opaque: true)
                     // No `.saturation(0.85)`: the tint clamp already holds chroma in a narrow band,
                     // so desaturating on top of it is subtracting the one thing the wash is for.
                     .opacity(0.70 * intensity)
             }
-            LinearGradient(colors: [base.opacity(0.60 * intensity), base.opacity(0.10 * intensity), .clear],
+            LinearGradient(colors: [base.opacity(baseTop), base.opacity(baseMid), .clear],
                            startPoint: .top, endPoint: .bottom)
             // A constant breath of the brand's warmth under every wash, so Schedule, Search and
             // Profile share one atmosphere instead of borrowing a different hue from whichever
@@ -220,6 +262,9 @@ struct ArtBackdrop: View {
         .frame(height: height)
         .frame(maxWidth: .infinity)
         .clipped()
+        // The floor relaxing and the fallback→palette hue handover ride one gentle fade — the
+        // snap between them was half of the "black, then flush" jump.
+        .animation(ThemeMotion.uiGentle, value: resolvedTint)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .task(id: url) {

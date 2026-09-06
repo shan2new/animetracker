@@ -20,6 +20,10 @@ private struct PageInTransition: ViewModifier {
     /// 6, not 10: at 10 the first landing reads as content sliding into place, which is a loading
     /// beat; at 6 it reads as the screen coming into focus.
     var travel: CGFloat = 6
+    /// Whether the entrance fades. The launch's arrival is revealed by the ident's ground
+    /// lifting, so the content itself only rises: an opacity ramp over the whole hero tree is an
+    /// offscreen pass on every frame, and it cost the launch's flight its frames.
+    var fadeIn = true
     @State private var shown = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -31,7 +35,7 @@ private struct PageInTransition: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .opacity(shown ? 1 : 0)
+            .opacity(shown || !fadeIn ? 1 : 0)
             // Under Reduce Motion the entrance is a pure crossfade: nothing travels.
             .offset(y: shown || reduceMotion ? 0 : travel)
             // `shown` is never reset — that's the once-only guarantee.
@@ -46,7 +50,7 @@ private struct PageInTransition: ViewModifier {
 extension View {
     /// Applies the shared page-in entrance to a main tab's content, once per tab. `isActive` is
     /// whether this tab is currently selected. See `PageInTransition`.
-    func pageInTransition(isActive: Bool, travel: CGFloat = 6) -> some View {
-        modifier(PageInTransition(isActive: isActive, travel: travel))
+    func pageInTransition(isActive: Bool, travel: CGFloat = 6, fadeIn: Bool = true) -> some View {
+        modifier(PageInTransition(isActive: isActive, travel: travel, fadeIn: fadeIn))
     }
 }

@@ -268,7 +268,7 @@ object LibraryDates {
  * A fact never appears in both, and a section's own heading is never repeated in the row under it.
  */
 @Immutable
-data class LibraryRowFacts(val lead: String? = null, val meta: String? = null) {
+data class LibraryRowFacts(val lead: String? = null, val meta: String? = null, val metaLead: String? = null) {
 
     companion object {
 
@@ -370,7 +370,9 @@ data class LibraryRowFacts(val lead: String? = null, val meta: String? = null) {
             val fact = ReturnFact.of(f, now)
             if (fact.dated && LibraryShelving.section(f, appModel) == LibrarySection.RETURNING) {
                 return if (fact.soon) {
-                    LibraryRowFacts(lead = fact.text, meta = stateMeta())
+                    // The state and the date on ONE line, the date in accent (i1-F10).
+                    if (compact || stateMeta() == null) LibraryRowFacts(lead = fact.text)
+                    else LibraryRowFacts(meta = stateMeta(), metaLead = fact.text)
                 } else {
                     LibraryRowFacts(meta = joined(fact.text))
                 }

@@ -977,6 +977,7 @@ private fun TitleList(
                         onClick = { onOpenDetail(franchise.id) },
                         modifier = Modifier.padding(horizontal = ThemeMetrics.gutter),
                         meta = facts.meta,
+                        metaLead = facts.metaLead,
                         lead = facts.lead,
                         poster = franchise.portraitArt,
                         slot = PosterSize.Row,

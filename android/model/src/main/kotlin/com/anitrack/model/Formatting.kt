@@ -396,8 +396,9 @@ object Formatting {
         val h = s / H
         s -= h * H
         val m = s / MINUTE_MS
-        if (d > 0) return "${d}d ${h}h"
-        if (h > 0) return "${h}h ${m}m"
+        // A zero unit is dropped: "in 1h", not "in 1h 0m" (4 Sep, mirrored from iOS).
+        if (d > 0) return if (h > 0) "${d}d ${h}h" else "${d}d"
+        if (h > 0) return if (m > 0) "${h}h ${m}m" else "${h}h"
         return "${m}m"
     }
 

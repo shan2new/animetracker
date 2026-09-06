@@ -60,6 +60,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.graphics.graphicsLayer
@@ -140,6 +141,7 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import com.anitrack.app.data.ReceiptHost
 
 // =====================================================================================
 // SCHEDULE — the agenda.
@@ -257,7 +259,6 @@ object ScheduleReminders {
  */
 @Immutable
 data class ScheduleDebugState(
-    val earlierExpanded: Boolean = false,
     val typeFilter: MediaFilter = MediaFilter.ALL,
     val hideWatched: Boolean = false,
 )
@@ -275,7 +276,6 @@ private fun rememberScheduleDebugState(): ScheduleDebugState {
             intent.getBooleanExtra(name, false) ||
                 TRUTHY_EXTRA_VALUES.contains(intent.getStringExtra(name).orEmpty())
         ScheduleDebugState(
-            earlierExpanded = flag("scheduleEarlier"),
             typeFilter = when (intent.getStringExtra("scheduleFilter")) {
                 "anime" -> MediaFilter.ANIME
                 "tv" -> MediaFilter.TV
@@ -514,15 +514,13 @@ private fun computeDerived(
 // mapped back with `dayOf`. `.earlier` deliberately reports NO day: "Only the Earlier row on screen
 // means today is next under it."
 
-private const val KEY_EARLIER = "earlier"
 private const val PREFIX_DAY = "day:"
 private const val PREFIX_EMPTY_DAY = "empty:"
 private const val PREFIX_ROW = "row:"
 
 /** Whether this key is one of the agenda targets the ticker follows. */
 private fun isAgendaKey(key: String): Boolean =
-    key == KEY_EARLIER ||
-        key.startsWith(PREFIX_DAY) ||
+    key.startsWith(PREFIX_DAY) ||
         key.startsWith(PREFIX_EMPTY_DAY) ||
         key.startsWith(PREFIX_ROW)
 
@@ -565,11 +563,7 @@ private sealed interface FeedItem {
         override val key: String = "freshness"
     }
 
-    data object EarlierRow : FeedItem {
-        override val key: String = KEY_EARLIER
-    }
-
-    data class DayHeader(val day: DayView) : FeedItem {
+    data class DayHeader(val day: DayView, val previousIsEmpty: Boolean = false) : FeedItem {
         override val key: String = "$PREFIX_DAY${day.id}"
     }
 
@@ -595,7 +589,8 @@ private fun buildFeed(
     phase: SchedulePhase,
     online: Boolean,
     hasFreshness: Boolean,
-    earlierExpanded: Boolean,
+    pinnedEmptyDay: Int?,
+    todayNoon: Long,
     isAX: Boolean,
     filterActive: Boolean,
 ): List<FeedItem> {
@@ -624,24 +619,23 @@ private fun buildFeed(
         return out
     }
     if (derived.shownEmpty && filterActive) {
-        out.add(FeedItem.Whole(state = Copy.Empty.noFilterMatches, action = WholeAction.CLEAR_FILTERS))
+        out.add(FeedItem.Whole(state = Copy.Empty.noScheduleMatches, action = WholeAction.CLEAR_FILTERS))
         return out
     }
 
-    if (derived.earlier.isNotEmpty()) {
-        out.add(FeedItem.EarlierRow)
-        if (earlierExpanded) {
-            for (day in derived.earlier) {
-                out.add(FeedItem.DayHeader(day))
-                day.rows.forEachIndexed { i, r ->
-                    out.add(FeedItem.Card(day.id, r, last = i == day.rows.lastIndex))
-                }
-            }
-        }
+    // The past, then today (always), then what is ahead — one agenda, no fold (4 Sep; the "Earlier"
+    // row and its "3 to watch" were one of the three confusions named). Plus the one empty day the
+    // reader picked on the strip, drawn as a section that says "Nothing scheduled" so the pick
+    // lands somewhere.
+    val days = ArrayList(derived.earlier + derived.ahead)
+    if (pinnedEmptyDay != null && pinnedEmptyDay != 0 && days.none { it.id == pinnedEmptyDay }) {
+        days.add(DayView(id = pinnedEmptyDay, noon = todayNoon + pinnedEmptyDay * Formatting.D, rows = emptyList()))
+        days.sortBy { it.id }
     }
-
-    for (day in derived.ahead) {
-        out.add(FeedItem.DayHeader(day))
+    days.forEachIndexed { i, day ->
+        // An empty day is a header with no body: the next day closes up to x4 under it (i2), or
+        // the two headers sat a whole section gap apart with nothing between them.
+        out.add(FeedItem.DayHeader(day, previousIsEmpty = i > 0 && days[i - 1].isEmpty))
         if (day.isEmpty) {
             // At reading sizes the statement lives in the header's count slot, on its own baseline.
             if (isAX) out.add(FeedItem.EmptyDay(day))
@@ -699,7 +693,13 @@ fun ScheduleScreen(
 
     var typeFilter by rememberSaveable { mutableStateOf(debug.typeFilter) }
     var unwatchedOnly by rememberSaveable { mutableStateOf(debug.hideWatched) }
-    var earlierExpanded by rememberSaveable { mutableStateOf(debug.earlierExpanded) }
+    /**
+     * A day the reader picked on the strip that has nothing on it: drawn as an empty section so the
+     * pick lands somewhere — every strip day is a target now (4 Sep). [pendingPick] carries the
+     * scroll until the feed has rebuilt with that section in it.
+     */
+    var pinnedEmptyDay by rememberSaveable { mutableStateOf<Int?>(null) }
+    var pendingPick by remember { mutableStateOf<Int?>(null) }
     /** Row ids whose mark is animating. */
     var committed by remember { mutableStateOf(emptySet<String>()) }
     var prompt by remember { mutableStateOf<WritePrompt?>(null) }
@@ -748,14 +748,15 @@ fun ScheduleScreen(
     val hasFreshness = phase == SchedulePhase.CONTENT && (appModel.sectionFailed || staleSince != null)
     val online = SyncCenter.isOnline
 
-    val feed = remember(derived, phase, online, hasFreshness, earlierExpanded, isAX, filterActive) {
-        buildFeed(derived, phase, online, hasFreshness, earlierExpanded, isAX, filterActive)
+    val todayNoon = appModel.scheduleTodayNoon
+    val feed = remember(derived, phase, online, hasFreshness, pinnedEmptyDay, todayNoon, isAX, filterActive) {
+        buildFeed(derived, phase, online, hasFreshness, pinnedEmptyDay, todayNoon, isAX, filterActive)
     }
 
     // "The reader is somewhere other than today's section. Measured against TODAY (day 0), which is
     // always in the feed — never against 'the first day that carries something', which on a quiet
     // day is not today and made this read `false` while Wednesday filled the screen."
-    val awayFromToday = selectedDay != 0 || (earlierExpanded && selectedDay < 0)
+    val awayFromToday = selectedDay != 0
 
     // ---- Scrolling -------------------------------------------------------------------
 
@@ -783,10 +784,7 @@ fun ScheduleScreen(
 
     fun goToToday() {
         FeedbackCoordinator.fire(FeedbackToken.SELECTION)
-        // "Back to the top of what is ahead: the Earlier row while it is folded (today sits right
-        // under it), today's own section once the past has been opened."
-        val key = if (earlierExpanded || derived.earlier.isEmpty()) "${PREFIX_DAY}0" else KEY_EARLIER
-        scrollTo(key, day = 0)
+        scrollTo("${PREFIX_DAY}0", day = 0)
     }
 
     // The system reports which targets are on screen; the earliest day among them is the section at
@@ -815,13 +813,25 @@ fun ScheduleScreen(
         }
     }
 
-    // The landing. The FEED never scrolls: the Earlier row (or today's section) is already its first
-    // item, so nothing moves — only the ticker is repositioned, un-animated, so today is its first
-    // visible cell and the past sits off the leading edge.
-    LaunchedEffect(derived.feedKey, showsWholeScreenState) {
+    // The landing: the feed opens on TODAY — no longer its first item, now that the past sits above
+    // it — un-animated, with the ticker's first visible cell today and the past off the leading edge.
+    LaunchedEffect(derived.feedKey, showsWholeScreenState, feed) {
         if (userScrolled || library.isEmpty() || showsWholeScreenState) return@LaunchedEffect
         tickerState.scrollToItem(-AppModel.SCHEDULE_BACK)
+        val index = feed.indexOfFirst { it.key == "${PREFIX_DAY}0" }
+        if (index >= 0) listState.scrollToItem(index)
         if (selectedDay != 0) selectedDay = 0
+    }
+
+    // A strip tap on an empty day: the section is pinned into the feed first; the scroll follows
+    // once the feed has rebuilt with it.
+    LaunchedEffect(feed, pendingPick) {
+        val pick = pendingPick ?: return@LaunchedEffect
+        val key = "$PREFIX_DAY$pick"
+        if (feed.any { it.key == key }) {
+            pendingPick = null
+            scrollTo(key, day = pick)
+        }
     }
 
     LaunchedEffect(Unit) { ScheduleReminders.refresh() }
@@ -849,7 +859,8 @@ fun ScheduleScreen(
         val part = row.part
         if (!batch) {
             val undo = appModel.markNext(franchiseId = f.id, mediaId = part.mediaId) ?: return
-            commit(row) { appModel.presentUndo(undo) }
+            // In place, under the card's caption.
+            commit(row) { appModel.presentUndo(undo, host = ReceiptHost.schedule(part.mediaId, row.episode)) }
             return
         }
         // Marking this row would skip at least one episode, so it confirms with the exact count.
@@ -868,7 +879,7 @@ fun ScheduleScreen(
                     episode = row.episode,
                     present = false,
                 )
-                if (undo != null) commit(row) { appModel.presentUndo(undo) }
+                if (undo != null) commit(row) { appModel.presentUndo(undo, host = ReceiptHost.schedule(part.mediaId, row.episode)) }
             },
         )
     }
@@ -896,21 +907,20 @@ fun ScheduleScreen(
                     onToday = { goToToday() },
                     onPickDay = { offset ->
                         FeedbackCoordinator.fire(FeedbackToken.SELECTION)
-                        // "Every enabled cell now has a section to land on: a day carries rows, or
-                        // it is today, which renders empty rather than being skipped."
-                        if (offset < 0) earlierExpanded = true
-                        scrollTo("$PREFIX_DAY$offset", day = offset)
+                        // Every cell is a target: a day with a section lands on it; an empty one
+                        // gets a section pinned for it first.
+                        val key = "$PREFIX_DAY$offset"
+                        if (feed.any { it.key == key }) {
+                            scrollTo(key, day = offset)
+                        } else {
+                            pinnedEmptyDay = offset
+                            pendingPick = offset
+                        }
                     },
                     // The haptic fires from the MUTATION, not from an observer, so one transaction
                     // is one haptic.
-                    onTypeFilter = {
-                        typeFilter = it
-                        FeedbackCoordinator.fire(FeedbackToken.SELECTION)
-                    },
-                    onHideWatched = {
-                        unwatchedOnly = it
-                        FeedbackCoordinator.fire(FeedbackToken.SELECTION)
-                    },
+                    onTypeFilter = { typeFilter = it },
+                    onHideWatched = { unwatchedOnly = it },
                 )
 
                 PreviouslyPullToRefresh(
@@ -944,7 +954,6 @@ fun ScheduleScreen(
                                     dates = dates,
                                     staleSince = staleSince,
                                     viewportHeight = viewportHeight,
-                                    earlierExpanded = earlierExpanded,
                                     isAX = isAX,
                                     reduceMotion = reduceMotion,
                                     committed = committed,
@@ -962,10 +971,6 @@ fun ScheduleScreen(
                                         onOpenDetail(r.franchise.id, r.part.mediaId, r.episode)
                                     },
                                     onMark = { r, batch -> mark(r, batch) },
-                                    onToggleEarlier = {
-                                        FeedbackCoordinator.fire(FeedbackToken.SELECTION)
-                                        earlierExpanded = !earlierExpanded
-                                    },
                                     onRetry = { scope.launch { appModel.reload() } },
                                     onAddShow = onAddShow,
                                     onClearFilters = {
@@ -1425,6 +1430,10 @@ private fun Ticker(
  *  * **The top line.** "The first of a month names the month where its weekday letter would go — the
  *    numerals alone cannot say that '2' comes after '31'."
  */
+/** The selected ticker cell's ring — the day at the top of the feed. */
+private val ringColor = ThemeColor.strokeStrong
+private val ringWidth = 1.5.dp
+
 @Composable
 private fun TickerCell(
     offset: Int,
@@ -1438,13 +1447,15 @@ private fun TickerCell(
     val parts = remember(ts) { Formatting.localParts(ts) }
     val isToday = offset == 0
     val past = offset < 0
-    val enabled = count > 0 || isToday
+    // The day you are LOOKING AT is a ring; today is the filled disc. Every cell is a target.
+    val ring = selected && !isToday
 
     val top = remember(ts) {
         if (parts.d == 1) {
             monthWord(ts)
         } else {
-            Formatting.weekdayLetterMonFirst(Formatting.localMondayCol(ts))
+            // Three letters (i2-13): a rolling window from today opened "S S M T W T F S".
+            Formatting.weekdayShortMonFirst(Formatting.localMondayCol(ts)).uppercase()
         }
     }
 
@@ -1454,11 +1465,7 @@ private fun TickerCell(
         label = "tickerCellFade",
     )
     val disc = animateColorAsState(
-        targetValue = when {
-            isToday -> ThemeColor.accent
-            selected -> ThemeColor.surfaceRaised
-            else -> Color.Transparent
-        },
+        targetValue = if (isToday) ThemeColor.accent else Color.Transparent,
         animationSpec = motion(MotionToken.UI_MICRO),
         label = "tickerCellDisc",
     )
@@ -1486,7 +1493,6 @@ private fun TickerCell(
                 // `TickerCellPressStyle` also dims to 0.7; the compression is the half that carries
                 // the feedback, and a second press feel for one control is what this token prevents.
                 indication = PressStyle.control,
-                enabled = enabled,
                 role = Role.Button,
                 onClick = onPick,
             )
@@ -1509,17 +1515,16 @@ private fun TickerCell(
                 .size(ScheduleMetrics.numeralMin)
                 // Read in the DRAW phase: a selection change costs one node's draw, not the strip's
                 // recomposition.
-                .drawBehind { drawCircle(disc.value) },
+                .drawBehind {
+                    drawCircle(disc.value)
+                    if (ring) drawCircle(color = ringColor, style = Stroke(width = ringWidth.toPx()))
+                },
             contentAlignment = Alignment.Center,
         ) {
             AutoSizeText(
                 text = parts.d.toString(),
                 style = ThemeType.time.copy(
-                    color = when {
-                        isToday -> ThemeColor.onAccent
-                        enabled -> ThemeColor.textPrimary
-                        else -> ThemeColor.textSecondary
-                    },
+                    color = if (isToday) ThemeColor.onAccent else ThemeColor.textPrimary,
                 ),
                 minScale = ScheduleMetrics.NUMERAL_MIN_SCALE,
                 maxLines = 1,
@@ -1588,14 +1593,12 @@ private fun FeedRow(
     dates: CopyDates,
     staleSince: Long?,
     viewportHeight: Dp,
-    earlierExpanded: Boolean,
     isAX: Boolean,
     reduceMotion: Boolean,
     committed: Set<String>,
     modifier: Modifier,
     onOpen: (ScheduleRow) -> Unit,
     onMark: (ScheduleRow, Boolean) -> Unit,
-    onToggleEarlier: () -> Unit,
     onRetry: () -> Unit,
     onAddShow: () -> Unit,
     onClearFilters: () -> Unit,
@@ -1637,17 +1640,9 @@ private fun FeedRow(
             }
         }
 
-        FeedItem.EarlierRow -> EarlierRow(
-            count = derived.earlierCount,
-            unwatched = derived.earlierUnwatched,
-            expanded = earlierExpanded,
-            isAX = isAX,
-            onToggle = onToggleEarlier,
-            modifier = modifier,
-        )
-
         is FeedItem.DayHeader -> DayHeader(
             day = item.day,
+            previousIsEmpty = item.previousIsEmpty,
             emptyText = emptyDayText(derived),
             isAX = isAX,
             modifier = modifier,
@@ -1725,10 +1720,10 @@ private fun CardRow(
             time = time,
             aired = row.aired,
             watched = watched,
-            dateOnly = row.dateOnly,
             hasReminder = hasReminder,
             onOpen = { onOpen(row) },
             modifier = slot,
+            receiptHost = ReceiptHost.schedule(row.part.mediaId, row.episode),
         ) {
             // The optimistic write lands in the same update as the commit, so the observed behaviour
             // on a mark is the REMOVAL branch: the ring fades out over 160 ms while the tick badge
@@ -1742,8 +1737,10 @@ private fun CardRow(
                     marked = watched,
                     onMark = { if (!watched) onMark(row, batch) },
                     // Quiet, never filled: twenty filled amber discs down one column turn a rhythm
-                    // into a scoreboard.
+                    // into a scoreboard. With its numeral, as Today's queue draws it: a bare ring
+                    // beside a title was "unexplained" (user, 4 Sep).
                     style = MarkRingStyle.Quiet,
+                    episode = row.episode,
                     // The table owns this label, and `MarkRing` reads the same entry for the
                     // identical control on every other screen: one control, one name. It used to be
                     // assembled from typed English here, so the ring was "Mark Episode 21 of
@@ -1816,6 +1813,7 @@ private fun metaLine(row: ScheduleRow): String {
 private fun DayHeader(
     day: DayView,
     emptyText: String,
+    previousIsEmpty: Boolean = false,
     isAX: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -1848,7 +1846,10 @@ private fun DayHeader(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = ThemeMetrics.gutter)
-            .padding(top = ThemeMetrics.sectionGap, bottom = ThemeMetrics.labelGap)
+            .padding(
+                top = if (previousIsEmpty) ThemeSpace.x4 else ThemeMetrics.sectionGap,
+                bottom = if (day.isEmpty) 0.dp else ThemeMetrics.labelGap,
+            )
             // Children ignored: the header is one element carrying one sentence, marked as a heading
             // so the heading rotor can skim the agenda a day at a time.
             .clearAndSetSemantics {
@@ -1892,102 +1893,6 @@ private fun DayHeader(
     }
 }
 
-/**
- * The Earlier fold — aired days collapsed behind one 44-dp row above today, "so the screen opens on
- * what is ahead and still lets the reader check what they missed".
- *
- * The type family is the DAY-LABEL family, not the section-title family: "it was the section-title
- * family while the day headers were, and followed them out of it, so the show's title is the only
- * title here."
- *
- * At accessibility sizes the label and its count reflow onto two lines rather than truncating the
- * count away — "'EARLIER 3 episodes · 1 to…' hid the only number on the row that says whether
- * opening it is worth it."
- */
-@Composable
-private fun EarlierRow(
-    count: Int,
-    unwatched: Int,
-    expanded: Boolean,
-    isAX: Boolean,
-    onToggle: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    // "'3 to watch' while every earlier episode is still unwatched, '3 episodes' once none is, and
-    // both only when they differ — '3 episodes · 3 to watch' said one number twice."
-    val meta = when {
-        unwatched == 0 -> Copy.episodes(count)
-        unwatched == count -> Copy.Schedule.toWatch(unwatched)
-        else -> "${Copy.episodes(count)} · ${Copy.Schedule.toWatch(unwatched)}"
-    }
-    val rotation = animateFloatAsState(
-        targetValue = if (expanded) 90f else 0f,
-        animationSpec = motion(MotionToken.UI_MICRO),
-        label = "earlierChevron",
-    )
-    val spoken = "${Copy.Schedule.earlier}, $meta"
-    val hint = if (expanded) Copy.Schedule.hideEarlier else Copy.Schedule.showEarlier
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(
-                interactionSource = null,
-                indication = PressStyle.row(ThemeRadius.row),
-                role = Role.Button,
-                onClick = onToggle,
-            )
-            .semantics(mergeDescendants = true) {
-                contentDescription = spoken
-                onClick(label = hint) { onToggle(); true }
-            }
-            .defaultMinSize(minHeight = minimumTapTarget)
-            .padding(horizontal = ThemeMetrics.gutter)
-            .padding(vertical = if (isAX) ThemeSpace.x2 else 0.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        if (isAX) {
-            Column(verticalArrangement = Arrangement.spacedBy(ThemeSpace.x1)) {
-                SectionLabel(text = Copy.Schedule.earlier, tint = ThemeColor.textSecondary)
-                SectionLabel(
-                    text = "· $meta",
-                    tint = if (unwatched > 0) ThemeColor.textSecondary else ThemeColor.textTertiary,
-                )
-            }
-        } else {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f, fill = false),
-                    horizontalArrangement = Arrangement.spacedBy(ScheduleMetrics.labelInnerGap),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SectionLabel(text = Copy.Schedule.earlier, tint = ThemeColor.textSecondary)
-                    SectionLabel(
-                        text = "· $meta",
-                        tint = if (unwatched > 0) {
-                            ThemeColor.textSecondary
-                        } else {
-                            ThemeColor.textTertiary
-                        },
-                    )
-                }
-                Spacer(Modifier.width(ThemeSpace.x2))
-                Image(
-                    imageVector = rememberSymbol(PreviouslyIcons.ChevronRight),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(materialGlyphBox(ScheduleMetrics.earlierChevron))
-                        .graphicsLayer { rotationZ = rotation.value },
-                    colorFilter = ColorFilter.tint(ThemeColor.textTertiary),
-                )
-            }
-        }
-    }
-}
 
 /**
  * The end of the horizon — and it NAMES the horizon, which is now true, because the feed holds every

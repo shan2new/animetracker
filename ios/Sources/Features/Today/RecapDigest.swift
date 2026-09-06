@@ -63,7 +63,7 @@ struct RecapDigest: Equatable {
             if let last = part.lastAiredAt, last > since, part.episodesBehind > 0 {
                 let count = min(part.episodesBehind, max(1, part.airedEpisodes - (part.progress)))
                 newEpisodeTitles += 1
-                beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.cover, source: f.source,
+                beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
                                        kind: .episodesAired(count: count, latest: part.airedEpisodes),
                                        score: count == 1 ? 5 : 3))
                 continue
@@ -71,14 +71,14 @@ struct RecapDigest: Equatable {
             // A title returning after a long gap, within 48 hours.
             if let next = f.nextAiring(now: now), next - now <= returningWindow,
                let last = part.lastAiredAt, now - last >= returningGap {
-                beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.cover, source: f.source,
+                beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
                                        kind: .returning(at: next), score: 4))
             }
         }
         // Announced return dates within 30 days for shows you're not mid-way through.
         for f in library where f.effectiveStatus == .completed {
             if let premiere = f.parts.compactMap(\.premiereAt).filter({ $0 > now }).min(), premiere - now <= announcedWindow {
-                beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.cover, source: f.source,
+                beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
                                        kind: .returnDateAnnounced(at: premiere), score: 3))
             }
         }
@@ -106,7 +106,7 @@ struct RecapDigest: Equatable {
         let candidates = library.filter { $0.effectiveStatus == .watching }
         guard !candidates.isEmpty else { return nil }
         let beats = candidates.prefix(2).enumerated().map { i, f in
-            RecapBeat(franchiseId: f.id, title: f.title, cover: f.cover, source: f.source,
+            RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
                       kind: .episodesAired(count: 1, latest: f.resumePart.map { $0.progress + 1 } ?? 1),
                       score: 5 - i)
         }

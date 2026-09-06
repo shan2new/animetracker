@@ -1,0 +1,53 @@
+{
+  "fill": {
+    "automatic-gradient": "display-p3:0.08627,0.07059,0.06667,1.00000"
+  },
+  "groups": [
+    {
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.7
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.3
+      },
+      "blur": 0,
+      "layers": [
+        {
+          "name": "period",
+          "image-name": "period.png",
+          "glass": true
+        }
+      ]
+    },
+    {
+      "lighting": "individual",
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.6
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.15
+      },
+      "blur": 0,
+      "layers": [
+        {
+          "name": "ribbon",
+          "image-name": "ribbon.png",
+          "glass": true
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

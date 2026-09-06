@@ -112,10 +112,11 @@ private struct CountdownText: View {
 }
 
 private func episodeLabel(_ attributes: AiringActivityAttributes) -> String {
-    attributes.episodeNumber.map { "EPISODE \($0)" } ?? "NEXT EPISODE"
+    // The app's own notation ("Episode 19", never all caps) — the lock screen is still the app.
+    attributes.episodeNumber.map { "Episode \($0)" } ?? "Next episode"
 }
 
 private func airLine(_ airsAt: Date) -> String {
-    if airsAt <= Date() { return "Just aired" }
+    if airsAt <= Date() { return "Aired just now" }
     return "Airs at \(airsAt.formatted(date: .omitted, time: .shortened))"
 }

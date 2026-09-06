@@ -30,4 +30,7 @@
     <color name="widget_preview_ink">#F2F4F1EC</color>
     <color name="widget_preview_ink_quiet">#8CF4F1EC</color>
     <color name="widget_preview_ink_faint">#99AAA6A0</color>
+    <!-- `HeroBadge`'s amber ground and its ink (4 Sep): the widget draws the same badge as the hero. -->
+    <color name="widget_badge_ground">#F0A24E</color>
+    <color name="widget_badge_ink">#0B0B0D</color>
 </resources>

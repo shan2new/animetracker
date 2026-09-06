@@ -357,6 +357,23 @@ class ProgressLane(
  * compare [undoAction], and two states that differ only in a lambda would read as different toasts
  * and replay the transition. The screen keys its transition and its live region on [id].
  */
+/** Where a receipt is drawn. Set at the write site; [Lane] unless a host claims it. */
+sealed class ReceiptPlacement {
+    /** Under the control that was pressed. [host] names it ([ReceiptHost]). */
+    data class InPlace(val host: String) : ReceiptPlacement()
+    /** The bottom chrome's lane. */
+    object Lane : ReceiptPlacement()
+}
+
+/** The in-place hosts' names — one spelling per surface, so the write and the view agree. */
+object ReceiptHost {
+    fun todayHero(franchiseId: String): String = "today.hero/$franchiseId"
+    fun todayQueue(franchiseId: String): String = "today.queue/$franchiseId"
+    fun detailHero(franchiseId: String): String = "detail.hero/$franchiseId"
+    fun episodes(mediaId: Int): String = "episodes/$mediaId"
+    fun schedule(mediaId: Int, episode: Int): String = "schedule/$mediaId/$episode"
+}
+
 @Stable
 class UndoState(
     val mediaId: Int? = null,
@@ -384,8 +401,32 @@ class UndoState(
      * for a status move; absent for the plain progress path, which `performUndo` reverses.
      */
     val undoAction: (() -> Unit)? = null,
+    /**
+     * Where the receipt is drawn (`Receipts`, 5 Sep): in place under a host that stays on screen,
+     * else the bottom chrome's lane. Default: the lane.
+     */
+    val placement: ReceiptPlacement = ReceiptPlacement.Lane,
 ) {
     val id: String = UUID.randomUUID().toString()
+
+    /** The same state, placed under a host. */
+    fun placed(host: String): UndoState = UndoState(
+        mediaId = mediaId, franchiseId = franchiseId, prevProgress = prevProgress, title = title,
+        episode = episode, added = added, statusLabel = statusLabel, removed = removed,
+        removedFranchise = removedFranchise, prevStatus = prevStatus, count = count,
+        customMessage = customMessage, undoAction = undoAction,
+        placement = ReceiptPlacement.InPlace(host),
+    )
+
+    /** The fact alone — "Episode 19 watched" — for a receipt that sits where the show's name already is. */
+    val receipt: String
+        get() = when {
+            customMessage != null -> customMessage
+            removed -> Copy.Toast.removedShort
+            added -> Copy.Toast.added(title, statusLabel ?: CopyLibrary.title)
+            count > 1 -> "${Copy.episodes(count)} watched"
+            else -> Copy.Progress.episodeWatched(episode)
+        }
 
     /**
      * The toast's sentence, in fixed precedence. **Derived here and never assembled in a view**, so

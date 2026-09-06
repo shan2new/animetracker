@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  App Store / TestFlight export options for `xcodebuild -exportArchive`.
+
+	  Used by the CLI upload path:
+	    xcodebuild -exportArchive \
+	      -archivePath build/Previously.xcarchive \
+	      -exportOptionsPlist ExportOptions.plist \
+	      -exportPath build/export -allowProvisioningUpdates
+
+	  Xcode's Organizer → Distribute App does the same thing through the GUI and does not read this
+	  file; it exists so a repeat upload is one command instead of a click-through.
+	-->
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>YLPZXZS2F4</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- Symbols go up so TestFlight crash reports arrive symbolicated rather than as hex. -->
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- Bitcode has been dead since Xcode 14; declared false so the export makes no attempt. -->
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<!-- Do not let the export step silently manage the App Store version/build numbers; those are
+	     owned by project.yml (MARKETING_VERSION / CURRENT_PROJECT_VERSION). -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

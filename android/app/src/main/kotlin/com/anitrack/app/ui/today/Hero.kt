@@ -1,11 +1,8 @@
 package com.anitrack.app.ui.today
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -14,7 +11,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -47,10 +43,12 @@ import com.anitrack.app.ui.control.ProgressBar
 import com.anitrack.app.ui.hero.ArtHeader
 import com.anitrack.app.ui.hero.Billboard
 import com.anitrack.app.ui.hero.HeroCopyScrim
+import com.anitrack.app.ui.hero.HeroLockup
+import com.anitrack.app.ui.hero.HeroLockupDefaults
 import com.anitrack.app.ui.hero.HeroTopVeil
 import com.anitrack.app.ui.hero.billboardHeight
 import com.anitrack.app.ui.isAccessibilityTextSize
-import com.anitrack.app.ui.section.OverArtLabel
+import com.anitrack.app.ui.section.HeroBadge
 import com.anitrack.model.Formatting
 import com.anitrack.model.Franchise
 import com.anitrack.model.FranchisePart
@@ -60,6 +58,7 @@ import com.anitrack.model.TemporalCopy
 import com.anitrack.model.TimeAnchor
 import com.anitrack.model.airedByNow
 import com.anitrack.model.availableEpisodes
+import com.anitrack.model.billboardResolution
 import com.anitrack.model.behind
 import com.anitrack.model.canonicalLabel
 import com.anitrack.model.continueBacklog
@@ -73,10 +72,17 @@ import com.anitrack.model.nextAiring
 import com.anitrack.model.portraitArt
 import com.anitrack.model.releasingPart
 import com.anitrack.model.resumePart
+import com.anitrack.model.BillboardName
+import com.anitrack.model.billboardName
+import com.anitrack.model.textlessPortrait
+import com.anitrack.app.ui.hero.HeroTitle
 import com.anitrack.model.shelfShortened
 import com.anitrack.model.timeAnchor
 import com.anitrack.model.watchContext
 import com.anitrack.model.copy.Copy
+import com.anitrack.app.data.ReceiptHost
+import com.anitrack.app.ui.state.ReceiptLine
+import com.anitrack.app.design.brand.LocalLaunchHandoff
 
 // =====================================================================================
 // THE BILLBOARD HERO — the port of `hero(...)`, `HeroFocus`, `TrendingFocus`,
@@ -185,12 +191,18 @@ val FocusKind.outstanding: Int
 // The slate
 // -------------------------------------------------------------------------------------
 
-/** The four lines, the bar and the one action — computed once, drawn by [HeroFocus]. */
+/**
+ * The badge, the title, the one line, the bar and the one action — computed once, drawn by
+ * [HeroFocus]. (4 Sep, direction B: [moment] leads the line under the title; there is no headline
+ * clock and no eyebrow dot any more.)
+ */
 @Immutable
 data class HeroSlate(
     val eyebrow: String,
-    val eyebrowDot: Boolean,
-    val headline: String?,
+    /** What the billboard draws for the show's name (`HeroTitle`). Type for the widget. */
+    val name: BillboardName = BillboardName.Type,
+    /** "Today at 7:30 PM" · "Aired 29 min ago" · date-only "Friday" — or null for a plain state. */
+    val moment: String?,
     val title: String,
     val fact: String,
     val support: String?,
@@ -227,11 +239,10 @@ fun heroSlate(
         val advanced = advancedFrame(f, part, kind, committedEpisode, outstanding, now)
         val bar = heroProgress(kind, part, committedEpisode, now, anchor)
         return HeroSlate(
+            name = f.billboardName,
             eyebrow = advanced.eyebrow,
-            // In the committed frame the dot is forced off: nothing is pulsing, a write has landed.
-            eyebrowDot = false,
-            // The headline is suppressed — the moment is the mark, not the clock.
-            headline = null,
+            // The committed frame is a receipt: no moment ahead of the fact.
+            moment = null,
             title = f.displayTitle,
             fact = advanced.fact,
             support = advanced.support,
@@ -242,9 +253,12 @@ fun heroSlate(
         )
     }
 
+    // The BADGE says the STATE only (4 Sep, direction B): the count while there is one, else that
+    // this is new; an older single drop, its day. The recency of today's drop and a future airing
+    // are the MOMENT, which leads the one line under the title.
     val eyebrow = when (kind) {
         is FocusKind.Fresh -> when {
-            struckToday && lastAired != null -> TemporalCopy.aired(lastAired, now, f.source)
+            struckToday -> if (kind.behind > 1) Copy.Progress.behind(kind.behind) else Copy.Label.newEpisode
             kind.behind > 1 -> Copy.Progress.behind(kind.behind)
             lastAired != null -> TemporalCopy.aired(lastAired, now, f.source)
             else -> Copy.Label.newEpisode
@@ -253,55 +267,51 @@ fun heroSlate(
         is FocusKind.Backlog ->
             if (kind.left > 1) Copy.Progress.left(kind.left) else Copy.Progress.lastEpisodeOfTheSeason
         FocusKind.CaughtUp -> Copy.Progress.caughtUp
-        // Just the DAY. "NEW EPISODE TODAY" said in three words what the pill's day and the
-        // headline's clock already say between them. A date-only source has no clock to follow it
-        // with, so the day word moves to the headline and the pill states the kind of moment.
-        is FocusKind.Waiting ->
-            if (anchor.isDateOnly) Copy.Label.newEpisode
-            else TemporalCopy.airsCompact(kind.at, now, anchor)
+        // A badge states a fact that is TRUE NOW (i2-5): today's airing is NEW EPISODE; a later
+        // one is CAUGHT UP, exactly the show page's block.
+        is FocusKind.Waiting -> {
+            val a = Formatting.localParts(kind.at, anchor); val n = Formatting.localParts(now, anchor)
+            if (a.y == n.y && a.mo == n.mo && a.d == n.d) Copy.Label.newEpisode else Copy.Progress.caughtUp
+        }
     }
 
-    // A days-old drop with a backlog is a count, not a pulse.
-    val dot = when (kind) {
-        is FocusKind.Fresh -> struckToday
-        is FocusKind.Waiting -> f.dayDiff(kind.at, now) == 0
-        else -> false
-    }
-
-    // Only a moment earns a headline. An aired episode has none — there the show and the action
-    // are the news.
-    val headline = (kind as? FocusKind.Waiting)?.let {
-        if (anchor.isDateOnly) TemporalCopy.airsCompact(it.at, now, anchor)
-        else Formatting.fmtTime(it.at, anchor)
+    // The WHEN, in the app's one temporal ladder: a future airing ("Today at 7:30 PM", "Friday",
+    // "Airs in 27 min"), today's drop ("Aired 29 min ago"), a caught-up show's next airing. Nothing
+    // for a backlog or an older drop — those are states, and the badge says them.
+    val moment: String? = when (kind) {
+        is FocusKind.Waiting -> TemporalCopy.airs(kind.at, now, f.source)
+        // Only when the drop IS the next episode (i1-F3): with a backlog the drop names its own
+        // episode on the support line instead.
+        is FocusKind.Fresh ->
+            if (struckToday && lastAired != null && kind.behind == 1) TemporalCopy.aired(lastAired, now, f.source) else null
+        FocusKind.CaughtUp ->
+            part.nextAiringAt?.takeIf { it > now }?.let { TemporalCopy.airs(it, now, f.source) }
+        is FocusKind.Backlog -> null
     }
 
     val fact = heroFact(f, kind, part, now)
 
     val support = when (kind) {
-        // The count only when NOTHING is watched yet and the pill spent itself on the recency.
-        // "Latest aired 28 Aug" under "9 EPISODES BEHIND" was a second sentence about one fact.
-        is FocusKind.Fresh ->
-            if (part.progress == 0 && kind.behind > 1 && struckToday) {
-                Copy.Progress.behind(kind.behind)
-            } else {
-                null
-            }
+        // The drop, named, when the moment cannot lead the line (i1-F3).
+        is FocusKind.Fresh -> if (struckToday && lastAired != null && kind.behind > 1) {
+            val whenText = TemporalCopy.aired(lastAired, now, f.source).removePrefix("Aired ")
+            Copy.Progress.dropAired(part.airedByNow(now, anchor), whenText)
+        } else null
+        // The badge carries the count and the moment the recency; the bar carries where you are.
+        is FocusKind.Backlog, is FocusKind.Waiting -> null
+        // A dated next airing is the moment's; only the curated return survives here.
         FocusKind.CaughtUp -> {
             val next = part.nextAiringAt
-            when {
-                next != null && next > now -> TemporalCopy.airs(next, now, f.source)
-                nextPremiere != null -> TemporalCopy.returns(nextPremiere, now, f.source)
-                else -> null
-            }
+            if (next != null && next > now) null
+            else nextPremiere?.let { TemporalCopy.returns(it, now, f.source) }
         }
-        else -> null
     }
 
     val bar = heroProgress(kind, part, null, now, anchor)
     return HeroSlate(
+        name = f.billboardName,
         eyebrow = eyebrow,
-        eyebrowDot = dot,
-        headline = headline,
+        moment = moment,
         title = f.displayTitle,
         fact = fact,
         support = support,
@@ -322,14 +332,8 @@ private fun heroFact(f: Franchise, kind: FocusKind, part: FranchisePart, now: Lo
         return part.canonicalLabel.ifEmpty { part.title }
     }
     if (kind is FocusKind.Waiting) {
-        val episode = f.watchContext(part, part.nextEpisodeNumber ?: part.airedEpisodes + 1)
-        val anchor = f.timeAnchor
-        // The countdown rides along ONLY inside the day: "in 3h 12m" is the thing to be excited
-        // about, "in 4d 2h" is arithmetic.
-        if (anchor.isDateOnly || kind.at <= now || kind.at - now >= ShelfWindows.NOW_BAR_LIVE) {
-            return episode
-        }
-        return "in ${Formatting.fmtCountdown(kind.at, now, anchor)} $MIDDLE_DOT $episode"
+        // The episode alone: the moment leads the line (it used to carry a countdown here).
+        return f.watchContext(part, part.nextEpisodeNumber ?: part.airedEpisodes + 1)
     }
     return f.watchContext(part, part.progress + 1)
 }
@@ -435,7 +439,12 @@ private const val MIDDLE_DOT = "·"
  * when the image changes, so two shows sharing a hero asset hand over without a flicker.
  */
 @Immutable
-data class HeroArt(val url: String?, val portraitSource: Boolean)
+data class HeroArt(
+    val url: String?,
+    val portraitSource: Boolean,
+    /** The name is set in type, so the cover starts under the wordmark band (i3-1). */
+    val insetUnderBand: Boolean = false,
+)
 
 /**
  * The billboard's art, cover-first.
@@ -447,18 +456,24 @@ data class HeroArt(val url: String?, val portraitSource: Boolean)
  * mobile-billboard anatomy.
  */
 fun heroArt(f: Franchise?, fallbackCover: String? = null): HeroArt {
-    val portrait = f?.portraitArt
-    if (!portrait.isNullOrEmpty()) return HeroArt(portrait, portraitSource = true)
-    val landscape = f?.landscapeArt
+    // The TEXTLESS poster where the gallery has one: the billboard draws the name itself.
+    // `billboardResolution`: the billboard asks TMDB for the original, not the card's `w780`.
+    val portrait = billboardResolution(f?.textlessPortrait ?: f?.portraitArt)
+    if (!portrait.isNullOrEmpty()) {
+        return HeroArt(portrait, portraitSource = true, insetUnderBand = f?.billboardName is BillboardName.Type)
+    }
+    val landscape = billboardResolution(f?.landscapeArt)
     if (!landscape.isNullOrEmpty()) return HeroArt(landscape, portraitSource = false)
     return HeroArt(fallbackCover, portraitSource = true)
 }
 
 /** The same rule for a chart row, which carries no parts to fall back through. */
 fun heroArt(item: FranchiseSummary): HeroArt {
-    val portrait = item.portraitArt
-    if (!portrait.isNullOrEmpty()) return HeroArt(portrait, portraitSource = true)
-    return HeroArt(item.landscapeArt, portraitSource = false)
+    val portrait = billboardResolution(item.textlessPortrait ?: item.portraitArt)
+    if (!portrait.isNullOrEmpty()) {
+        return HeroArt(portrait, portraitSource = true, insetUnderBand = item.billboardName is BillboardName.Type)
+    }
+    return HeroArt(billboardResolution(item.landscapeArt), portraitSource = false)
 }
 
 /**
@@ -537,6 +552,10 @@ fun HeroFrame(
         if (!animateHeight) animated.snapTo(height) else animated.animateTo(height, ThemeMotion.uiSettle())
     }
     val drawnHeight = animated.value
+    // The launch ident holds for the first billboard's art (i2): it used to leave on auth alone,
+    // and the app emerged on a blank plate the picture then popped into.
+    val handoff = LocalLaunchHandoff.current
+    val onArtLoaded: (() -> Unit)? = if (handoff == null) null else { { handoff.artReady = true } }
 
     Box(
         modifier
@@ -558,6 +577,8 @@ fun HeroFrame(
                 height = drawnHeight,
                 tint = tint,
                 scrimBottom = scrimBottom,
+                topInset = if (current.insetUnderBand) band else 0.dp,
+                onArtLoaded = onArtLoaded,
             )
         }
 
@@ -599,12 +620,16 @@ private fun StretchingHeroArt(
     tint: Color?,
     scrimBottom: Float,
     modifier: Modifier = Modifier,
+    topInset: Dp = 0.dp,
+    onArtLoaded: (() -> Unit)? = null,
 ) {
     ArtHeader(
         url = art.url,
         height = height,
         modifier = modifier,
         tint = tint,
+        topInset = topInset,
+        onLoaded = onArtLoaded,
         // Today's billboard carries a HeroTopVeil of its own and a measured copy scrim, so the
         // fractional scrim is off at both ends — except while the recap is on stage, where its copy
         // fills the frame and the whole image is meant to step back.
@@ -636,6 +661,7 @@ private fun StretchingHeroArt(
 @Composable
 fun HeroFocus(
     slate: HeroSlate,
+    franchiseId: String,
     fullTitle: String,
     committed: Boolean,
     interactive: Boolean,
@@ -646,90 +672,25 @@ fun HeroFocus(
     modifier: Modifier = Modifier,
 ) {
     val isAX = isAccessibilityTextSize()
-
-    Column(modifier.fillMaxWidth()) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clickable(
-                    interactionSource = null,
-                    indication = PressStyle.overArt,
-                    enabled = interactive,
-                    onClickLabel = Copy.Accessibility.opensTheShowHint,
-                    role = Role.Button,
-                    onClick = onOpen,
-                )
-                // `children: .combine` — pill, headline, show, fact and bar are one utterance.
-                .semantics(mergeDescendants = true) {}
-        ) {
-            OverArtLabel(text = slate.eyebrow, dot = slate.eyebrowDot)
-
-            if (slate.headline != null) {
-                // The one amber WORD above the fold, and it is a fact — the clock — never an action.
-                NumericLine(
-                    text = slate.headline,
-                    modifier = Modifier.padding(top = ThemeSpace.x3),
-                ) { text ->
-                    AutoSizeText(
-                        text = text,
-                        style = HeadlineStyle,
-                        minScale = HeadlineMinimumScale,
-                        maxLines = 1,
-                    )
-                }
-            }
-
-            // The show steps DOWN a size when a headline is above it, because the art is already
-            // saying its name. The hero may never ellipsize the one name the screen exists to show.
-            AutoSizeText(
-                text = slate.title,
-                style = when {
-                    slate.headline != null -> ThemeType.showTitleL
-                    isAX -> ThemeType.displayXL
-                    else -> ThemeType.heroTitle
-                }.copy(color = ThemeColor.textPrimary),
-                minScale = TitleMinimumScale,
-                maxLines = if (isAX) 3 else 2,
-                modifier = Modifier.padding(
-                    top = if (slate.headline == null) ThemeSpace.x3 else ThemeSpace.x2,
-                ),
-            )
-
-            // `textSecondary` on purpose, so the title and "Season 4 · Episode 12" never read as
-            // one line.
-            NumericLine(
-                text = slate.fact,
-                modifier = Modifier.padding(top = ThemeMetrics.titleGap),
-            ) { text ->
-                BasicText(
-                    text = text,
-                    style = ThemeType.heroMeta,
-                    color = ColorProducer { ThemeColor.textSecondary },
-                )
-            }
-
-            if (slate.progress != null) {
-                ProgressBar(
-                    value = slate.progress,
-                    spoken = slate.progressSpoken,
-                    modifier = Modifier
-                        .padding(top = ThemeSpace.x2)
-                        .then(
-                            if (isAX) Modifier.fillMaxWidth() else Modifier.width(HeroProgressWidth),
-                        ),
-                )
-            }
-
-            if (slate.support != null) {
-                BasicText(
-                    text = slate.support,
-                    style = ThemeType.metadata,
-                    color = ColorProducer { ThemeColor.textSecondary },
-                    modifier = Modifier.padding(top = ThemeSpace.x0_5),
-                )
-            }
-        }
-
+    // The SHARED lockup (`HeroLockup`, 5 Sep — the show page draws the same composable), fed
+    // Today's grammar: `displayTitle` as every row and shelf names the show, `displayXL` with a
+    // scale floor so the hero may never ellipsize the one name the screen exists to show, and ONE
+    // action — "Details" beside it duplicated the block's own tap.
+    HeroLockup(
+        badge = slate.eyebrow,
+        title = slate.title,
+        name = slate.name,
+        moment = slate.moment,
+        fact = slate.fact,
+        support = slate.support,
+        progress = slate.progress,
+        progressSpoken = slate.progressSpoken,
+        modifier = modifier,
+        maxLines = if (isAX) 3 else 2,
+        onOpen = onOpen,
+        interactive = interactive,
+        receiptHost = ReceiptHost.todayHero(franchiseId),
+    ) {
         if (slate.ctaEpisode != null) {
             MarkSplitButton(
                 episode = slate.ctaEpisode,
@@ -745,7 +706,7 @@ fun HeroFocus(
                 onMarkThrough = onMarkThrough,
                 onMarkAll = onMarkAll,
                 modifier = Modifier
-                    .padding(top = if (isAX) ThemeSpace.x5 else ThemeSpace.x4)
+                    .padding(top = HeroLockupDefaults.actionGap(isAX))
                     .fillMaxWidth(),
             )
         }
@@ -782,15 +743,18 @@ fun TrendingFocus(
                     role = Role.Button,
                     onClick = onOpen,
                 )
-                .semantics(mergeDescendants = true) {}
+                .semantics(mergeDescendants = true) {},
+            // Centred, as `HeroLockup` is (5 Sep): one billboard axis.
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            OverArtLabel(text = Copy.Label.trending)
-            AutoSizeText(
+            HeroBadge(text = Copy.Label.trending)
+            HeroTitle(
                 text = item.title.shelfShortened,
-                style = (if (isAX) ThemeType.displayXL else ThemeType.heroTitle)
-                    .copy(color = ThemeColor.textPrimary),
+                name = item.billboardName,
+                style = ThemeType.displayXL.copy(color = ThemeColor.textPrimary),
                 minScale = TitleMinimumScale,
                 maxLines = if (isAX) 3 else 2,
+                isAX = isAX,
                 modifier = Modifier.padding(top = ThemeSpace.x3),
             )
             if (identity.isNotEmpty()) {
@@ -814,55 +778,9 @@ fun TrendingFocus(
     }
 }
 
-/**
- * A line whose content is a NUMBER that changed.
- *
- * iOS rolls the digits (`contentTransition(.numericText())`) and crossfades under Reduce Motion.
- * Compose has no rolling-digit transition, and the spec names the crossfade as the sanctioned
- * fallback — which is also the treatment Reduce Motion already specifies, so the two states agree
- * rather than diverging.
- */
-@Composable
-private fun NumericLine(
-    text: String,
-    modifier: Modifier = Modifier,
-    content: @Composable (String) -> Unit,
-) {
-    AnimatedContent(
-        targetState = text,
-        transitionSpec = {
-            ContentTransform(
-                targetContentEnter = fadeIn(ThemeMotion.uiNumeric()),
-                initialContentExit = fadeOut(ThemeMotion.uiNumeric()),
-                // Never a size transform: the line is one row of a slate, and animating its box
-                // moves the four lines under it for a digit.
-                sizeTransform = null,
-            )
-        },
-        modifier = modifier,
-        label = "numericFact",
-    ) { current ->
-        content(current)
-    }
-}
+/** iOS `.minimumScaleFactor(0.82)` on the title: a long name lands on its two-line fit. */
+private const val TitleMinimumScale = 0.82f
 
-/**
- * The clock, at display size, in accent, with tabular figures.
- *
- * Derived here rather than added to the type palette: it is `displayXL` plus iOS's call-site
- * `.monospacedDigit()`, and a counter that re-flows while it counts is a bug you can see.
- */
-private val HeadlineStyle = ThemeType.displayXL.copy(
-    color = ThemeColor.accent,
-    fontFeatureSettings = "tnum",
-)
-
-/** iOS `.minimumScaleFactor(0.7)` on the headline, `0.85` on the title. */
-private const val HeadlineMinimumScale = 0.7f
-private const val TitleMinimumScale = 0.85f
-
-/** The bar is a measurement, not a banner: it stops well short of the gutter at ordinary sizes. */
-private val HeroProgressWidth = 200.dp
 
 // -------------------------------------------------------------------------------------
 // The palette

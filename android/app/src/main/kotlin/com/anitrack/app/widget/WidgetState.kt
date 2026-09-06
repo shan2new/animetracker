@@ -108,15 +108,13 @@ import kotlin.math.min
 @Immutable
 internal data class UpNextItem(
     val franchiseId: String,
-    /** The pill: the STATE, uppercased by the drawing. "AIRED 29 MIN AGO", "FRIDAY", "3 LEFT". */
+    /** The badge: the STATE, uppercased by the drawing. "NEW EPISODE", "4 EPISODES BEHIND". */
     val eyebrow: String,
-    /** Amber dot — today's drop, or a later-today airing. STATE, one of amber's two readings. */
-    val eyebrowDot: Boolean,
-    /** The MOMENT, and only a moment earns one: the clock, in accent. */
-    val headline: String?,
+    /** The MOMENT, leading the one line under the title: "Today at 7:30 PM", "Aired 29 min ago". */
+    val moment: String?,
     /** `displayTitle` — "Re:ZERO", as every row and shelf draws it. */
     val title: String,
-    /** "in 3h 12m · Season 4 · Episode 15". */
+    /** "Season 4 · Episode 15" — the line is `moment · fact`. */
     val fact: String,
     /** At most one more thing. Drawn only where there is room for it. */
     val support: String?,
@@ -139,7 +137,7 @@ internal data class UpNextItem(
      */
     val spoken: String
         get() = (
-            listOfNotNull(eyebrow, headline, title, fact, support, progressSpoken)
+            listOfNotNull(eyebrow, title, moment, fact, support, progressSpoken)
                 .joinToString(SPOKEN_SEPARATOR)
             ) + SPOKEN_SEPARATOR + Copy.Accessibility.opensTheShowHint
 }
@@ -269,8 +267,7 @@ internal object WidgetData {
                 UpNextItem(
                     franchiseId = franchise.id,
                     eyebrow = slate.eyebrow,
-                    eyebrowDot = slate.eyebrowDot,
-                    headline = slate.headline,
+                    moment = slate.moment,
                     title = slate.title,
                     fact = slate.fact,
                     support = slate.support,

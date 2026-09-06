@@ -66,11 +66,7 @@ struct AddControl<OwnedMenu: View>: View {
     @ViewBuilder var ownedMenu: () -> OwnedMenu
 
     var body: some View {
-        control
-            .menuStyle(.button)
-            .buttonStyle(placement == .overArt
-                         ? AnyButtonStyle(MarkPressStyle())
-                         : AnyButtonStyle(CompactSquareStyle(owned: owned)))
+        styled
             // Not `.isSelected`: the amber tick is ownership, not a selection state. The value
             // names which it is, and the hint says what the tap does in that state.
             .accessibilityLabel(title)
@@ -78,17 +74,33 @@ struct AddControl<OwnedMenu: View>: View {
             .accessibilityHint(owned ? Copy.Search.ownedHint : Copy.Search.addHint)
     }
 
-    /// ONE `Menu` in both states — a ternary over one concrete type, not a `ViewBuilder` branch,
-    /// so the control keeps its identity when `owned` flips and the glyph's symbol replacement
-    /// animates instead of the whole button being torn down and rebuilt around a new one. Unowned
-    /// carries `primaryAction` (tap adds, long-press shows the same verb); owned drops it, so the
-    /// tap opens the menu.
-    private var control: Menu<AddGlyph, AddMenuContent<OwnedMenu>> {
+    /// The CONCRETE style per placement (5 Sep): the erased `AnyButtonStyle` boxed every
+    /// `makeBody` in an `AnyView`, and on Search that box was built once per result row per
+    /// answer — the leaf of the typing stalls. A placement never changes at runtime, so the
+    /// branch costs the control nothing.
+    @ViewBuilder
+    private var styled: some View {
+        if placement == .overArt {
+            control.menuStyle(.button).buttonStyle(MarkPressStyle())
+        } else {
+            control.menuStyle(.button).buttonStyle(CompactSquareStyle(owned: owned))
+        }
+    }
+
+    /// A `Menu` only once OWNED (tap opens the status menu); unowned, a plain `Button` (tap
+    /// adds). It used to be one `Menu` in both states, so the glyph's symbol replacement could
+    /// animate across the flip without the control being rebuilt — and every result row paid
+    /// for a UIKit menu interaction it would never open: measured 5 Sep (typing at human speed,
+    /// the stall sampler on), the menus were 40 % of what an answer landing cost. The flip now
+    /// crossfades the control; the tap-to-add and the long-press-for-status are unchanged.
+    @ViewBuilder
+    private var control: some View {
         let glyph = AddGlyph(owned: owned, placement: placement)
-        let content = AddMenuContent(owned: owned, add: add, ownedMenu: ownedMenu)
-        return owned
-            ? Menu(content: { content }, label: { glyph })
-            : Menu(content: { content }, label: { glyph }, primaryAction: add)
+        if owned {
+            Menu(content: { AddMenuContent(owned: owned, add: add, ownedMenu: ownedMenu) }, label: { glyph })
+        } else {
+            Button(action: add) { glyph }
+        }
     }
 }
 
@@ -196,16 +208,6 @@ private struct CompactSquareStyle: ButtonStyle {
     }
 }
 
-/// Type-erases a `ButtonStyle` so one control can carry two of them without duplicating its body.
-private struct AnyButtonStyle: ButtonStyle {
-    private let make: (Configuration) -> AnyView
-
-    init<S: ButtonStyle>(_ style: S) {
-        make = { AnyView(style.makeBody(configuration: $0)) }
-    }
-
-    func makeBody(configuration: Configuration) -> some View { make(configuration) }
-}
 
 // MARK: - Metadata
 

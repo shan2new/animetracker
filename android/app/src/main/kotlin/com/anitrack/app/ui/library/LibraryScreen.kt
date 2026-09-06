@@ -563,12 +563,25 @@ private fun AllTitlesBarButton(count: Int, onClick: () -> Unit) {
             .padding(horizontal = ThemeSpace.x3),
         contentAlignment = Alignment.Center,
     ) {
-        BasicText(
-            text = label,
-            style = ThemeType.listAction,
-            maxLines = 1,
-            color = ColorProducer { ThemeColor.textSecondary },
-        )
+        // A word that opens a list carries its chevron, in the interactive ink (i4: a grey
+        // numeral read as a fact, and it is the only door to the unfiltered list).
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BasicText(
+                text = label,
+                style = ThemeType.listAction,
+                maxLines = 1,
+                color = ColorProducer { ThemeColor.interactive },
+            )
+            Image(
+                imageVector = rememberSymbol(PreviouslyIcons.ChevronRight),
+                contentDescription = null,
+                modifier = Modifier.size(materialGlyphBox(12.dp)),
+                colorFilter = ColorFilter.tint(ThemeColor.interactive),
+            )
+        }
     }
 }
 

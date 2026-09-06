@@ -1,5 +1,22 @@
 # Today screen and the Previously Recap
 
+> **Revision, 2026-09-04 (ported the same day; the sections below describe the 2–3 Sep tree).**
+> The hero is no longer the four-line slate of §6 (pill → headline → show → fact). It is a
+> three-row LOCKUP, direction B of three photographed on the simulator: a filled amber
+> `HeroBadge` saying the STATE ("NEW EPISODE", "4 EPISODES BEHIND"), the title at `displayXL`
+> (scale floor 0.82), then ONE line `moment · fact` ("Today at 7:30 PM · Season 4 · Episode 21"),
+> the bar, the capsule. No headline clock, no eyebrow dot, no countdown. `HeroSlate` lost
+> `headline`/`eyebrowDot` and gained `moment: String?`; the widget mirrors it (`widget_badge.xml`).
+> `HeroCopyScrim` is lighter and longer (lead 132, monotonic stops, full canvas 40 dp above the
+> frame's bottom). Under the hero, §11's `Next up` rows and `Upcoming` rows are ONE horizontal
+> shelf of 16:9 cards (`UpNextShelf.kt`, the Continue-card geometry) except at accessibility
+> sizes; each card wears one "EPISODE N" pill on the art and an amber time / grey count caption.
+> Schedule's `AiringCard` keeps its 3 Sep anatomy (time pill, "Season 4 · Episode 21" caption).
+> `WideArt.ultraWide` is decided by the URL and makes `LandscapeArt` decode an AniList banner at
+> its native 1900 px; the crop itself stays. Source of truth: `ios/Sources/Features/Today/
+> TodayView.swift` (`HeroFocus`, `upNextShelf`, `upNextCard`, `upNextCaption`), `Primitives.swift`
+> (`HeroBadge`, `HeroCopyScrim`, `ProgressBanner`, `LandscapeArt`) and CLAUDE.md's cohesion bullet.
+
 `Today` is the flagship surface of *Previously.* — the tab the app opens on, and the only screen in
 the product whose job is urgency ("here is the thing to watch right now"). Its top ~72 % is a
 full-bleed **billboard hero** (`ArtHeader` over the show's own artwork) carrying a four-line

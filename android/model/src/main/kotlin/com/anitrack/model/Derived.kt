@@ -311,6 +311,13 @@ val FranchisePart.isComplete: Boolean
 val FranchisePart.canonicalLabel: String
     get() = label.trim()
 
+/**
+ * The catalogue relates this part to the work as a spin-off. A spin-off is an extra, never a season
+ * of the show, whatever its `kind` says.
+ */
+val FranchisePart.isSpinOff: Boolean
+    get() = relationship?.uppercase() == "SPIN_OFF"
+
 /** "Episode 19" — never "E19", never "Ep 19". */
 fun FranchisePart.episodeLabel(n: Int): String = Copy.episode(n)
 
@@ -434,6 +441,20 @@ val Franchise.episodicPartsInOrder: List<FranchisePart>
         .filter { it.kind == PartKind.SEASON || it.kind == PartKind.ONA || it.kind == PartKind.OVA }
         .sortedBy { it.sequence }
 
+/**
+ * The SEASONS — what the show page's picker lists and what "Season N" means on that screen: the
+ * `SEASON` parts that are not spin-offs. OVAs, ONAs, side stories, spin-offs, specials and films are
+ * extras, on the shelf under the episode list. The picker used to list every episodic part in
+ * release order — nine entries on Slime, OVAs and specials interleaved ("utterly confusing", 4 Sep);
+ * Netflix, Apple TV, Prime and Crunchyroll list seasons only. A work with no season at all (an ONA
+ * run) keeps its whole episodic spine, so it still has an Episodes section.
+ */
+val Franchise.seasonPartsInOrder: List<FranchisePart>
+    get() {
+        val seasons = episodicPartsInOrder.filter { it.kind == PartKind.SEASON && !it.isSpinOff }
+        return seasons.ifEmpty { episodicPartsInOrder }
+    }
+
 // ---------------------------------------------------------------------------------------------
 // 9. Franchise — resume and backlog
 // ---------------------------------------------------------------------------------------------
@@ -522,6 +543,18 @@ val Franchise.isSeriesComplete: Boolean
             episodic.all { it.isComplete } &&
             parts.none { it.isReleasing || it.isUpcoming } &&
             upcoming?.isFutureInstallment != true
+    }
+
+/**
+ * Watched through: every episodic member complete and nothing releasing or upcoming — the
+ * series-complete milestone's own test. Unlike [isSeriesComplete] a curated rumour does not count:
+ * a rumour is not a season to watch (i4).
+ */
+val Franchise.isWatchedThrough: Boolean
+    get() {
+        val episodic = episodicPartsInOrder
+        return episodic.isNotEmpty() && episodic.all { it.isComplete } &&
+            parts.none { it.isReleasing || it.isUpcoming }
     }
 
 fun Franchise.canonicalPartLabel(mediaId: Int): String =
@@ -890,31 +923,41 @@ private fun graphemeCount(s: String): Int {
  * mid-word.
  */
 val String.shelfShortened: String
-    get() {
-        var s = trim()
+    get() = shelfShortened(fitting = SHELF_FIT_DEFAULT)
 
-        // 1. A trailing "-…-" subtitle wrapper. Only when the string ENDS with a hyphen, and the cut
-        //    is at the FIRST " -" (space + hyphen).
-        if (s.endsWith("-")) {
-            val open = s.indexOf(" -")
-            if (open >= 0) s = s.substring(0, open)
-        }
+/**
+ * [shelfShortened] cut to a surface's budget (i3): a card's title has two lines of about thirteen
+ * characters, the lane's caption one of thirty. A title within the budget keeps its subtitle; one
+ * past it keeps its identity half, never fewer than [minHead] graphemes.
+ */
+fun String.shelfShortened(fitting: Int, minHead: Int = 12): String {
+    var s = trim()
 
-        // 2. Strip leading/trailing subtitle punctuation: space, hyphen, en dash, em dash, colon.
-        s = s.trim { it == ' ' || it == '-' || it == EN_DASH || it == EM_DASH || it == ':' }
-
-        // 3. A long "Title: Subtitle" keeps its identity half. The separators are tried IN ORDER and
-        //    the first one that is both found and at least 12 graphemes in wins and returns; a
-        //    separator found earlier than that does NOT return — the loop moves to the next one, so a
-        //    title like "Re: Something very long …" is not cut down to "Re".
-        if (graphemeCount(s) > 40) {
-            for (sep in SHELF_SEPARATORS) {
-                val r = s.indexOf(sep)
-                if (r >= 0 && graphemeCount(s.substring(0, r)) >= 12) return s.substring(0, r)
-            }
-        }
-        return s
+    // 1. A trailing "-…-" subtitle wrapper. Only when the string ENDS with a hyphen, and the cut
+    //    is at the FIRST " -" (space + hyphen).
+    if (s.endsWith("-")) {
+        val open = s.indexOf(" -")
+        if (open >= 0) s = s.substring(0, open)
     }
+
+    // 2. Strip leading/trailing subtitle punctuation: space, hyphen, en dash, em dash, colon.
+    s = s.trim { it == ' ' || it == '-' || it == EN_DASH || it == EM_DASH || it == ':' }
+
+    // 3. A long "Title: Subtitle" keeps its identity half. The separators are tried IN ORDER and
+    //    the first one that is both found and at least [minHead] graphemes in wins and returns; a
+    //    separator found earlier than that does NOT return — the loop moves to the next one, so a
+    //    title like "Re: Something very long …" is not cut down to "Re".
+    if (graphemeCount(s) > fitting) {
+        for (sep in SHELF_SEPARATORS) {
+            val r = s.indexOf(sep)
+            if (r >= 0 && graphemeCount(s.substring(0, r)) >= minHead) return s.substring(0, r)
+        }
+    }
+    return s
+}
+
+/** The property's budget: a hero or a row, where forty graphemes fit. */
+private const val SHELF_FIT_DEFAULT = 40
 
 private const val EN_DASH = '–'
 private const val EM_DASH = '—'
