@@ -1750,10 +1750,15 @@ struct HeroBadge: View {
             .overlay {
                 if attention && !reduceMotion {
                     GeometryReader { g in
-                        LinearGradient(colors: [.clear, .white.opacity(0.75), .clear],
-                                       startPoint: .leading, endPoint: .trailing)
-                            .frame(width: g.size.width * 0.55)
-                            .offset(x: sheen ? g.size.width * 1.25 : -g.size.width * 0.8)
+                        LinearGradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.30), location: 0.34),
+                            .init(color: .white.opacity(0.85), location: 0.5),
+                            .init(color: .white.opacity(0.30), location: 0.66),
+                            .init(color: .clear, location: 1),
+                        ], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: g.size.width * 0.8)
+                            .offset(x: sheen ? g.size.width * 1.4 : -g.size.width * 1.0)
                             .blendMode(.plusLighter)
                     }
                     .clipShape(shape)
@@ -1775,13 +1780,20 @@ struct HeroBadge: View {
             .task(id: attention) { await choreograph() }
     }
 
-    /// The arrival, in beats — a settle, then two passes of light, then still.
+    /// The arrival, then a slow shimmer that keeps coming back.
     ///
-    /// Sequential `await`s rather than one repeating curve: a repeat is a loop and reads as a
-    /// notification badge blinking; a settle followed by light reads as an object being placed.
-    /// Every step starts off the first frame (`withAnimation` inside `onAppear` is folded into it
-    /// and never plays — the launch ident's lesson), and the whole thing is done in 2.6 s, well
-    /// inside the five seconds past which WCAG 2.2.2 would require a pause control.
+    /// The tag settles, one ring leaves its edge, and from then on a band of light crosses the
+    /// chip every few seconds — the sweep slow enough to read as light on a surface rather than a
+    /// blink. Two passes and stop was the first cut and the user's verdict was the brief for this
+    /// one: "it shimmered just once and too fast. That doesn't draw attention" (6 Sep).
+    ///
+    /// **Accessibility.** Motion that runs past five seconds beside other content is the case
+    /// WCAG 2.2.2 asks to be stoppable, and this now runs for as long as the badge is on screen.
+    /// The stop is **Reduce Motion**, honoured here completely: no sweep, no ring, no settle, and
+    /// the chip's resting form (gradient, rim, glow) carries the prominence on its own — as it
+    /// does for everyone once a sweep has passed. `.task` is torn down with the view, so the loop
+    /// never outlives what it decorates, and the sweep is one small clipped gradient over a 20-pt
+    /// tag: no offscreen pass over anything the size of the billboard (the 5 Sep lag rule).
     @MainActor
     private func choreograph() async {
         guard attention, !reduceMotion else { lift = true; return }
@@ -1789,13 +1801,19 @@ struct HeroBadge: View {
         guard !Task.isCancelled else { lift = true; return }
         withAnimation(ThemeMotion.uiMilestone) { lift = true }
         withAnimation(.easeOut(duration: 0.85)) { ring = true }
-        for pass in 0..<2 {
-            try? await Task.sleep(for: .milliseconds(pass == 0 ? 180 : 900))
-            guard !Task.isCancelled else { return }
+        try? await Task.sleep(for: .milliseconds(220))
+        while !Task.isCancelled {
             sheen = false
-            withAnimation(.easeInOut(duration: 0.72)) { sheen = true }
+            withAnimation(.easeInOut(duration: HeroBadge.sweep)) { sheen = true }
+            try? await Task.sleep(for: .seconds(HeroBadge.sweep + HeroBadge.rest))
         }
     }
+
+    /// How long the light takes to cross the chip. 0.72 s read as a flicker.
+    private static let sweep: Double = 1.35
+    /// The dark between passes. Long enough that the chip is a still object most of the time,
+    /// short enough that a glance a few seconds later still catches one.
+    private static let rest: Double = 2.6
 }
 
 /// The app's ONE attention beat: a short, FINITE entrance for something that is out now.
