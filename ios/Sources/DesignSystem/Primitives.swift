@@ -1717,12 +1717,15 @@ struct OverArtLabel: View {
 /// art.
 struct HeroBadge: View {
     let text: String
-    /// A drop that is OUT NOW and unwatched — the badge takes a short entrance so the eye lands
-    /// on it before the title. See `AttentionBeat` for why it is finite.
+    /// A drop that is OUT NOW and unwatched — the badge arrives instead of merely appearing.
     var attention: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var beat = false
+    @State private var lift = false
+    @State private var ring = false
+    @State private var sheen = false
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 4, style: .continuous) }
 
     var body: some View {
         Text(text)
@@ -1732,24 +1735,66 @@ struct HeroBadge: View {
             .lineLimit(1)
             .padding(.horizontal, 7)
             .frame(height: 20)
-            .background(ThemeColor.accent, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-            // An amber halo behind an amber tag was invisible — filmed at 10 fps on 6 Sep the
-            // badge was pixel-identical through the whole window, because a 0.55-opacity accent
-            // glow has no contrast to live in against its own colour. The beat is the TAG: a
-            // `scaleEffect`, which is a render transform and does NOT move the copy beneath it
-            // (the reason first given for avoiding it was simply wrong), plus a widening ring
-            // that reads as an edge rather than a wash.
-            .scaleEffect(beat ? 1.07 : 1)
+            // A CHIP, not a swatch: the fill carries a top-lit gradient and a hairline rim, so
+            // the tag reads as a struck object at rest. This is where the prominence lives —
+            // motion cannot be the carrier, because motion has to stop (see `AttentionBeat`).
+            .background {
+                shape.fill(
+                    LinearGradient(colors: [ThemeColor.accent.opacity(1), ThemeColor.accentPressed],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+                .overlay(shape.strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
+            }
+            // The sheen rides ON the tag, clipped to it: one light band crossing a metallic
+            // surface. `plusLighter` over an opaque fill, so it brightens rather than washes.
             .overlay {
                 if attention && !reduceMotion {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .strokeBorder(ThemeColor.accent, lineWidth: 2)
-                        .opacity(beat ? 0 : 0.9)
-                        .scaleEffect(beat ? 1.45 : 1)
+                    GeometryReader { g in
+                        LinearGradient(colors: [.clear, .white.opacity(0.75), .clear],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: g.size.width * 0.55)
+                            .offset(x: sheen ? g.size.width * 1.25 : -g.size.width * 0.8)
+                            .blendMode(.plusLighter)
+                    }
+                    .clipShape(shape)
+                    .allowsHitTesting(false)
+                }
+            }
+            // One ring leaving the tag — an edge, not a wash. An amber GLOW behind an amber tag
+            // was invisible on film (6 Sep); an expanding stroke has its own contrast.
+            .overlay {
+                if attention && !reduceMotion {
+                    shape.strokeBorder(ThemeColor.accent, lineWidth: 2)
+                        .opacity(ring ? 0 : 0.9)
+                        .scaleEffect(ring ? 1.55 : 1)
                         .allowsHitTesting(false)
                 }
             }
-            .task(id: attention) { await AttentionBeat.run(attention && !reduceMotion) { beat = true } }
+            .scaleEffect(lift ? 1 : 0.9)
+            .shadow(color: ThemeColor.accent.opacity(attention ? 0.45 : 0), radius: 12, y: 2)
+            .task(id: attention) { await choreograph() }
+    }
+
+    /// The arrival, in beats — a settle, then two passes of light, then still.
+    ///
+    /// Sequential `await`s rather than one repeating curve: a repeat is a loop and reads as a
+    /// notification badge blinking; a settle followed by light reads as an object being placed.
+    /// Every step starts off the first frame (`withAnimation` inside `onAppear` is folded into it
+    /// and never plays — the launch ident's lesson), and the whole thing is done in 2.6 s, well
+    /// inside the five seconds past which WCAG 2.2.2 would require a pause control.
+    @MainActor
+    private func choreograph() async {
+        guard attention, !reduceMotion else { lift = true; return }
+        try? await Task.sleep(for: .milliseconds(90))
+        guard !Task.isCancelled else { lift = true; return }
+        withAnimation(ThemeMotion.uiMilestone) { lift = true }
+        withAnimation(.easeOut(duration: 0.85)) { ring = true }
+        for pass in 0..<2 {
+            try? await Task.sleep(for: .milliseconds(pass == 0 ? 180 : 900))
+            guard !Task.isCancelled else { return }
+            sheen = false
+            withAnimation(.easeInOut(duration: 0.72)) { sheen = true }
+        }
     }
 }
 
