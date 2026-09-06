@@ -1,4 +1,19 @@
 import Foundation
+
+extension Error {
+    /// A request cancelled by its own task — the next keystroke, a popped screen, a superseded
+    /// refresh. Surfaces as `URLError.cancelled` (wrapped by `APIClient` as `.transport`) or
+    /// `CancellationError`. Never a failure to show the user.
+    var isCancellation: Bool {
+        if self is CancellationError { return true }
+        if (self as? URLError)?.code == .cancelled { return true }
+        if let api = self as? APIError, case let .transport(inner) = api,
+           (inner as? URLError)?.code == .cancelled {
+            return true
+        }
+        return false
+    }
+}
 import os
 
 // Supplies the current bearer token for outgoing requests. Implemented by the auth layer
@@ -274,9 +289,19 @@ final class APIClient: @unchecked Sendable {
         try await search(query: query, exact: false).franchises
     }
 
-    func franchise(id: String) async throws -> Franchise {
+    /// `country` (ISO 3166-1 alpha-2) selects `audience.contentRating` for the viewer's market;
+    /// the server never substitutes another market's rating, so a miss is `nil`, not "US".
+    func franchise(id: String, country: String? = nil) async throws -> Franchise {
         let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        return try await request("/franchises/\(encoded)", idempotent: true)
+        let query = country.map { "?country=\($0)" } ?? ""
+        return try await request("/franchises/\(encoded)\(query)", idempotent: true)
+    }
+
+    /// Country-specific streaming availability, read apart from the franchise so a cold provider
+    /// lookup never delays the show page (docs/api-contract.md, WatchAvailability).
+    func watchProviders(id: String, country: String) async throws -> WatchAvailability {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await request("/franchises/\(encoded)/watch-providers?country=\(country)", idempotent: true)
     }
 
     func library() async throws -> LibraryResponse {
@@ -516,6 +541,9 @@ final class APIClient: @unchecked Sendable {
             }
 
             do {
+                #if DEBUG
+                let data = DemoLibrary.rewriteIfNeeded(path: path, data: data)
+                #endif
                 return try decoder.decode(Response.self, from: data)
             } catch {
                 APIClient.log.error("\(method) \(path): decoding failed: \(error)")

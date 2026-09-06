@@ -185,7 +185,12 @@ struct PosterSlot: View {
                 // here side-cropped every asset that is not 2:3: Wistoria's announcement lockup
                 // rendered as "son 3 制作". A 0.708 cover loses 4 % of its height against the slot,
                 // which lands as a 2-pt tinted band, not a grey bar.
-                RemoteImageView(url: url, contentMode: .fit, maxPixel: max(width, height) * 3, placeholderHidden: true)
+                RemoteImageView(url: url, contentMode: .fit, maxPixel: max(width, height) * 3,
+                                placeholderHidden: true,
+                                // A cover that misses the slot's ratio by ≤5 % fills instead of
+                                // leaving a 2-pt tinted sliver along one edge; a real mismatch
+                                // (a lockup, a wide still) keeps the honest fit + palette mat.
+                                fitSnapAspect: height > 0 ? width / height : nil)
                     .transition(.opacity.animation(ThemeMotion.uiPoster))
             } else {
                 Image(systemName: "photo")
@@ -201,7 +206,7 @@ struct PosterSlot: View {
         // hairline over someone's illustration is the definition of cheap.
         .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
             .strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-        .shadow(shadow)
+        .cardShadow(shadow, shape: RoundedRectangle(cornerRadius: radius, style: .continuous))
         .task(id: url) {
             tint = await PaletteCache.shared.resolve(url: url, maxPixel: max(width, height) * 3)
         }
@@ -268,13 +273,14 @@ struct SecondaryButtonStyle2: ButtonStyle {
     }
 }
 
-/// Text in accent, 44×44 target, no container.
+/// A bare text action, 44×44 target, no container. `ThemeColor.interactive`, never amber — see
+/// that token for why a tappable word may not wear the colour a next step wears.
 struct TertiaryButtonStyle2: ButtonStyle {
     var destructive = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .type(ThemeType.button)
-            .foregroundStyle(destructive ? ThemeColor.destructive : ThemeColor.accent)
+            .foregroundStyle(destructive ? ThemeColor.destructive : ThemeColor.interactive)
             .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
             .opacity(configuration.isPressed ? 0.6 : 1)
@@ -345,9 +351,9 @@ struct SplitHalfStyle: ButtonStyle {
     }
 }
 
-/// An inline text action beside a label — "See all", "Clear", "Read more". Accent, footnote
-/// semibold, 44-pt target held by `contentShape` rather than by a frame, so it can sit on a
-/// section header's baseline without shoving the header 12 pt taller.
+/// An inline text action beside a label — "See all", "Clear", "Read more". `interactive` ink,
+/// footnote semibold, 44-pt target held by `contentShape` rather than by a frame, so it can sit on
+/// a section header's baseline without shoving the header 12 pt taller.
 struct InlineLinkButtonStyle: ButtonStyle {
     var destructive = false
 
@@ -356,7 +362,10 @@ struct InlineLinkButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .type(ThemeType.listAction)
-            .foregroundStyle(destructive ? ThemeColor.destructive : ThemeColor.accent)
+            // `interactive`, not `accent`: this style draws "See all" one line above the amber
+            // "Returns Oct 2" captions it links to. The link is carried by the trailing slot it
+            // sits in and by its weight; amber belongs to the fact underneath.
+            .foregroundStyle(destructive ? ThemeColor.destructive : ThemeColor.interactive)
             // A footnote cap-height is ~13 pt, so 12 pt of vertical padding gives a ~37–40 pt
             // target, and leading-only padding ends the hit area at the last glyph — the user has
             // to hit the WORD. Symmetric padding plus a 44-pt floor, applied before `contentShape`
@@ -379,7 +388,10 @@ struct InlineLinkButtonStyle: ButtonStyle {
 struct SectionLabel: View {
     let text: String
     var dot = false
-    var tint: Color = ThemeColor.textTertiary
+    // `textSecondary`, one step up from the `textTertiary` it shipped at: the label is the
+    // section's IDENTITY, and at tertiary it was outweighed by its own trailing "See all" — the
+    // utility link read as the header and the header read as a footnote.
+    var tint: Color = ThemeColor.textSecondary
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
@@ -393,29 +405,47 @@ struct SectionLabel: View {
     }
 }
 
-// MARK: - Status chip
+// MARK: - The brand lockup
 
-/// 32 pt visible, 44 pt target, native glass, chevron.down 9 pt. Labels are the status language.
-struct StatusChip: View {
-    let label: String
-    let action: () -> Void
+/// "Previously." — the icon's ribbon, then Outfit SemiBold with the icon's coral full stop.
+///
+/// Hoisted out of `TodayView` (the filed shared request): Profile's colophon had drifted into a
+/// second drawing, so the logo had two versions inside one app. The full stop is `brandPeriod`
+/// everywhere the name is set — the launch, this header, the sign-in gate, the colophon —
+/// because the icon's two objects (ribbon, coral bead) ARE the wordmark's two objects.
+struct Wordmark: View {
+    /// The fine-print form Profile's colophon sets: a smaller mark, secondary ink, no shadow.
+    var colophon = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(label).type(ThemeType.metadataEmphasis)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(ThemeColor.textPrimary)
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .contentShape(Capsule())
+        HStack(alignment: .center, spacing: colophon ? 6 : ThemeSpace.x2) {
+            PreviouslyMark(width: colophon ? 9 : 11)
+            BrandWord(style: ThemeType.brandWordmark,
+                      ink: colophon ? ThemeColor.textSecondary : ThemeColor.textPrimary)
         }
-        // `chromeGlass`, not `glassChrome`: identical on a normal device, and the solid
-        // `surfaceFloating` fallback the spec asks for when Reduce Transparency is on.
-        .chromeGlass(in: Capsule(), interactive: true)
-        .frame(minHeight: 44)
-        .accessibilityLabel("Change status, \(label)")
+        .shadow(colophon ? .none : .art)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Previously")
+    }
+}
+
+/// The name, set in two inks: the word in `ink`, the full stop in `brandPeriod`. The stop is the
+/// font's own glyph — Outfit's period is a circle, the icon's bead at text size.
+struct BrandWord: View {
+    var style: TypeToken = ThemeType.brandWordmark
+    var ink: Color = ThemeColor.textPrimary
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text("Previously")
+                .type(style)
+                .foregroundStyle(ink)
+            Text(".")
+                .type(style)
+                .foregroundStyle(ThemeColor.brandPeriod)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Previously")
     }
 }
 
@@ -431,6 +461,10 @@ struct GroupedList<Content: View>: View {
         VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
             if let header {
                 SectionLabel(text: header).padding(.leading, ThemeSpace.x4)
+                    // VoiceOver's heading rotor is how a grouped screen is skimmed; without the
+                    // trait a five-section settings page had one stop. (Profile's private
+                    // `ProfileSection` existed to add exactly this — folded back here.)
+                    .accessibilityAddTraits(.isHeader)
             }
             // A plate, not a stroked box: this is the iOS grouped-table grammar, and a grouped
             // table has never had an outline. The fill IS the group.
@@ -578,6 +612,8 @@ extension EnvironmentValues {
 struct MediaRow<Trailing: View>: View {
     let title: String
     var meta: String? = nil
+    /// A forward fact appended to `meta` in accent, on the same line.
+    var metaLead: String? = nil
     /// The forward-looking fact: "Returns Oct 2", "Episode 19 next". Amber, because a real next
     /// step is exactly what amber is for. Never use it for a status that has already happened.
     var lead: String? = nil
@@ -599,6 +635,11 @@ struct MediaRow<Trailing: View>: View {
     /// Registers the row's artwork as the zoom-transition source, so pushing Detail from it grows
     /// out of this poster instead of sliding in from the right.
     var zoomID: String? = nil
+    /// Where you are, 0…1, drawn as a 3-pt bar under the text column — the wordless form of
+    /// "11 of 24 watched". A row that carries one says in words only what is COMING.
+    var progress: Double? = nil
+    /// The bar's count, for VoiceOver ("11 of 24 watched"); the bar itself is silent.
+    var progressSpoken: String? = nil
     @ViewBuilder var trailing: () -> Trailing
     let action: () -> Void
 
@@ -633,10 +674,16 @@ struct MediaRow<Trailing: View>: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if let meta {
-                        Text(meta)
+                        // `metaLead`: a forward fact riding the grey line in accent, one line.
+                        (Text(meta).foregroundStyle(ThemeColor.textSecondary)
+                         + (metaLead.map { Text(" \u{00B7} ").foregroundStyle(ThemeColor.textSecondary) + Text($0).foregroundStyle(ThemeColor.accent) } ?? Text("")))
                             .type(ThemeType.rowMeta)
-                            .foregroundStyle(ThemeColor.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let progress {
+                        ProgressBar(value: progress)
+                            .padding(.top, ThemeSpace.x1)
+                            .padding(.trailing, ThemeSpace.x6)
                     }
                 }
                 Spacer(minLength: ThemeSpace.x3)
@@ -675,7 +722,8 @@ struct MediaRow<Trailing: View>: View {
         .buttonStyle(RowPressStyle())
         .accessibilityElement(children: .combine)
         // Spelled out rather than left to `.combine`, so the trailing chevron is never spoken.
-        .accessibilityLabel([title, lead, meta].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel([title, lead, meta, progress == nil ? nil : progressSpoken]
+            .compactMap { $0 }.joined(separator: ", "))
         .accessibilityHint(hint ?? "")
     }
 
@@ -687,13 +735,39 @@ struct MediaRow<Trailing: View>: View {
 }
 
 extension MediaRow where Trailing == EmptyView {
-    init(title: String, meta: String? = nil, lead: String? = nil, poster: String? = nil,
+    init(title: String, meta: String? = nil, metaLead: String? = nil, lead: String? = nil, poster: String? = nil,
          slot: PosterSize = .row, chevron: Bool = true, dimmed: Bool = false,
          separator: Bool = true, hint: String? = nil, zoomID: String? = nil,
-         action: @escaping () -> Void) {
-        self.init(title: title, meta: meta, lead: lead, poster: poster, slot: slot,
+         progress: Double? = nil, action: @escaping () -> Void) {
+        self.init(title: title, meta: meta, metaLead: metaLead, lead: lead, poster: poster, slot: slot,
                   chevron: chevron, dimmed: dimmed, separator: separator, hint: hint,
-                  zoomID: zoomID, trailing: { EmptyView() }, action: action)
+                  zoomID: zoomID, progress: progress, trailing: { EmptyView() }, action: action)
+    }
+}
+
+/// The one progress bar: a 3-pt track in `strokeStrong`, the watched share in accent, a 3-pt
+/// minimum so a started season is never a zero-width fill. Wordless on purpose — it replaces
+/// "11 of 24 watched" wherever a row or header can show it instead of saying it. Callers carry
+/// the count in their accessibility label.
+struct ProgressBar: View {
+    let value: Double
+    /// What VoiceOver reads for the bar ("4 episodes behind"). Without it the bar is decoration
+    /// and hidden; a label set on a hidden element from outside was silently dropped, which is
+    /// how Today's hero came to say its count to nobody.
+    var spoken: String? = nil
+
+    var body: some View {
+        GeometryReader { proxy in
+            let ratio = min(1, max(0, value))
+            ZStack(alignment: .leading) {
+                Capsule().fill(ThemeColor.strokeStrong)
+                Capsule().fill(ThemeColor.accent)
+                    .frame(width: max(3, proxy.size.width * ratio))
+            }
+        }
+        .frame(height: 3)
+        .accessibilityHidden(spoken == nil)
+        .accessibilityLabel(spoken ?? "")
     }
 }
 
@@ -705,8 +779,18 @@ extension MediaRow where Trailing == EmptyView {
 /// is allowed to be accent, because "Returns Oct 2" is the reason the shelf exists.
 struct ShelfCard: View {
     let title: String
+    /// A GRID reserves two title lines so every row shares one caption baseline (review,
+    /// 5 Sep: Search's 3-up grid zigzagged, one card's meta line 26 px above its neighbours');
+    /// a SHELF keeps the caption directly under a one-line name (user, 24 Aug).
+    var reserveTitleLines: Bool = false
     var caption: String? = nil
     var captionIsLead: Bool = false
+    /// The show has a season ON AIR. Drawn as a `LiveDot` before the caption — the cue a
+    /// poster alone cannot give ("no visual cue to clarify a series has a current airing
+    /// season", user, 6 Sep). Colour states it; the beat only draws the eye to it.
+    var airing: Bool = false
+    /// An episode of that season is out now and unwatched — the dot takes the finite beat.
+    var airingFresh: Bool = false
     var poster: String? = nil
     var slot: PosterSize = .shelfLarge
     /// Zoom-transition source id for the push into Detail.
@@ -724,28 +808,48 @@ struct ShelfCard: View {
                     PosterSlot(url: poster, slot)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title.shelfShortened)
+                    Text(title.shelfShortened(fitting: reserveTitleLines ? 26 : 24))
                         .type(ThemeType.shelfTitle)
                         .foregroundStyle(ThemeColor.textPrimary)
                         // NOTHING reserved: the caption sits directly under the title, one line
                         // or two. Reserving a second line put an empty band between every
                         // one-line name and its date (user, 24 Aug); a two-line name simply
                         // carries its caption one line lower. Never truncated (DIRECTION §3).
-                        .lineLimit(typeSize.isAccessibilitySize ? 1...6 : 1...2)
-                        .minimumScaleFactor(0.82)
+                        // A third line costs 16 pt and is the only honest answer for a name
+                        // with no separator (review i3).
+                        .lineLimit(typeSize.isAccessibilitySize ? 1...6 : (reserveTitleLines ? 2...3 : 1...3))
+                        .minimumScaleFactor(0.8)
                         .allowsTightening(true)
                         .multilineTextAlignment(.leading)
+                        // The title takes its WRAPPED height, whatever the shelf proposes. On
+                        // Today's Watching shelf a two-line name was photographed scaled down and
+                        // cut to one line with an ellipsis ("The Beginning After…", 2 Sep) — the
+                        // horizontal scroller had handed the card a one-line height budget and
+                        // the range limit obeyed it. The rule is the identity title never
+                        // ellipsizes; a fixed vertical size is what makes the range mean "up to
+                        // two" rather than "whatever fits".
+                        .fixedSize(horizontal: false, vertical: true)
                     if let caption {
-                        Text(caption)
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            if airing { LiveDot(fresh: airingFresh) }
+                            Text(caption)
                             .type(ThemeType.shelfCaption)
                             .foregroundStyle(captionIsLead ? ThemeColor.accent : ThemeColor.textSecondary)
-                            // Two lines and a tail ellipsis, so the last visible caption ends
-                            // inside its own card instead of at the screen bezel.
-                            .lineLimit(2)
+                            // ONE line (review i2: "3 episodes / behind" on a 100-pt card grew
+                            // the card four rows tall with "behind" orphaned): a caption
+                            // compresses a step before it wraps.
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .allowsTightening(true)
                             .truncationMode(.tail)
+                        }
                     }
                 }
-                .frame(width: slot.size.width, alignment: .leading)
+                // The poster's width — except at accessibility sizes, where a one-column grid
+                // hands the card the whole row and the caption should not wrap "Anime / · 1999"
+                // inside a 112-pt column beside it.
+                .frame(width: typeSize.isAccessibilitySize ? nil : slot.size.width, alignment: .leading)
+                .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
             }
             .contentShape(Rectangle())
         }
@@ -771,14 +875,118 @@ extension String {
         }
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: " -\u{2013}\u{2014}:"))
         // A long "Title: Subtitle" keeps its identity half rather than an ellipsis mid-word.
-        if s.count > 40 {
-            for sep in [": ", " – ", " — ", " - ", " ("] {
-                if let r = s.range(of: sep), s.distance(from: s.startIndex, to: r.lowerBound) >= 12 {
-                    return String(s[s.startIndex..<r.lowerBound])
-                }
+        return s.shortened(fitting: 40, minHead: 12)
+    }
+
+    /// The identity half of a "Title: Subtitle" when the whole exceeds `budget` characters and
+    /// the head is at least `minHead` long — a shelf passes 24, a grid 26, the lane 30 (review
+    /// i3: "Bleach: Thousand-Year Blood War" wrapped and "HELL MODE: The Hardcore Gamer Do…" cut
+    /// mid-word under the 40-character gate).
+    func shelfShortened(fitting budget: Int, minHead: Int = 5) -> String {
+        shelfShortened.shortened(fitting: budget, minHead: minHead)
+    }
+
+    private func shortened(fitting budget: Int, minHead: Int) -> String {
+        guard count > budget else { return self }
+        for sep in [": ", " – ", " — ", " - ", " ("] {
+            if let r = range(of: sep), distance(from: startIndex, to: r.lowerBound) >= minHead {
+                return String(self[startIndex..<r.lowerBound])
             }
         }
-        return s
+        return self
+    }
+}
+
+// MARK: - Banner card
+
+/// A wide art card that sells a show: banner art on top, the title and one caption beneath.
+///
+/// This object existed three times before the cohesion pass (30 Aug) — Library's shelf card
+/// (104 pt, radius 13), Library's status feature card (176 pt, radius 18) and Search's browse tile
+/// (radius 22) — three geometries and three title treatments for one job, two of the radii in no
+/// token table. The radius is `ThemeRadius.card` (Search's tile already used it, and keeps its
+/// title-on-art anatomy for the browse grid); the two below-the-art variants are one component now.
+///
+/// The caption rule is `ShelfCard`'s, enforced here so a screen cannot opt out of it again: a
+/// forward-looking fact ("Returns today") is accent, a plain fact is grey. Library hard-coded grey
+/// and rendered the identical class of fact Today draws amber — the app's central colour rule
+/// answered two ways one tab apart.
+struct BannerCard: View {
+    /// One geometry. A `.feature` variant (176 pt) existed for the status tabs' lead card and
+    /// died with them (30 Aug).
+    static let height: CGFloat = 104
+    /// Banner decode budget at the width the card actually renders.
+    private static let maxPixel: CGFloat = 560
+
+    let title: String
+    /// The forward-looking fact, in accent — same contract as `MediaRow.lead`.
+    var lead: String? = nil
+    var meta: String? = nil
+    var art: String? = nil
+    /// `art` is a portrait COVER (the catalogue has no banner). Composited whole rather than
+    /// cropped to a horizontal slice of itself — see `LandscapeArt`.
+    var portraitSource: Bool = false
+    /// See `LandscapeArt.ultraWide`.
+    var ultraWide: Bool = false
+    var zoomID: String? = nil
+    let action: () -> Void
+
+    private var caption: String? { lead ?? meta }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: ThemeSpace.x2) {
+                banner
+                VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
+                    Text(title.shelfShortened)
+                        .type(ThemeType.shelfTitle)
+                        .foregroundStyle(ThemeColor.textPrimary)
+                        // Never truncated (DIRECTION §3) — the compact card shipped `lineLimit(1)`
+                        // and amputated the identity titles the rule exists for.
+                        .lineLimit(1...2)
+                        .minimumScaleFactor(0.82)
+                        .allowsTightening(true)
+                        .multilineTextAlignment(.leading)
+                    if let caption {
+                        Text(caption)
+                            .type(ThemeType.shelfCaption)
+                            .foregroundStyle(lead != nil ? ThemeColor.accent : ThemeColor.textSecondary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(OverArtPressStyle())
+        .accessibilityElement(children: .combine)
+        // The spoken title is the WHOLE title, never the shortened one.
+        .accessibilityLabel([title, caption].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+    }
+
+    private var banner: some View {
+        let shape = RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous)
+        return ZStack {
+            shape.fill(ThemeColor.surfaceRaised)
+            LandscapeArt(url: art, portraitSource: portraitSource, maxPixel: BannerCard.maxPixel,
+                         ultraWide: ultraWide)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: BannerCard.height)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
+        .cardShadow(.art, shape: shape)
+        .modifier(OptionalZoomSource(id: zoomID))
+    }
+}
+
+/// `zoomSource` with an optional id, so a card can be composed once whether or not its screen
+/// registers it as a transition source.
+private struct OptionalZoomSource: ViewModifier {
+    let id: String?
+    func body(content: Content) -> some View {
+        if let id { content.zoomSource(id) } else { content }
     }
 }
 
@@ -808,7 +1016,7 @@ private struct ShelfScroller: ViewModifier {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     func body(content: Content) -> some View {
-        let fade = masked && !typeSize.isAccessibilitySize
+        let fade = masked && !typeSize.isAccessibilitySize && !PerfProbe.flag("perfNoShelfMask")
         return content
             .contentMargins(.trailing, trailingMargin, for: .scrollContent)
             .mask {
@@ -905,6 +1113,44 @@ private struct ToastActionStyle: ButtonStyle {
     }
 }
 
+// MARK: - Scroll offset
+
+/// A screen's scroll offset, as an object rather than view state.
+///
+/// `set` clamps and de-duplicates (`ThemeMetrics.scrollSample`), so nothing publishes once the
+/// chrome has settled; and because only the small views that draw the veils (and stretch a
+/// hero) read `y` inside their bodies, a scroll frame invalidates those views alone. As `@State`
+/// on the screen it re-ran the screen's whole body — Today's stack, queue, shelf and every row —
+/// on every frame of the first swipe (user, 2 Sep, twice).
+@Observable @MainActor
+final class ScrollOffset {
+    private(set) var y: CGFloat = 0
+
+    /// Today's docking facts (5 Sep, "halfway through it just halts"): the hero copy is passing
+    /// under the wordmark band; the lockup has cleared the bar's ramp. As `@State` on the screen
+    /// each flip re-ran Today's whole body at the one moment the veils and the header were also
+    /// changing; here only the two small views that draw them observe them.
+    private(set) var heroCopyUnderBand = false
+    private(set) var heroUnderBand = false
+
+    func setCopyUnderBand(_ v: Bool) { if v != heroCopyUnderBand { heroCopyUnderBand = v } }
+    func setHeroUnderBand(_ v: Bool) { if v != heroUnderBand { heroUnderBand = v } }
+
+    /// Past this the offset changes nothing on screen (`ThemeMetrics.scrollSample`). A screen
+    /// whose wash TRAVELS with the content (Profile) raises it to the wash's own height.
+    var ceiling: CGFloat = 240
+
+    func set(_ raw: CGFloat) {
+        let v = ThemeMetrics.scrollSample(raw, ceiling: ceiling)
+        if v != y { y = v }
+    }
+
+    /// 0 while a hero owns the status bar, 1 once anything is close enough to touch the clock.
+    var veilOpacity: Double { Double(min(1, max(0, (y - 16) / 64))) }
+    /// The pull-down, as extra art height.
+    var stretch: CGFloat { max(0, -y) }
+}
+
 // MARK: - Chrome edges
 
 /// The scroll edge.
@@ -932,14 +1178,33 @@ struct ScrollEdgeChrome: View {
     /// under a gradient that only softens it (Apple Music's Search, the user's reference). The
     /// default keeps the opaque status-bar band for screens whose rows pass under the clock.
     var soft = false
+    /// Top only: how far down the full-canvas hold reaches before the ramp starts. Defaults to the
+    /// status bar. Detail's floating toolbar passes the toolbar's own bottom edge — this parameter
+    /// is what `FloatingToolbarVeil` existed to change, and that private copy folded into it.
+    var holdHeight: CGFloat? = nil
+    /// Top only: the bar's ink, when it is not the canvas — a show page passes its art colour
+    /// (`DetailTint.chrome`) so the hardened bar is the show's own glass, not a black slab over
+    /// the picture ("too blackish anyway, should be glassish", user, 4 Sep). Ignored under Reduce
+    /// Transparency, where there is no blur for a colour to be glass over.
+    var color: Color? = nil
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    private var hold: CGFloat { max(0, min(1, ThemeMetrics.topSafeInset / max(height, 1))) }
+    /// What the top veil is painted with.
+    private var ink: Color { (reduceTransparency ? nil : color) ?? ThemeColor.chromeVeil }
 
-    /// Canvas opacity from the screen edge inward. The top holds full canvas across the whole
-    /// status bar, then falls off fast; the bottom never reaches full, because the tab bar is
-    /// glass and glass with nothing behind it is a grey pill.
+    private var hold: CGFloat {
+        max(0, min(1, (holdHeight ?? ThemeMetrics.topSafeInset) / max(height, 1)))
+    }
+
+    /// Canvas opacity from the screen edge inward. The top holds the BAR's canvas
+    /// (`ThemeMetrics.chromeBarOpacity`, over a full-strength blur) across the whole hold, then
+    /// falls off fast; the bottom never reaches full until the pill, because the tab bar is glass
+    /// and glass with nothing behind it is a grey pill.
+    ///
+    /// Under Reduce Transparency there is no blur to carry the bar, so it is opaque there — a
+    /// 74 % veil with nothing softening what is under it is the half-lit row under "Library"
+    /// that the hardened bar was built to end.
     private var veil: LinearGradient {
         switch side {
         case .top where soft:
@@ -949,11 +1214,13 @@ struct ScrollEdgeChrome: View {
                 .init(color: ThemeColor.chromeVeil.opacity(0), location: 1),
             ], startPoint: .top, endPoint: .bottom)
         case .top:
+            let bar = reduceTransparency ? 1
+                : (color != nil ? ThemeMetrics.chromeBarTintedOpacity : ThemeMetrics.chromeBarOpacity)
             return LinearGradient(stops: [
-                .init(color: ThemeColor.chromeVeil, location: 0),
-                .init(color: ThemeColor.chromeVeil, location: hold),
-                .init(color: ThemeColor.chromeVeil.opacity(0.34), location: hold + (1 - hold) * 0.45),
-                .init(color: ThemeColor.chromeVeil.opacity(0), location: 1),
+                .init(color: ink.opacity(bar), location: 0),
+                .init(color: ink.opacity(bar), location: hold),
+                .init(color: ink.opacity(bar * 0.45), location: hold + (1 - hold) * 0.45),
+                .init(color: ink.opacity(0), location: 1),
             ], startPoint: .top, endPoint: .bottom)
         case .bottom:
             // Reaches FULL canvas, and reaches it before the tab pill's top edge — but only in the
@@ -991,9 +1258,11 @@ struct ScrollEdgeChrome: View {
                 .init(color: .clear, location: 1),
             ], startPoint: .top, endPoint: .bottom)
         case .top:
+            // Full strength through the WHOLE hold: the bar is translucent now, so the blur is
+            // what keeps a row title under it from reading as a row title.
             return LinearGradient(stops: [
                 .init(color: .black, location: 0),
-                .init(color: .black, location: hold * 0.85),
+                .init(color: .black, location: hold),
                 .init(color: .black.opacity(0.42), location: hold + (1 - hold) * 0.45),
                 .init(color: .clear, location: 1),
             ], startPoint: .top, endPoint: .bottom)
@@ -1012,7 +1281,7 @@ struct ScrollEdgeChrome: View {
 
     private var band: some View {
         ZStack {
-            if !reduceTransparency {
+            if !reduceTransparency && !PerfProbe.flag("perfNoMaterial") {
                 Rectangle().fill(.ultraThinMaterial).mask(blurMask)
             }
             veil
@@ -1045,12 +1314,36 @@ private struct ScrollEdgeChromeModifier: ViewModifier {
     let bottom: Bool
     let topHeight: CGFloat
     var softTop = false
+    var topRaised = false
+    var topHold: CGFloat? = nil
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) { if bottom { ScrollEdgeChrome(side: .bottom) } }
             .overlay(alignment: .top) {
-                if top { ScrollEdgeChrome(side: .top, height: topHeight, soft: softTop) }
+                if top {
+                    // A soft top is the AT-REST edge: the wash runs to the screen's top under a
+                    // translucent gradient. The moment content scrolls under the bar the veil
+                    // hardens — opaque canvas through the WHOLE bar (`topHold`: status bar +
+                    // inline title, plus the search drawer where there is one), then out over
+                    // `barEdgeRamp`. It used to hold through the status bar only and ramp across
+                    // the title, which is exactly where a row's progress line was photographed
+                    // ghosting under "Library" (2 Sep). Both layers stay mounted; only opacity
+                    // trades, so the swap is a cross-fade rather than a re-created material.
+                    if softTop {
+                        let hold = topHold ?? ThemeMetrics.topSafeInset
+                        ZStack(alignment: .top) {
+                            ScrollEdgeChrome(side: .top, height: topHeight, soft: true)
+                                .opacity(topRaised ? 0 : 1)
+                            ScrollEdgeChrome(side: .top, height: hold + ThemeMetrics.barEdgeRamp,
+                                             soft: false, holdHeight: hold)
+                                .opacity(topRaised ? 1 : 0)
+                        }
+                        .animation(ThemeMotion.uiGentle, value: topRaised)
+                    } else {
+                        ScrollEdgeChrome(side: .top, height: topHeight)
+                    }
+                }
             }
     }
 }
@@ -1081,13 +1374,21 @@ extension View {
     /// of every scroll view (a primary CTA at the bottom read as disabled).
     func scrollEdgeChrome(top: Bool = true, bottom: Bool = true,
                           topHeight: CGFloat = ThemeMetrics.topChromeHeight) -> some View {
-        scrollEdgeChromeBody(top: top, bottom: bottom, topHeight: topHeight).scrollEdgeEffectHidden(true, for: .all)
+        scrollEdgeChromeBody(top: top, bottom: bottom, topHeight: topHeight).chromeScrollEdgeHidden(.all)
     }
 
+    /// `topRaised`: content has scrolled under the bar, so a soft top hardens to the opaque
+    /// status-band veil. Screens drive it from a geometry probe on their scroll content — the
+    /// `onScrollGeometryChange` equivalent that also fires on the iOS 27 simulator.
+    /// `topHold`: the bar's full band (status bar + title bar + any search drawer) that the
+    /// hardened veil holds opaque canvas through before its `barEdgeRamp`. Defaults to the status
+    /// bar for screens whose title sits in their own chrome band.
     func scrollEdgeChromeBody(top: Bool = true, bottom: Bool = true,
                           topHeight: CGFloat = ThemeMetrics.topChromeHeight,
-                          softTop: Bool = false) -> some View {
-        modifier(ScrollEdgeChromeModifier(top: top, bottom: bottom, topHeight: topHeight, softTop: softTop))
+                          softTop: Bool = false, topRaised: Bool = false,
+                          topHold: CGFloat? = nil) -> some View {
+        modifier(ScrollEdgeChromeModifier(top: top, bottom: bottom, topHeight: topHeight,
+                                          softTop: softTop, topRaised: topRaised, topHold: topHold))
     }
 
     /// Bottom clearance for a tab root's scroll view, as a scroll-content MARGIN.
@@ -1115,7 +1416,7 @@ extension View {
     /// system owns that edge. Only the bottom system effect is suppressed, because ours replaces it.
     func pushedScreenChrome() -> some View {
         scrollEdgeChromeBody(top: false, bottom: true)
-            .scrollEdgeEffectHidden(true, for: .bottom)
+            .chromeScrollEdgeHidden(.bottom)
             .contentMargins(.bottom, ThemeMetrics.tabBarClearance, for: .scrollContent)
     }
 
@@ -1154,6 +1455,27 @@ struct ArtScrim: View {
     }
 }
 
+/// How hard a billboard's protection is drawn, from the art's own mean lightness
+/// (`PaletteCache.lightness(for:)`): full over a bright cover, half over a dark one. A veil and
+/// a scrim tuned for the palest poster buried the dark ones ("the overlay on hero is too dark
+/// as the new images are themselves dark", user, 5 Sep) — a dark picture needs less taking
+/// away from it for the type to read, and every tenth of veil over it is atmosphere lost.
+enum HeroProtection {
+    static let full: Double = 1
+    static let least: Double = 0.35
+
+    /// OKLab compresses the darks: a poster that reads as dark (mean sRGB ≈ 40/255, Thrones)
+    /// measures L ≈ 0.28, Wednesday's purple-black ≈ 0.35, a mid poster ≈ 0.45–0.55, a bright
+    /// one ≥ 0.6. So: L 0.30 → 0.35, L 0.60 → full, linear between.
+    static func strength(lightness: Double?) -> Double {
+        guard let l = lightness else { return full }
+        return min(full, max(least, least + (l - 0.30) / 0.30 * (full - least)))
+    }
+
+    /// The ground dim behind a composited cover, at this strength.
+    static func groundDim(_ strength: Double) -> Double { 0.28 * strength }
+}
+
 /// A cinematic, edge-to-edge art header with content laid over its lower third.
 ///
 /// This is the shape the ORIGINAL Today and Detail screens had and the rebuild replaced with a
@@ -1184,23 +1506,86 @@ struct ArtHeader<Overlay: View>: View {
     /// banner the cover is composited instead: a blurred, opaque copy of itself as the ground, the
     /// whole cover fitted over it. Nothing is upscaled and nothing is lost.
     var portraitSource: Bool = false
+    /// A slow breath on the sharp layer — Today's billboard. ~7 % over 24 s, eased, reversing:
+    /// under the threshold where it reads as motion, over the one where the frame reads as a
+    /// still pinned to a wall. Off under Reduce Motion. It is one transform animation on one
+    /// layer, so no body re-evaluates for it (the scroll-lag rule of 2 Sep still holds).
+    var drift: Bool = false
+    /// The landscape is an AniList 1900×400 banner (`WideArt.ultraWide`): decode it at its native
+    /// width, since the frame shows only a slice of it. A decode budget, not a choice of asset.
+    var ultraWide: Bool = false
+    /// The sharp layer is on screen (the launch waits for it).
+    var onArtLoaded: (() -> Void)? = nil
+    /// The picture starts THIS far below the frame's top, on the composited path: the blurred
+    /// ground alone fills the chrome band. Today passes its wordmark band (review i3: a poster's
+    /// own logotype in its top quarter is INK, and a veil cannot remove ink — Re:ZERO's read as
+    /// "Previously.ZERO" under a 0.82 veil). Zero on Detail, whose bar is glyph capsules.
+    var topInset: CGFloat = 0
+    /// How much the blurred ground behind a composited cover is dimmed (`HeroProtection`
+    /// scales it with the art's lightness; 0.28 over a bright cover).
+    var groundDim: Double = 0.28
     @ViewBuilder var overlay: () -> Overlay
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drifting = false
+
+    private var driftScale: CGFloat { drifting ? 1.07 : 1 }
+    private var driftAnchor: UnitPoint { focus == .top ? .top : (focus == .bottom ? .bottom : .center) }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             (tint ?? PaletteCache.fallback)
             if let url, !url.isEmpty {
                 if portraitSource {
-                    RemoteImageView(url: url, contentMode: .fill, maxPixel: 1024,
-                                    alignment: .center, placeholderHidden: true)
-                        .blur(radius: 48, opaque: true)
-                        .overlay(Color.black.opacity(0.28))
-                    RemoteImageView(url: url, contentMode: .fit, maxPixel: 1024,
-                                    alignment: focus, placeholderHidden: true)
-                        .transition(.opacity)
+                    // Derived from the sharp layer's OWN decode (`BlurredArt`, 5 Sep): one
+                    // fetch, one decode, both layers in one transaction — and a bitmap the
+                    // compositor merely scales, where `.blur(radius: 48)` on this layer was a
+                    // Gaussian pass over a screen-sized texture on every frame of the drift.
+                    BlurredArt(url: url, sourceMaxPixel: 2048, fraction: 0.12)
+                        .overlay(Color.black.opacity(groundDim))
+                    // With a `topInset` the poster keeps its width, starts at the band's bottom
+                    // edge and loses its bottom ~13 % — the part already under the copy scrim —
+                    // and its top edge is BLENDED into the blurred ground over 56 pt rather than
+                    // cut: a hard line where every poster began read as a header plate over an
+                    // image (i4 first look), the opposite of a billboard.
+                    // One transform on one layer, and NO mask unless the picture is inset: a mask is an
+                    // offscreen pass, and under the drift `.mask { Color.black }` cost one per frame on a
+                    // 2048-px layer — Today lagged to a standstill (5 Sep).
+                    let sharp = RemoteImageView(url: url, contentMode: topInset > 0 ? .fill : .fit, maxPixel: 2048,
+                                                alignment: focus, placeholderHidden: true, onLoaded: onArtLoaded)
+                        .padding(.top, topInset)
+                    if topInset > 0 {
+                        // The ramp is 150, not 56 (6 Sep, "the top blur looks shit"): over 56 pt
+                        // the blurred ground and the sharp poster meet inside one band the eye
+                        // can find, so the top of the billboard reads as a picture that failed
+                        // to focus rather than as a picture arriving. Eased in the middle, too —
+                        // a straight ramp still shows its ends. Nothing else changes: the poster
+                        // keeps its inset (a titled poster's own logotype stays clear of the
+                        // wordmark), and this remains the only branch that carries a mask.
+                        let blend: CGFloat = 150
+                        sharp
+                            .mask {
+                                LinearGradient(stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .black.opacity(0.35), location: 0.45),
+                                    .init(color: .black.opacity(0.85), location: 0.78),
+                                    .init(color: .black, location: 1),
+                                ], startPoint: .top, endPoint: .bottom)
+                                .frame(height: blend)
+                                .padding(.top, topInset)
+                                .frame(maxHeight: .infinity, alignment: .top)
+                                .background(alignment: .bottom) { Color.black.padding(.top, topInset + blend) }
+                            }
+                            .scaleEffect(driftScale, anchor: driftAnchor)
+                            .transition(.opacity)
+                    } else {
+                        sharp.scaleEffect(driftScale, anchor: driftAnchor)
+                            .transition(.opacity)
+                    }
                 } else {
-                    RemoteImageView(url: url, contentMode: .fill, maxPixel: 1536,
-                                    alignment: focus, placeholderHidden: true)
+                    RemoteImageView(url: url, contentMode: .fill, maxPixel: ultraWide ? 1900 : 1536,
+                                    alignment: focus, placeholderHidden: true, onLoaded: onArtLoaded)
+                        .scaleEffect(driftScale, anchor: driftAnchor)
                         .transition(.opacity)
                 }
             }
@@ -1213,6 +1598,82 @@ struct ArtHeader<Overlay: View>: View {
         .frame(height: height)
         .frame(maxWidth: .infinity)
         .clipped()
+        .task(id: drift && !reduceMotion) {
+            guard drift, !reduceMotion, !PerfProbe.flag("perfNoDrift") else { drifting = false; return }
+            // A beat after insertion: an animation started in the same transaction as the
+            // view's own appearance is folded into it and never repeats.
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 24).repeatForever(autoreverses: true)) { drifting = true }
+        }
+    }
+}
+
+/// The billboard's NAME: the show's logo treatment — the catalogue's title image, Netflix's and
+/// Disney+'s billboard grammar — where the gallery has one AND it can be drawn at the headline's
+/// mass, else the name set in type. The art under it is the textless poster where the gallery
+/// has one, so the name is never on the screen twice in the same hand. Accessibility sizes
+/// always set the name in type — a logo cannot grow with the reader's text.
+struct HeroTitle: View {
+    let text: String
+    var name: BillboardName = .type
+    var font: TypeToken = ThemeType.displayXL
+    var lineLimit: Int? = 2
+    var minimumScale: CGFloat = 0.82
+
+    /// The logo's box (5 Sep, settled by the placement spike): within 88 % of the copy's run and
+    /// 120 pt — EVERY logo, emblems included. The user liked the show's own logotype as the
+    /// headline and disliked only its placement; a "headline-mass" rule that dropped circular
+    /// emblems (Slime, Demon Slayer) and stacked marks (Solo Leveling) for type removed the thing
+    /// they liked. At 120 pt the Slime emblem reads as the headline; the first cut's 84 was a
+    /// sticker under a badge wider than it.
+    static let logoMaxWidthFraction: CGFloat = 0.88
+    static let logoMaxHeight: CGFloat = 120
+    /// The optical gap a logo adds beneath itself. A text title's line box carries its own
+    /// descender space; a logo's bounds are its ink, so the line under it sat 3–4 pt off the
+    /// artwork (Chainsaw Man, Black Clover, 5 Sep).
+    static let logoBottomGap: CGFloat = 8
+
+    /// The size a logo of `aspect` is drawn at within a copy run of `copyWidth`.
+    static func logoBox(aspect: CGFloat, copyWidth: CGFloat) -> CGSize? {
+        guard aspect > 0, copyWidth > 0 else { return nil }
+        let w = min(copyWidth * logoMaxWidthFraction, logoMaxHeight * aspect)
+        return CGSize(width: w, height: w / aspect)
+    }
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var resolvedLogo: (image: ArtworkImage, size: CGSize)? {
+        guard case .logo(let image) = name, !typeSize.isAccessibilitySize,
+              let w = image.width, let h = image.height, w > 0, h > 0,
+              let size = Self.logoBox(aspect: CGFloat(w) / CGFloat(h), copyWidth: ThemeMetrics.billboardCopyWidth)
+        else { return nil }
+        return (image, size)
+    }
+
+    var body: some View {
+        if let resolvedLogo {
+            RemoteImageView(url: resolvedLogo.image.url, contentMode: .fit, maxPixel: 1000, alignment: .leading,
+                            placeholderHidden: true)
+                .frame(width: resolvedLogo.size.width, height: resolvedLogo.size.height, alignment: .leading)
+                // Lifted off the picture the way a logotype is on a poster.
+                .shadow(color: .black.opacity(0.45), radius: 8, y: 2)
+                .padding(.bottom, Self.logoBottomGap)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(text)
+                .accessibilityAddTraits(.isHeader)
+        } else {
+            Text(text)
+                .type(font)
+                .foregroundStyle(ThemeColor.textPrimary)
+                .lineLimit(lineLimit)
+                .minimumScaleFactor(minimumScale)
+                .allowsTightening(true)
+                // The billboard's lockup is CENTRED (5 Sep); a caller that sets the name on a
+                // left axis re-aligns it.
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -1236,6 +1697,356 @@ struct OverArtLabel: View {
         .frame(height: 24)
         .background(ThemeColor.scrimStrong, in: Capsule())
         .overlay(Capsule().strokeBorder(ThemeColor.hairline, lineWidth: 1))
+    }
+}
+
+/// The billboard's BADGE — "NEW EPISODE", "4 EPISODES BEHIND", "13 EPISODES LEFT", "CAUGHT UP",
+/// "TRENDING", "WHILE YOU WERE AWAY" — the state as a small filled tag above the title.
+///
+/// The streaming apps' signal, chosen from three directions photographed side by side (4 Sep):
+/// Prime Video overlays a "NEW EPISODE" badge on cover art and Disney+ tags tiles "Season
+/// Finale" / "New Series"; the signal is one or two words on a ground, never a sentence. Amber
+/// ground, `onAccent` ink, `heroBadge` (11-pt bold caps, +0.6), a 4-pt corner — a ground, so
+/// no amber WORD is drawn and the one accent object on the block stays the capsule. Under it
+/// the title, then ONE line ("Today at 7:30 PM · Season 4 · Episode 21").
+///
+/// It replaced, in one day: a scrimmed capsule pill over a 34-pt amber clock ("like a 3rd grade
+/// app"), then a bare small-caps eyebrow with a 20-pt live moment row beneath the title ("text
+/// heavy and cognitively overloaded"). Detail's state block, the trending billboard and the
+/// recap wear the same badge; `OverArtLabel` stays the pill for a moment or an episode on CARD
+/// art.
+struct HeroBadge: View {
+    let text: String
+    /// A drop that is OUT NOW and unwatched — the badge takes a short entrance so the eye lands
+    /// on it before the title. See `AttentionBeat` for why it is finite.
+    var attention: Bool = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var beat = false
+
+    var body: some View {
+        Text(text)
+            .type(ThemeType.heroBadge)
+            .textCase(.uppercase)
+            .foregroundStyle(ThemeColor.onAccent)
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(ThemeColor.accent, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            // An amber halo behind an amber tag was invisible — filmed at 10 fps on 6 Sep the
+            // badge was pixel-identical through the whole window, because a 0.55-opacity accent
+            // glow has no contrast to live in against its own colour. The beat is the TAG: a
+            // `scaleEffect`, which is a render transform and does NOT move the copy beneath it
+            // (the reason first given for avoiding it was simply wrong), plus a widening ring
+            // that reads as an edge rather than a wash.
+            .scaleEffect(beat ? 1.07 : 1)
+            .overlay {
+                if attention && !reduceMotion {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .strokeBorder(ThemeColor.accent, lineWidth: 2)
+                        .opacity(beat ? 0 : 0.9)
+                        .scaleEffect(beat ? 1.45 : 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .task(id: attention) { await AttentionBeat.run(attention && !reduceMotion) { beat = true } }
+    }
+}
+
+/// The app's ONE attention beat: a short, FINITE entrance for something that is out now.
+///
+/// Three breaths at 0.55 s, 3.3 s in all, then still. Deliberately not `ThemeMotion.uiLiveBreath`
+/// (`repeatForever`): WCAG 2.2.2 requires a pause/stop/hide control for auto-starting movement
+/// that runs **longer than five seconds** alongside other content, and an indicator breathing
+/// forever in a scrolling list is precisely that — it would oblige the app to ship a control for
+/// a decoration. Under five seconds and finite, no control is required, and the thing still
+/// catches the eye on arrival, which is the whole job.
+///
+/// Apple's rule bounds it from the other side: movement may never be the ONLY way information is
+/// conveyed, so every user of this beat also states its fact in colour and in words. Reduce
+/// Motion drops the beat and keeps both.
+enum AttentionBeat {
+    static let period: Double = 0.55
+    static let breaths: Int = 3
+    /// `repeatCount` counts out-and-back pairs when `autoreverses` is on, so this is
+    /// `breaths × 2 × period` = 3.3 s. It was `breaths * 2` repetitions (6.6 s) for an hour on
+    /// 6 Sep — over the five-second threshold the doc above cites, i.e. the very rule it quotes.
+    static var animation: Animation {
+        .easeInOut(duration: period).repeatCount(breaths, autoreverses: true)
+    }
+
+    /// Start the beat OFF the first frame.
+    ///
+    /// `withAnimation` inside `onAppear` is folded into the view's first frame and never plays —
+    /// the same fault the launch ident was rebuilt around (see CLAUDE.md, "every value is a pure
+    /// function of live time"). One yielded runloop turn is enough to make it an animation.
+    /// Filmed at 8 fps on 6 Sep the badge was pixel-identical across the whole 3.3 s window
+    /// before this; that is how the bug was found.
+    @MainActor
+    static func run(_ enabled: Bool, _ apply: @MainActor @escaping () -> Void) async {
+        guard enabled else { return }
+        try? await Task.sleep(for: .milliseconds(120))
+        guard !Task.isCancelled else { return }
+        withAnimation(animation) { apply() }
+    }
+}
+
+/// A season that is ON AIR — there is more of this coming.
+///
+/// The device is AniList's: a small dot on the list entry, which its users care about enough to
+/// script (a popular user script recolours the dot when you are *behind* on aired episodes). The
+/// dot is amber because "still airing" is STATE, which is what amber is for here — never an
+/// action. `fresh` means an episode is out now and unwatched, and adds the finite beat.
+///
+/// Jellyfin's issue #706 is the counter-example this exists to avoid: one blue circle for both
+/// "all watched" and "new episodes waiting" produced "that small moment of excitement… upon
+/// closer inspection it's just the same blue circle with a check mark". The states must differ in
+/// COLOUR, not only in glyph.
+struct LiveDot: View {
+    /// An unwatched episode is out now (not merely "the season is running").
+    var fresh: Bool = false
+    var size: CGFloat = 6
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var beat = false
+
+    var body: some View {
+        Circle()
+            // ALWAYS accent. "This season is on air" is STATE, which is exactly what amber is
+            // for here — and a grey dot beside grey caption text is not a signal, it is lint
+            // (measured on the Continue-watching shelf, 6 Sep). `fresh` changes the MOTION, not
+            // the colour, so the resting picture stays one fact in one hue.
+            .fill(ThemeColor.accent)
+            .frame(width: size, height: size)
+            .background {
+                if fresh && !reduceMotion {
+                    Circle()
+                        .fill(ThemeColor.accent)
+                        .opacity(beat ? 0 : 0.7)
+                        .scaleEffect(beat ? 2.6 : 1)
+                        .allowsHitTesting(false)
+                }
+            }
+            .task(id: fresh) { await AttentionBeat.run(fresh && !reduceMotion) { beat = true } }
+            .accessibilityHidden(true)   // the caption beside it already says the fact
+    }
+}
+
+/// Protection over the status bar and the chrome band at the top of a billboard hero, ramping
+/// out with no discernible knee.
+///
+/// One gradient for Today's wordmark band and Detail's floating toolbar. A ramp that holds flat
+/// and then falls reads, over bright key art, as a hard-edged plate laid on the picture right
+/// where the brand mark (or the back button) is; a veil that can be *seen* is not protection, it
+/// is a smudge. This holds only as far as the band's own bottom edge and then eases out over the
+/// rest on enough stops that no single step is visible.
+struct HeroTopVeil: View {
+    /// The chrome band's bottom edge, safe area included.
+    let band: CGFloat
+    /// How far below the band the veil takes to reach clear.
+    var ramp: CGFloat = 100
+    /// `HeroProtection.strength(lightness:)`: 1 over a bright cover, down to 0.5 over a dark one.
+    var strength: Double = 1
+
+    var body: some View {
+        let total = band + ramp
+        let mark = band / total
+        let s = strength
+        // 0.72 / 0.66 / 0.52. A tenth darker was tried for a poster's own logotype under the
+        // wordmark (i2) and reverted (i3): the logotype was dark INK on a bright sky, and a veil
+        // subtracts light from the ground — it raised the contrast. Today puts the picture
+        // under the band instead (`ArtHeader(topInset:)`).
+        LinearGradient(stops: [
+            .init(color: .black.opacity(0.72 * s), location: 0),
+            .init(color: .black.opacity(0.66 * s), location: mark * 0.72),
+            .init(color: .black.opacity(0.52 * s), location: mark),
+            .init(color: .black.opacity(0.30 * s), location: mark + (1 - mark) * 0.30),
+            .init(color: .black.opacity(0.12 * s), location: mark + (1 - mark) * 0.62),
+            .init(color: .clear, location: 1),
+        ], startPoint: .top, endPoint: .bottom)
+        .frame(height: total)
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Protection BEHIND a hero's copy, sized to the copy's measured height at every type size.
+///
+/// The stops are placed in POINTS off the measured copy height, not as fractions of the image. A
+/// fixed fraction is a different physical distance at every type size, which is how AX1 came to
+/// set a three-line 44-pt title over a face at ~55 % luminance while the same stops were
+/// comfortable at default size. `lead` is the run-in above the copy — long, because this is the
+/// only bottom protection on a resting billboard (the fractional `ArtScrim` is off), and without
+/// pre-darkening a 24-pt rise to 0.72 read as a visible edge drawn across the picture. Apple TV's
+/// billboard gradient has the same shape: it begins just above the lockup and eases in.
+///
+/// **The copy sits ON the picture, not in a void (4 Sep).** The stops used to reach 0.72 at the
+/// copy's top edge and 0.90 fifty-six points in, so the whole lower third of the billboard was
+/// canvas with type in it and the art stopped where the words began — the seam the user
+/// photographed ("the top 1/3 looks gorgeous … as soon as the Today part starts it looks really
+/// bad"). Now the run-in is longer (132) and the veil is 0.56 where the eyebrow sits, 0.72 at
+/// the title's first line, 0.86 where the fact line ends, and still lands on full canvas at the
+/// frame's bottom: the art stays visible behind the lockup the way it does under Apple TV's,
+/// and a 28-pt bold title with its contact shadow holds ≥3:1 on the palest cover.
+struct HeroCopyScrim: View {
+    let copyHeight: CGFloat
+    var lead: CGFloat = 132
+    /// `HeroProtection.strength(lightness:)`: the ramp's body scales with the art's lightness;
+    /// the LANDING does not — the frame still ends on full canvas whatever the picture.
+    var strength: Double = 1
+    /// The colour the frame lands on: canvas on Today; the show's ground on its page (6 Sep).
+    var landing: Color = ThemeColor.canvas
+
+    private var height: CGFloat { max(1, copyHeight + lead + 8) }
+
+    /// The stops as DISTANCES down the scrim, clamped monotonic. The ramp reaches full canvas
+    /// 40 pt above the frame's bottom whatever the copy's height: the last 5 % of the art's
+    /// ground — and the tonal step where the composited cover ends on it — showed as a faint
+    /// dithered band under the capsule (measured 4 Sep). The scrim must LAND, not hover.
+    private var stops: [Gradient.Stop] {
+        let h = height
+        // Where the veil must be full canvas: 40 pt above the frame's bottom. Every ramp mark is
+        // bounded by a share of that distance, so a SHORT copy compresses the ramp instead of
+        // pushing the landing off the end. With the marks clamped only to `h`, a one-line copy
+        // (h = 174) put 0.72 at 92 % and 0.86 at the last pixel and never reached canvas —
+        // Re:ZERO's copyright line printed through and the hero ended on a hard step, luminance
+        // 45 → 27 in one row (measured 5 Sep). A tall copy is unchanged.
+        let land = max(1, h - 40)
+        // The ramp's body scales with the strength, each stop above a FLOOR that keeps the last
+        // stretch to the landing a ramp and not a step: at the least strength the stops run
+        // 0.03 / 0.10 / 0.20 / 0.35 / 0.55 / 0.80 / 1 — the picture stays lit behind the copy
+        // and the frame still eases onto canvas.
+        let s = strength
+        func a(_ full: Double, floor: Double) -> Double { max(full * s, floor) }
+        let marks: [(y: CGFloat, alpha: Double)] = [
+            (0, 0),
+            (min(lead * 0.35, land * 0.25), a(0.08, floor: 0)),
+            (min(lead * 0.70, land * 0.50), a(0.28, floor: 0)),
+            (min(lead, land * 0.72), a(0.56, floor: 0.20)),
+            (min(lead + 28, land * 0.84), a(0.72, floor: 0.35)),
+            (min(lead + 72, land * 0.95), a(0.86, floor: 0.55)),
+            (min(lead + 128, land), a(0.95, floor: 0.80)),
+            (land, 1), (h, 1),
+        ]
+        var out: [Gradient.Stop] = []
+        var last: CGFloat = 0
+        for mark in marks {
+            last = max(last, min(max(0, mark.y), h))
+            out.append(.init(color: mark.alpha == 0 ? .clear : landing.opacity(mark.alpha),
+                             location: last / h))
+        }
+        return out
+    }
+
+    var body: some View {
+        LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
+        .frame(height: height)
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// Artwork in a LANDSCAPE frame — a shelf card, a browse tile.
+///
+/// A banner fills it. A portrait cover does not: `.fill`ed into a 1.6–2.1:1 frame, a 2:3 poster
+/// shows the middle third of itself — a forehead, a white slab, a fragment of a lockup — which is
+/// what the Library's Announced shelf and Search's trending wall did for every show the catalogue
+/// has no banner for (about a third of them). Those are composited instead: a blurred, opaque
+/// copy of the cover as the ground, the whole cover fitted over it. Nothing upscaled, nothing
+/// lost — the same treatment `ArtHeader` gives a billboard, at card scale.
+struct LandscapeArt: View {
+    let url: String?
+    var portraitSource: Bool = false
+    var maxPixel: CGFloat = 560
+    /// The banner is an AniList 1900×400 (`WideArt.ultraWide`): decode it at its native width.
+    /// A 16:9 frame shows only the middle ~37 % of a 4.75:1 banner, so a decode budgeted for
+    /// the frame's longest edge (900–1100) was drawn at ~2.5× — every anime card on Today,
+    /// Schedule and the Library was soft while TMDB's 16:9 backdrops beside them were sharp
+    /// ("the image quality used for Anime is not at par", user, 4 Sep). 1900 is a 3 MB decode.
+    /// The crop itself stays: compositing the cover on the blurred banner was tried the same
+    /// day and reverted ("the images were just fine").
+    var ultraWide: Bool = false
+    /// Where a banner's crop anchors.
+    var alignment: Alignment = .top
+
+    var body: some View {
+        if portraitSource {
+            ZStack {
+                // The ground is a pre-blurred bitmap of the same decode the cover draws from
+                // (`BlurredArt`): a `.blur` here was one Gaussian pass per composited card per
+                // scroll frame — five of them on a Schedule day.
+                BlurredArt(url: url, sourceMaxPixel: maxPixel, fraction: 0.09)
+                    .overlay(Color.black.opacity(0.32))
+                // A contact shadow separates the sharp cover from its own blurred ground —
+                // without it the two read as one badly-decoded image. Drawn by a shape under
+                // the fitted picture (`fitShadow`), not by `.shadow` on the image layer.
+                RemoteImageView(url: url, contentMode: .fit, maxPixel: maxPixel,
+                                alignment: .center, placeholderHidden: true,
+                                fitShadow: ShadowToken(color: .black.opacity(0.45), radius: 8, y: 4))
+                    .padding(.vertical, ThemeSpace.x2)
+            }
+        } else {
+            RemoteImageView(url: url, contentMode: .fill, maxPixel: ultraWide ? max(maxPixel, 1900) : maxPixel,
+                            alignment: alignment, placeholderHidden: true)
+        }
+    }
+}
+
+// MARK: - Progress banner
+
+/// One wide piece of art with where-you-are drawn ON it: a 16:9 card, the progress bar inset over
+/// a short scrim at its foot — Apple TV's Up Next card. Library's Continue watching cards and the
+/// season screen's header are this one view; a numeral, where a screen wants one, sits on the
+/// title's baseline beneath, never in the picture.
+struct ProgressBanner: View {
+    let url: String?
+    /// `url` is a portrait cover: composited whole on its own blurred ground (`LandscapeArt`).
+    var portraitSource: Bool = false
+    /// 0…1; nil while there is nothing to measure.
+    var progress: Double? = nil
+    /// The EPISODE on the art — "EPISODE 21" as a pill in the BOTTOM-leading corner, above the
+    /// bar when there is one (4 Sep: "the episode number can be fitted right into the image
+    /// itself … otherwise it's tough to read", then "move the episode pill to the bottom-left so
+    /// it stops covering faces" — faces live in the upper part of a banner's crop). The ONE pill
+    /// a card wears; what it says beneath is the moment or the season.
+    var episode: String? = nil
+    /// See `LandscapeArt.ultraWide`.
+    var ultraWide: Bool = false
+    var maxPixel: CGFloat = 900
+    var zoomID: String? = nil
+
+    /// The bar's inset from the art's edges.
+    static let inset: CGFloat = ThemeSpace.x3
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous)
+        ZStack(alignment: .bottom) {
+            shape.fill(ThemeColor.surfaceRaised)
+            LandscapeArt(url: url, portraitSource: portraitSource, maxPixel: maxPixel, ultraWide: ultraWide)
+            // The bar reads on any art: a short scrim under it, never a plate.
+            LinearGradient(colors: [.clear, ThemeColor.scrim], startPoint: .top, endPoint: .bottom)
+                .frame(height: 56)
+                .allowsHitTesting(false)
+            if let progress {
+                ProgressBar(value: progress)
+                    .padding(.horizontal, Self.inset)
+                    .padding(.bottom, Self.inset)
+            }
+            if let episode {
+                OverArtLabel(text: episode)
+                    .padding(.horizontal, Self.inset)
+                    // Above the bar (3 pt) by a step when the card carries one.
+                    .padding(.bottom, progress == nil ? Self.inset : Self.inset + 3 + ThemeSpace.x2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
+        .cardShadow(.art, shape: shape)
+        .modifier(OptionalZoomSource(id: zoomID))
     }
 }
 
@@ -1335,19 +2146,24 @@ struct ChipButtonStyle: ButtonStyle {
 struct AccountDisc: View {
     let identity: AuthManager.AccountIdentity
     var diameter: CGFloat = 56
+    /// Neutral ground and ink instead of the accent pair. Today's header wears this: the amber
+    /// budget above the fold belongs to the hero's fact and its one action, and an amber monogram
+    /// disc 12 pt from the wordmark was a second brand-coloured object spending it on chrome.
+    /// Profile — where the disc IS the subject — keeps the accent form.
+    var quiet = false
 
     var body: some View {
         ZStack {
-            Circle().fill(ThemeColor.accentSoft)
+            Circle().fill(quiet ? ThemeColor.surfaceRaised : ThemeColor.accentSoft)
             Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: 1)
             if let monogram = identity.monogram {
                 Text(monogram)
                     .font(.system(size: diameter * 0.42, weight: .semibold))
-                    .foregroundStyle(ThemeColor.accent)
+                    .foregroundStyle(quiet ? ThemeColor.textSecondary : ThemeColor.accent)
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
             } else {
-                PreviouslyMark(width: diameter * 0.34, detail: .none)
+                PreviouslyMark(width: diameter * 0.28)
             }
         }
         .frame(width: diameter, height: diameter)
@@ -1401,59 +2217,107 @@ struct DrawnCheck: View {
     }
 }
 
-/// The round mark control: a 44-pt target holding a 22-pt ring. Used by Schedule's rows and the
-/// episode list, so the same gesture has the same shape everywhere it is not a labelled capsule.
+/// The round mark control: a 44-pt target holding a 22-pt ring. Used by Schedule's rows, the Up
+/// next cards and the episode list, so the same gesture has the same shape everywhere it is not a
+/// labelled capsule.
 struct MarkRing: View {
     /// How loudly the marked state is drawn. The geometry, the target and the motion are identical
-    /// in both — only the ink changes, so there is still exactly ONE mark control in the app.
+    /// in every style — only the ink changes, so there is still exactly ONE mark control in the app.
     enum Style {
-        /// Accent fill, `onAccent` check. The row's own primary action: Schedule's rows, a season.
+        /// Accent fill, `onAccent` check — the louder form, for a control that stands alone.
         case filled
-        /// Accent ring, accent check, no fill. For a dense repeating list — an episode list where
-        /// twenty filled amber discs down one column would turn a rhythm into a scoreboard. This is
-        /// the shape `FranchiseDetailView` hand-rolled at :1271-1287 rather than reach for a token.
+        /// Accent ring, accent check, no fill. For a dense repeating list of cards (Schedule).
         case quiet
+        /// The list form (6 Sep): a WATCHED episode is a disc in the show's colour (`fill`) with
+        /// the check on it — Reminders fills the circle with the list's colour — the NEXT episode
+        /// is the one accent ring (`lead`), and the rest are idle rings. The marked state used to
+        /// be a bare 12-pt tertiary check with no body in a 44-pt column ("the tick mark feels
+        /// cheap", user); before that, eleven amber rings down one column.
+        case settled
     }
 
     var marked: Bool
     var style: Style = .filled
-    /// Accessibility label for the unmarked state; the marked state speaks `episodeWatched`.
+    /// The unmarked ring is the next step: the only accent in a settled column.
+    var lead: Bool = false
+    /// The episode the tap will write, drawn inside the idle ring where no row names it
+    /// (Schedule's cards, the Up next cards). The episode list passes nil: its row states the
+    /// episode 14 pt away, and the numeral was the same fact twice ("why does it need to show the
+    /// episode number on the CTA?", user, 6 Sep).
+    var episode: Int? = nil
+    /// `.settled`: the watched disc's colour — the show's quiet tint (`DetailTint.quiet`);
+    /// `surfaceFloating` without one.
+    var fill: Color? = nil
+    /// The beat right after THIS control committed a mark: accent fill, the check drawing in
+    /// `onAccent`, one pulse — then the disc settles into `fill` when the parent lets go (~0.55 s).
+    /// The control is the receipt; nothing under the row says "Episode 7 watched" again.
+    var committing: Bool = false
+    /// Accessibility label for the unmarked state; the marked state speaks `markedLabel`.
     var label: String = Copy.Action.markAsWatched
     var markedLabel: String? = nil
     let action: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse: CGFloat = 1
 
-    private var fill: Color {
-        guard marked, style == .filled else { return .clear }
-        return ThemeColor.accent
-    }
-
-    private var ring: Color {
+    private var disc: Color {
+        if committing { return ThemeColor.accent }
         switch (marked, style) {
-        case (false, _):      return ThemeColor.strokeStrong
-        case (true, .filled): return .clear
-        case (true, .quiet):  return ThemeColor.accent
+        case (true, .filled):  return ThemeColor.accent
+        case (true, .settled): return fill ?? ThemeColor.surfaceFloating
+        default:               return .clear
         }
     }
 
-    private var ink: Color { style == .filled ? ThemeColor.onAccent : ThemeColor.accent }
+    private var ring: Color {
+        if committing || (marked && style != .quiet) { return .clear }
+        if marked { return ThemeColor.accent }
+        return lead ? ThemeColor.accent : ThemeColor.markRingIdle
+    }
+
+    private var ink: Color {
+        if committing { return ThemeColor.onAccent }
+        switch style {
+        case .filled:  return ThemeColor.onAccent
+        case .quiet:   return ThemeColor.accent
+        case .settled: return ThemeColor.textPrimary
+        }
+    }
 
     var body: some View {
         Button(action: action) {
             ZStack {
-                Circle().fill(fill).frame(width: 22, height: 22)
+                Circle().fill(disc).frame(width: 22, height: 22)
                 Circle().strokeBorder(ring, lineWidth: 1.5).frame(width: 22, height: 22)
+                if let episode, !marked, !committing, episode < 1000 {
+                    Text("\(episode)")
+                        .font(.system(size: episode < 100 ? 9 : 7, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(lead ? ThemeColor.accent : ThemeColor.textSecondary)
+                        .transition(.opacity)
+                }
                 // Mounted unconditionally: a conditional insert re-creates `DrawnCheck` and hands
                 // SwiftUI an implicit opacity transition ON TOP of the mask, so the app's signature
                 // motion rendered as a smear instead of a stroke. The mask IS the animation.
                 DrawnCheck(on: marked, size: 12, tint: ink)
             }
+            .scaleEffect(pulse)
             .frame(width: 44, height: 44)
             .contentShape(Circle())
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: marked)
+            // The settle out of the commit beat, and the accent ring arriving on the next row,
+            // ride the settle spring rather than the micro one: a hand-off, not a flick.
+            .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: committing)
+            .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: lead)
         }
         .buttonStyle(MarkPressStyle())
+        .onChange(of: committing) { _, on in
+            guard on, !reduceMotion else { pulse = 1; return }
+            // One pulse on the commit — a hair down, then home on the milestone spring, which
+            // overshoots — the way Reminders' circle pops as it fills.
+            pulse = 0.84
+            withAnimation(ThemeMotion.uiMilestone) { pulse = 1 }
+        }
         .accessibilityLabel(marked ? (markedLabel ?? Copy.Accessibility.complete) : label)
         .accessibilityAddTraits(marked ? [.isButton, .isSelected] : .isButton)
     }
@@ -1491,8 +2355,23 @@ struct MarkSplitButton: View {
                         .padding(.trailing, ThemeSpace.x2)
                         .frame(width: committed ? nil : 0, alignment: .leading)
                         .clipped()
+                    // The CTA names its object. "Mark as watched" sat under a hero showing three
+                    // numbers (behind-count, next episode, latest-aired) with no way to tell which
+                    // one the button touches; "Mark episode 1 watched" is the same verb with its
+                    // object attached, and it is the exact fact the committed state confirms.
+                    // "Mark as watched" (2 Sep): the hero and Detail's block now state exactly ONE
+                    // episode directly above this capsule, so the number the label used to repeat
+                    // is no longer disambiguating anything. VoiceOver still hears the episode
+                    // (see the accessibility label below). The committed form keeps its number:
+                    // "Episode 12 watched" is a receipt.
                     Text(committed ? Copy.Progress.episodeWatched(episode) : Copy.Action.markAsWatched)
                         .type(ThemeType.button)
+                        // One line, scaled before wrapped: "Mark episode 12 watched" broke into a
+                        // two-line capsule beside `Details`. A capsule's label compresses a step;
+                        // it does not stack.
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .allowsTightening(true)
                         // `.interpolate` tried to morph two unrelated strings and printed
                         // "Mark as watched" and "Episode 19 watched" superimposed as an unreadable
                         // smear, twice per mark. Two different sentences crossfade; they do not
@@ -1509,18 +2388,25 @@ struct MarkSplitButton: View {
             .accessibilityRemoveTraits(committed ? .isButton : [])
             .accessibilityLabel(committed
                                 ? Copy.Progress.episodeWatched(episode)
-                                : "\(Copy.Action.markAsWatched), \(Copy.episode(episode)) of \(title)")
+                                : "\(Copy.Action.markEpisodeWatched(episode)), \(title)")
 
             if showsMenu {
                 Rectangle()
                     .fill(ThemeColor.onAccent.opacity(0.18))
                     .frame(width: 1, height: 24)
                 Menu {
-                    let through = min(episode + 4, episode + behind - 1)
-                    if through > episode {
-                        Button(Copy.Action.markThrough(through)) { onMarkThrough(through) }
+                    // The menu is anchored to the show it writes to: with two number-carrying
+                    // commands floating free, the reader had to reconstruct whose episodes "2–5"
+                    // are. A Section header is the one Menu element that names without acting.
+                    Section(title) {
+                        let through = min(episode + 4, episode + behind - 1)
+                        // Only when it is a strict subset of "all" (interactive review: with two
+                        // behind, "Mark episodes 20–21" and "Mark all 2 episodes" were one command).
+                        if through > episode, through < episode + behind - 1 {
+                            Button(Copy.Action.markThrough(from: episode, to: through)) { onMarkThrough(through) }
+                        }
+                        Button(Copy.Action.markAll(behind)) { onMarkAll() }
                     }
-                    Button(Copy.Action.markAll(behind)) { onMarkAll() }
                 } label: {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 12, weight: .semibold))
@@ -1605,7 +2491,8 @@ private struct DifferentiatingUnderline: ViewModifier {
 /// Structural skeleton: static, no shimmer (spec: shimmer is refused).
 struct SkeletonBlock: View {
     var width: CGFloat? = nil
-    var height: CGFloat = 12
+    /// nil: the block takes the height it is proposed (a 16:9 card via `aspectRatio`).
+    var height: CGFloat? = 12
     var radius: CGFloat = 6
     var body: some View {
         RoundedRectangle(cornerRadius: radius, style: .continuous)

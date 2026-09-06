@@ -36,17 +36,41 @@ enum Copy {
     static func episodeInSentence(_ n: Int) -> String { "episode \(n)" }
 
     /// "Season 4 · Episode 19". `label` is the source's own part label, never derived from order.
+    ///
+    /// A numbered season sheds its arc subtitle here: "Season 5: Hashira Training Arc · Episode 1"
+    /// wrapped every row it appeared on with a separator stranded at the line end, and the arc name
+    /// is Detail's fact, not a row's. Only `Season N:` prefixes compact — a label like
+    /// "OVA 2: No Regrets" keeps its subtitle because the subtitle IS the identity there.
     static func watchContext(part label: String, episode n: Int) -> String {
-        label.isEmpty ? episode(n) : "\(label) · \(episode(n))"
+        let compact = compactPartLabel(label)
+        return compact.isEmpty ? episode(n) : "\(compact) · \(episode(n))"
+    }
+
+    /// "Season 5: Hashira Training Arc" → "Season 5"; anything else unchanged.
+    static func compactPartLabel(_ label: String) -> String {
+        guard let range = label.range(of: #"^Season \d+(?=:)"#, options: .regularExpression) else {
+            return label
+        }
+        return String(label[range])
     }
 
     /// English-only pluraliser. A `.stringsdict` is out of scope for this prototype (confirmed);
     /// every count that reaches the user goes through here so the singular is never "1 episodes".
+    ///
+    /// The number is bound to its noun with a non-breaking space: a numeral must never end a line
+    /// its unit doesn't start ("… · 11 / episodes left" — measured on Today's queue rows). Wraps
+    /// happen between facts, never inside one.
     static func plural(_ n: Int, _ one: String, _ many: String) -> String {
-        "\(n) \(n == 1 ? one : many)"
+        // Grouped past 999 (review i5: "1316 episodes").
+        "\(n.formatted(.number))\u{00A0}\(n == 1 ? one : many)"
     }
 
+    /// "Episodes 19–21": a run of episodes, en-dashed, the plural word once.
+    static func episodeRange(_ a: Int, _ b: Int) -> String { "Episodes\u{00A0}\(a)\u{2013}\(b)" }
+
     static func episodes(_ n: Int) -> String { plural(n, "episode", "episodes") }
+    /// "51 min" — an episode's runtime, in the fact line a row opens to.
+    static func minutes(_ n: Int) -> String { "\(n) min" }
 
     /// A count of episodes the USER has watched, predicated so it cannot be read as the work's
     /// length. "Watched once - 95 episodes" (the show) and "2 watch sessions - 50 episodes" (the
@@ -103,11 +127,23 @@ enum Copy {
     /// Nothing else may be worded with "next".
     enum Label {
         static let nextUp = "Next up"
+        /// The waiting hero's eyebrow. The MOMENT is the fact line under the title, big and in
+        /// accent, so the eyebrow says only what kind of moment it is.
+        static let newEpisode = "New episode"
+        /// The row tag on the newest AIRED episode while it is still unwatched — the streaming
+        /// apps' "NEW" on a tile, in the app's one amber-for-state rule.
+        static let newTag = "NEW"
+        /// The empty account's billboard pill: the chart's top show, on the hero's own slate.
+        static let trending = "Trending"
         static let upcoming = "Upcoming"
-        static let airingSoon = "Airing soon"
         static let watching = "Watching"
+        /// The shelf of shows you are part-way through that have NOTHING airing. Distinct from
+        /// `watching` (a status) and from `nextUp` (an episode that is out now).
+        static let continueWatching = "Continue watching"
         /// The SERIES' production state - never the user's list state, which is "Watched".
         static let complete = "Complete"
+        /// The identity line's word for a title the catalogue flags adult with no market rating.
+        static let adultRating = "18+"
     }
 
     // MARK: - Headings - case and conjunction, settled once
@@ -123,9 +159,20 @@ enum Copy {
     enum Heading {
         static let sortAndFilter = "Sort & filter"
         static let seasonsAndMovies = "Seasons & movies"
+        /// The shelf of a franchise's non-season parts under the episode list — films, OVAs that
+        /// are units, the catalogue's specials.
+        static let moviesAndExtras = "Movies & extras"
+        /// The Episodes section's title when the work has one season and no name for it.
+        static let episodes = "Episodes"
         static let searchPrompt = "Anime & TV"
         static let watchHistory = "Watch history"
         static let allTitles = "All titles"
+        /// The show page's catalogue shelves, in Apple TV's order: trailers, the people, related.
+        static let trailers = "Trailers"
+        static let castAndCrew = "Cast & crew"
+        static let moreLikeThis = "More like this"
+        /// The streaming row. The providers' marks say who; the header is the way to the options.
+        static let whereToWatch = "Where to watch"
     }
 
     // MARK: - Actions
@@ -133,13 +180,35 @@ enum Copy {
     /// One form per intent (board 09). A command that exists here must not be reworded at a call
     /// site, shortened to fit a control, or given a second form for a narrow layout.
     enum Action {
+        static let readMore = "Read more"
+        static let readLess = "Read less"
         static let markAsWatched = "Mark as watched"
         static let markAsUnwatched = "Mark as unwatched"
-        static func markThrough(_ n: Int) -> String { "Mark through \(Copy.episodeInSentence(n))" }
+        /// "Mark episode 19 watched" — the CTA form that names its object. The bare
+        /// `markAsWatched` above stays for surfaces that have no single episode to name; a control
+        /// that KNOWS which episode it writes says so, because "Mark as watched" beside a hero that
+        /// also shows a behind-count and a latest-aired date left the reader to work out which of
+        /// three numbers the button would touch.
+        static func markEpisodeWatched(_ n: Int) -> String { "Mark \(Copy.episodeInSentence(n)) watched" }
+        /// "Mark episodes 2–5 watched" — a batch command STATES ITS RANGE. "Mark through episode 5"
+        /// named only its endpoint, so under a hero saying "Episode 1 next · 9 behind" the 5 read
+        /// as an unexplained third number rather than as first-unwatched + 4.
+        static func markThrough(from: Int, to: Int) -> String {
+            // Word-joiners weld the range into one token — a narrow menu line broke it as
+            // "episodes 1–" / "5", which reads as a typo, not a range.
+            from >= to ? "Mark \(Copy.episodeInSentence(to)) watched"
+                       : "Mark episodes \(from)\u{2060}\u{2013}\u{2060}\(to) watched"
+        }
         static func markAll(_ n: Int) -> String { "Mark all \(Copy.episodes(n)) as watched" }
+        /// The link from the show page's episode window to the whole season: "All 24 episodes".
+        static func allEpisodes(_ n: Int) -> String { "All \(Copy.episodes(n))" }
+        /// A long run's in-place doors on the show page (Mail's "Load Earlier Messages"): the list
+        /// grows where it is, twelve rows a tap, and nothing is pushed (6 Sep).
+        static let showEarlierEpisodes = "Show earlier episodes"
+        static let showMoreEpisodes = "Show more episodes"
         static let markAllEpisodes = "Mark all episodes as watched"
         static func markAllUnwatched(_ n: Int) -> String { "Mark all \(Copy.episodes(n)) as unwatched\u{2026}" }
-        static let markCaughtUp = "Mark caught up"
+        static let markCaughtUp = "Mark as caught up"
 
         static let startRewatch = "Start rewatch"
         static let continueRewatch = "Continue rewatch"
@@ -167,6 +236,9 @@ enum Copy {
         static let clear = "Clear"
         static let cancel = "Cancel"
         static let done = "Done"
+        /// The trailer sheet's way out to the provider, drawn as a glyph; this is what VoiceOver says.
+        static let openOnYouTube = "Open on YouTube"
+        static let openInBrowser = "Open in browser"
         static let arrange = "Arrange"
         static let reset = "Reset"
         static let discard = "Discard\u{2026}"
@@ -188,7 +260,8 @@ enum Copy {
         static let commands: [Command] = [
             Command(label: markAsWatched, opensConfirmation: false),
             Command(label: markAsUnwatched, opensConfirmation: false),
-            Command(label: markThrough(10), opensConfirmation: true),
+            Command(label: markEpisodeWatched(19), opensConfirmation: false),
+            Command(label: markThrough(from: 6, to: 10), opensConfirmation: true),
             Command(label: markAll(18), opensConfirmation: true),
             Command(label: markAllEpisodes, opensConfirmation: true),
             Command(label: markAllUnwatched(24), opensConfirmation: true),
@@ -234,6 +307,9 @@ enum Copy {
     enum Toast {
         static func marked(episode n: Int) -> String { "\(Copy.episode(n)) marked as watched" }
         static func batchMarked(_ n: Int) -> String { "\(Copy.episodes(n)) marked as watched" }
+        /// The lane's fact for a batch — "4 episodes watched", parallel to `Progress.episodeWatched`:
+        /// "4 episodes marked as watched" truncated beside the poster and Undo (6 Sep).
+        static func batchWatched(_ n: Int) -> String { "\(Copy.episodes(n)) watched" }
 
         /// The same fact, carrying its SUBJECT. The bare form names neither show nor season, yet
         /// the identical toast fires from a Schedule row and a Library context menu, where the
@@ -247,13 +323,29 @@ enum Copy {
             title.isEmpty ? batchMarked(n) : "\(title) \u{b7} \(Copy.episodes(n)) watched"
         }
         /// Remove never touches history, and the toast says so in words.
-        static let removed = "Removed from Library. Watch history kept."
+        static let removed = "Removed from Library \u{00B7} Watch history kept"
+        /// The lane's line — the history clause is spoken, not drawn, beside the show's name.
+        static let removedShort = "Removed from Library"
+        /// The last episode of a finished series was marked: the show is filed under Watched.
+        static let finished = "Series finished \u{00B7} Moved to Watched"
         static func added(title: String, status: String) -> String { "Added \(title) to \(status)" }
         /// Shown only where the row leaves the screen as a result of the change (Library).
         static func movedTo(_ status: String) -> String { "Moved to \(status)" }
+        static let rewatchStarted = "Rewatch started"
+        static let alertsOn = "Episode alerts on"
+        static let rewatchRestarted = "Rewatch restarted"
         static let offlinePending = "Saved on this device. Waiting to sync."
         /// The SyncBanner's line. A failure is never a transient toast.
         static func syncFailed(_ n: Int) -> String { "\(Copy.changes(n)) couldn\u{2019}t sync" }
+    }
+
+    // MARK: - Alerts (system notifications)
+
+    /// The one sentence the app ever pushes. No full stop — Apple's own alerts carry none.
+    enum Alert {
+        static func episodeOut(_ n: Int?) -> String {
+            n.map { "\(Copy.episode($0)) is out now" } ?? "A new episode is out now"
+        }
     }
 
     // MARK: - Inline notices
@@ -261,17 +353,19 @@ enum Copy {
     /// Noun-first: the thing that failed, then what happened to it.
     enum Notice {
         static let today = "Airing dates couldn\u{2019}t refresh"
-        static let schedule = "The schedule couldn\u{2019}t refresh"
+        static let schedule = "Your schedule couldn\u{2019}t refresh"
         static let library = "Your library couldn\u{2019}t refresh"
         static let detailEpisodes = "Episodes couldn\u{2019}t refresh"
         static let searchAnime = "Anime results couldn\u{2019}t refresh"
         static let searchTV = "TV results couldn\u{2019}t refresh"
 
         static let noConnection = "No connection"
-        static let serverError = "Server error"
+        static let serverError = "Something went wrong"
         static let signedOut = "Signed out"
-        static let timedOut = "Timed out"
-        static let rateLimited = "Rate limited"
+        static let timedOut = "Took too long"
+        static let rateLimited = "Try again in a minute"
+        /// A related title the catalogue has not materialised yet, and a search could not find.
+        static let notInCatalogue = "Not in the catalogue yet"
 
         /// The reason a write failed, in the user's words. Never a status code, never a stack of
         /// `localizedDescription` — Sync status shows this beside each failed command.
@@ -311,11 +405,37 @@ enum Copy {
         /// The committed state of the mark control. Lives here rather than in a screen's private
         /// copy enum because `MarkSplitButton` renders it on four surfaces.
         static func episodeWatched(_ n: Int) -> String { "\(Copy.episode(n)) watched" }
+        /// "Episode 21 aired yesterday" — the drop, named, from `TemporalCopy.aired`'s phrase.
+        /// One builder for Today's and the show page's support line (review i3).
+        static func dropAired(episode n: Int, when: String) -> String {
+            var fragment = when.hasPrefix("Aired ") ? String(when.dropFirst(6)) : when
+            let head = fragment.prefix(while: { !$0.isWhitespace })
+            if ["Today", "Tomorrow", "Yesterday"].contains(String(head)) {
+                fragment = head.lowercased() + fragment.dropFirst(head.count)
+            }
+            return "\(Copy.episode(n)) aired \(fragment)"
+        }
         static func episodeAiring(_ n: Int) -> String { "\(Copy.episode(n)) airing" }
-        static func behind(_ n: Int) -> String { "\(Copy.episodes(n)) behind" }
-        static func left(_ n: Int) -> String { "\(Copy.episodes(n)) left" }
+        static func behind(_ n: Int) -> String { "\(Copy.episodes(n))\u{00A0}behind" }
+        static func left(_ n: Int) -> String { "\(Copy.episodes(n))\u{00A0}left" }
         static let caughtUp = "Caught up"
+        /// The calm open's headline when the next episode lands TODAY: the day is not "nothing",
+        /// and "Caught up" printed over an Upcoming row saying "Today at 8:30 PM" was the state
+        /// shouting over the day's real fact (the same inversion Detail's block fixed). The
+        /// specifics — which show, what time — stay with the row; the headline only frames the day.
+        static let newEpisodeToday = "New episode today"
+        /// The airing cadence, said the way Netflix says it ("New episode coming on Saturday"):
+        /// "New episode Friday at 7:30 PM" · "New episode today at 6:30 PM" · "New episode airs
+        /// in 27 min". "New", not "next": on a show nine episodes behind, "next episode" is the
+        /// one YOU watch next and the reader would take the day for its air date.
+        static func newEpisode(when: String) -> String {
+            let lowered = ["Today", "Tomorrow", "Airs", "In "].contains { when.hasPrefix($0) }
+            return "New episode \(lowered ? when.lowercasedFirst() : when)"
+        }
         static let caughtUpAfterThisEpisode = "Caught up after this episode"
+        /// Variant B of the calm day: nothing changed AND nothing is dated. Shared with
+        /// `EmptyStateCopy.calmToday` so the sentence exists once.
+        static let noNewDates = "No new dates have been announced."
         static let lastEpisodeOfTheSeason = "Last episode of the season"
         static func complete(_ label: String) -> String {
             label.isEmpty ? "Complete" : "\(label) complete"
@@ -418,7 +538,7 @@ enum Copy {
         // Discard a failed change from Sync status.
         static let discardChangeTitle = "Discard this change?"
         static let discardChangeMessage =
-            "The change stays on this device but is never sent to the server."
+            "It stays on this device and is never saved to your account."
         static let discardChangeConfirm = "Discard change"
 
         /// Every confirmation BUTTON label. None may end in an ellipsis (board 09).
@@ -431,10 +551,13 @@ enum Copy {
     // MARK: - Session / account state
 
     enum State {
+        static let ask = "Ask"
         static let signedOut = "You\u{2019}re signed out. Sign in again to continue."
         static let checkingForChanges = "Checking for changes"
         static let couldNotCheck = "Couldn\u{2019}t check for changes"
         static let everythingSynced = "Everything synced"
+        static let on = "On"
+        static let off = "Off"
         static let neverSynced = "Not synced yet"
     }
 
@@ -487,8 +610,16 @@ enum Copy {
         static let refreshing = "Refreshing"
         static let complete = "Complete"
         static let active = "Active"
+        /// The episode row's tap opens the row in place — it never marks (6 Sep).
+        static let showsEpisodeDetails = "Shows episode details"
+        static let hidesEpisodeDetails = "Hides episode details"
         static let retryHint = "Tries the request again"
         static let changeStatus = "Change status"
+        static let playsTrailerHint = "Plays the video"
+        static let opensStreamingOptionsHint = "Opens the streaming options"
+        static func person(_ name: String, role: String?) -> String {
+            role.map { "\(name), \($0)" } ?? name
+        }
         /// The wordmark's full stop is the only live indicator in the app.
         static func wordmarkLive(_ n: Int) -> String {
             n == 1
@@ -560,7 +691,7 @@ extension Copy {
         for copy in [EmptyStateCopy.emptyAccount, .emptyToday, .emptySchedule,
                      .noWatching, .offlineCached, .offlineNoData,
                      .searchFailed, .searchLaunchpad, .noSessions,
-                     .serverNoCache, .noFilterMatches, .nothingScheduled, .everythingSynced,
+                     .serverNoCache, .noFilterMatches, .noScheduleMatches, .nothingScheduled, .everythingSynced,
                      .calmToday(title: "Frieren", when: "Returns tomorrow"),
                      .caughtUp(title: "Frieren", when: "Returns tomorrow"),
                      .noSearchResults(query: "one pece")] {
@@ -616,6 +747,12 @@ struct EmptyStateCopy: Equatable, Sendable {
     let primaryLabel: String?
     let secondaryLabel: String?
 
+    /// The primary action retries a fetch rather than taking a next step: it is drawn as a quiet
+    /// capsule, not the accent one.
+    var isRecovery: Bool {
+        primaryLabel == Copy.Action.tryAgain || primaryLabel == Copy.Action.retry
+    }
+
     init(symbol: String?, title: String, supporting: String?,
          primaryLabel: String? = nil, secondaryLabel: String? = nil) {
         self.symbol = symbol
@@ -630,22 +767,22 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// LIBRARY's empty account. Every root has its own — see the voice note at the top of this
     /// file: a state may not promise a benefit on a tab the user is not looking at.
     static let emptyAccount = EmptyStateCopy(
-        symbol: "plus",
+        symbol: "rectangle.stack",
         title: "Your library is empty",
         supporting: "Everything you add shows up here.",
         primaryLabel: Copy.Action.addAShow)
 
     /// TODAY's empty account.
     static let emptyToday = EmptyStateCopy(
-        symbol: "plus",
+        symbol: "tv",
         title: "Nothing to watch yet",
-        supporting: "Add a show and this screen fills in with what is next.",
+        supporting: "Add a show and this screen fills in with what\u{2019}s next.",
         primaryLabel: Copy.Action.addAShow)
 
     /// SCHEDULE's empty account. Distinct from `nothingScheduled`, which is a stocked library with
     /// no dated episodes in it.
     static let emptySchedule = EmptyStateCopy(
-        symbol: "plus",
+        symbol: "calendar",
         title: "Nothing scheduled",
         supporting: "Add a show and its air dates appear here.",
         primaryLabel: Copy.Action.addAShow)
@@ -659,7 +796,7 @@ struct EmptyStateCopy: Equatable, Sendable {
     static let offlineCached = EmptyStateCopy(
         symbol: "wifi.slash",
         title: "You\u{2019}re offline",
-        supporting: "Showing saved data. Changes will sync when you reconnect.")
+        supporting: "Showing what was saved on this device. Changes sync when you reconnect.")
 
     static let searchLaunchpad = EmptyStateCopy(
         symbol: "magnifyingglass",
@@ -673,20 +810,25 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// one name — with a supporting line that names what could not be done.
     static let searchFailed = EmptyStateCopy(
         symbol: "wifi.exclamationmark",
-        title: "Couldn\u{2019}t reach the server",
-        supporting: "Your search didn\u{2019}t get through. Check your connection and try again.",
+        title: "Couldn\u{2019}t search right now",
+        supporting: "Check your connection and try again.",
         primaryLabel: Copy.Action.tryAgain)
     static let offlineNoData = EmptyStateCopy(
         symbol: "wifi.slash",
-        title: "Connect to load your library",
-        supporting: "Previously has no saved copy on this device yet.",
+        title: "You\u{2019}re offline",
+        supporting: "Connect to the internet to load your library.",
         primaryLabel: Copy.Action.tryAgain)
 
     /// Calm day. Variant A names the next known event; variant B admits there is none. Never both.
+    ///
+    /// NOTE: Today no longer renders this as a plate — the calm open is a quiet caught-up line
+    /// (see `TodayView.calmBlock`); "Nothing changed since you were last here" led every calm
+    /// morning with an absence, at display size, above an Upcoming row restating its own
+    /// supporting sentence. Kept for previews and the audit until another surface needs it.
     static func calmToday(title: String?, when: String?) -> EmptyStateCopy {
         let supporting: String
         if let title, let when { supporting = "\(title) \(when.lowercasedFirst())." }
-        else { supporting = "No new dates have been announced." }
+        else { supporting = Copy.Progress.noNewDates }
         return EmptyStateCopy(symbol: nil,
                               title: "Nothing changed since you were last here",
                               supporting: supporting)
@@ -706,11 +848,11 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// The network is fine and we are not. Chosen over `offlineNoData` by `SyncCenter.isOnline`
     /// (NWPathMonitor), never guessed from the error.
     static let serverNoCache = EmptyStateCopy(
-        symbol: "exclamationmark.triangle",
-        title: "Couldn\u{2019}t reach the server",
+        symbol: "exclamationmark.circle",
+        title: "Couldn\u{2019}t load your library",
         // Not "your saved library will appear": in the no-cache state there IS no saved copy, which
         // is the whole reason this state exists rather than `offlineCached`.
-        supporting: "The server didn\u{2019}t respond. Try again in a moment.",
+        supporting: "Something went wrong. Try again in a moment.",
         primaryLabel: Copy.Action.tryAgain)
 
     /// Search returned nothing. Carried forward from the v5 state tiles, reworded to the v9 voice.
@@ -727,11 +869,19 @@ struct EmptyStateCopy: Equatable, Sendable {
         supporting: "Clear the filters to see everything in your library.",
         primaryLabel: Copy.Action.clear)
 
+    /// Schedule with a filter that leaves no episode — about episodes and a schedule, never titles
+    /// and a library (review i4: it borrowed Library's sentence).
+    static let noScheduleMatches = EmptyStateCopy(
+        symbol: "line.3.horizontal.decrease",
+        title: "No episodes match",
+        supporting: "Clear the filter to see the whole schedule.",
+        primaryLabel: Copy.Action.clear)
+
     /// Schedule with a library that has no dated episodes. Not an error and not empty-account.
     static let nothingScheduled = EmptyStateCopy(
         symbol: "calendar",
         title: "Nothing scheduled",
-        supporting: "None of the shows you follow have an upcoming date.")
+        supporting: "None of the shows in your library has an upcoming date.")
 
     /// Sync status's calm frame. It claims only what `SyncCenter.failedChanges` can prove.
     static let everythingSynced = EmptyStateCopy(
