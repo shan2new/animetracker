@@ -512,19 +512,15 @@ private fun computeDerived(
 // means today is next under it."
 
 private const val PREFIX_DAY = "day:"
-private const val PREFIX_EMPTY_DAY = "empty:"
 private const val PREFIX_ROW = "row:"
 
 /** Whether this key is one of the agenda targets the ticker follows. */
 private fun isAgendaKey(key: String): Boolean =
-    key.startsWith(PREFIX_DAY) ||
-        key.startsWith(PREFIX_EMPTY_DAY) ||
-        key.startsWith(PREFIX_ROW)
+    key.startsWith(PREFIX_DAY) || key.startsWith(PREFIX_ROW)
 
 /** The day an agenda key belongs to; `null` for the Earlier row and for anything that is not one. */
 private fun dayOf(key: String): Int? = when {
     key.startsWith(PREFIX_DAY) -> key.removePrefix(PREFIX_DAY).toIntOrNull()
-    key.startsWith(PREFIX_EMPTY_DAY) -> key.removePrefix(PREFIX_EMPTY_DAY).toIntOrNull()
     // "row:<day>:<rowId>", and a row id contains slashes but never a colon.
     key.startsWith(PREFIX_ROW) -> key.removePrefix(PREFIX_ROW).substringBefore(':').toIntOrNull()
     else -> null
@@ -560,17 +556,26 @@ private sealed interface FeedItem {
         override val key: String = "freshness"
     }
 
-    data class DayHeader(val day: DayView, val previousIsEmpty: Boolean = false) : FeedItem {
+    /** Only today can be empty, and it keeps its date column so it has every other day's shape. */
+    data class EmptyDay(val day: DayView, val first: Boolean = false) : FeedItem {
         override val key: String = "$PREFIX_DAY${day.id}"
     }
 
-    /** Only today can be empty, and only at accessibility sizes does it get a row of its own. */
-    data class EmptyDay(val day: DayView) : FeedItem {
-        override val key: String = "$PREFIX_EMPTY_DAY${day.id}"
-    }
-
-    data class Card(val dayId: Int, val row: ScheduleRow, val last: Boolean) : FeedItem {
-        override val key: String = "$PREFIX_ROW$dayId:${row.id}"
+    /**
+     * An airing. [first] means it OPENS its day, so it carries the date column and the day's break
+     * above it; the rest of that day's airings stack under a blank column. The day's first item is
+     * also the day's scroll target, which is why its key takes the [PREFIX_DAY] form the calendar
+     * and the "Today" button already ask for.
+     */
+    data class Card(
+        val day: DayView,
+        val row: ScheduleRow,
+        val last: Boolean,
+        val first: Boolean,
+        val firstInFeed: Boolean,
+    ) : FeedItem {
+        override val key: String =
+            if (first) "$PREFIX_DAY${day.id}" else "$PREFIX_ROW${day.id}:${row.id}"
     }
 
     data object Tail : FeedItem {
@@ -629,21 +634,22 @@ private fun buildFeed(
         days.add(DayView(id = pinnedEmptyDay, noon = todayNoon + pinnedEmptyDay * Formatting.D, rows = emptyList()))
         days.sortBy { it.id }
     }
+    // No day headers: the DATE RIDES THE ROW (7 Sep). Six full-width bands introducing five rows
+    // was ~40 % of the feed's height, and the reader had to read a banner to learn one date.
     days.forEachIndexed { i, day ->
-        // An empty day is a header with no body: the next day closes up to x4 under it (i2), or
-        // the two headers sat a whole section gap apart with nothing between them.
-        out.add(FeedItem.DayHeader(day, previousIsEmpty = i > 0 && days[i - 1].isEmpty))
         if (day.isEmpty) {
-            // At reading sizes the statement lives in the header's count slot, on its own baseline.
-            // A ROW, at every size (6 Sep). Today is the day the reader is standing on, and as a
-            // fragment in the header's trailing slot it was the thinnest, emptiest thing on the
-            // screen — the one day with a header and no body. The rule that put it in the header
-            // came from the card era, when a grey line cost a third of a screen; at row density it
-            // costs 32 dp and buys today the same shape every other day has.
-            out.add(FeedItem.EmptyDay(day))
+            out.add(FeedItem.EmptyDay(day, first = i == 0))
         } else {
-            day.rows.forEachIndexed { i, r ->
-                out.add(FeedItem.Card(day.id, r, last = i == day.rows.lastIndex))
+            day.rows.forEachIndexed { j, r ->
+                out.add(
+                    FeedItem.Card(
+                        day = day,
+                        row = r,
+                        last = j == day.rows.lastIndex,
+                        first = j == 0,
+                        firstInFeed = i == 0,
+                    ),
+                )
             }
         }
     }
@@ -1556,34 +1562,31 @@ private fun FeedRow(
             }
         }
 
-        is FeedItem.DayHeader -> DayHeader(
+        is FeedItem.EmptyDay -> EmptyDayRow(
             day = item.day,
-            previousIsEmpty = item.previousIsEmpty,
-            emptyText = emptyDayText(derived),
-            isAX = isAX,
-            modifier = modifier,
-        )
-
-        is FeedItem.EmptyDay -> BasicText(
             text = emptyDayText(derived),
-            style = ThemeType.rowMeta,
-            modifier = modifier
-                .fillMaxWidth()
-                .defaultMinSize(minHeight = 32.dp)
-                .padding(horizontal = ThemeMetrics.gutter),
-            color = ColorProducer { ThemeColor.textTertiary },
+            modifier = modifier.padding(top = if (item.first) ThemeSpace.x3 else ThemeSpace.x5),
         )
 
         is FeedItem.Card -> CardRow(
+            day = item.day,
             row = item.row,
             last = item.last,
+            first = item.first,
+            isAX = isAX,
             appModel = appModel,
             committed = committed,
             demoUnwatchedId = demoUnwatchedId,
             reduceMotion = reduceMotion,
             onOpen = onOpen,
             onMark = onMark,
-            modifier = modifier,
+            modifier = modifier.padding(
+                top = when {
+                    !item.first -> 0.dp
+                    item.firstInFeed -> ThemeSpace.x3
+                    else -> ThemeSpace.x5
+                },
+            ),
         )
 
         FeedItem.Tail -> FeedTail(
@@ -1610,8 +1613,11 @@ private fun emptyDayText(derived: Derived): String =
  */
 @Composable
 private fun CardRow(
+    day: DayView,
     row: ScheduleRow,
     last: Boolean,
+    first: Boolean,
+    isAX: Boolean,
     appModel: AppModel,
     committed: Set<String>,
     demoUnwatchedId: String?,
@@ -1643,15 +1649,19 @@ private fun CardRow(
     val hasReminder = !row.aired && ScheduleReminders.has(row.part.mediaId, row.episode)
 
     val card: @Composable (Modifier) -> Unit = { slot ->
-        ScheduleAiringRow(
+        ScheduleDateRow(
+            weekday = if (first) Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon)) else null,
+            numeral = if (first) Formatting.localParts(day.noon).d.toString() else null,
+            isToday = day.isToday,
             franchise = row.franchise,
-            meta = metaLine(row),
+            episodeText = episodeText(row),
             time = time,
             state = state,
             hasReminder = hasReminder,
             onOpen = { onOpen(row) },
             modifier = slot,
             receiptHost = ReceiptHost.schedule(row.part.mediaId, row.episode),
+            isAX = isAX,
         ) {
             AiringStateControl(
                 state = state,
@@ -1684,119 +1694,17 @@ private fun CardRow(
 }
 
 /**
- * The episode line.
+ * What actually VARIES down the feed, with the season dropped.
  *
- * A same-day date-only drop states its count ("Season 2 · 8 episodes", or a bare "8 episodes" when
- * the part has no label or the show has one part); everything else takes the shared watch-context
- * rule. Notation is fixed by the copy table: **"Episode 21", never "E21" or "Ep 21".**
+ * A weekly show cannot leave its season inside a 22-day window, so "Season 4" was a constant
+ * printed once per row — the biggest single contributor to the run-on grammar the date row
+ * replaced. A same-day date-only drop still states its count ("8 episodes"). Notation is fixed by
+ * the copy table: **"Episode 21", never "E21" or "Ep 21".**
  */
-private fun metaLine(row: ScheduleRow): String {
+private fun episodeText(row: ScheduleRow): String {
     val n = row.episodes.last - row.episodes.first + 1
-    if (n > 1) {
-        val label = row.part.canonicalLabel
-        val drop = Copy.episodes(n)
-        return if (label.isEmpty() || row.franchise.parts.size == 1) drop else "$label · $drop"
-    }
-    return row.franchise.watchContext(row.part, row.episode)
+    return if (n > 1) Copy.episodes(n) else Copy.episode(row.episode)
 }
-
-/**
- * The day header — an EYEBROW, no rule and no ground.
- *
- * "Not the section-title family any more: the card under this label names its show at `rowTitle`,
- * Outfit SemiBold 17, ten points down — a day set in Outfit SemiBold 20 was the same shape in the
- * same ink, and 'Tomorrow' and 'Mushoku Tensei' read as two rows of one list. A label above a title
- * is the hierarchy every other grouped list in the app draws."
- *
- * "No ground of its own: the wash is the screen's ground and a plate here would carve a step out of
- * it."
- *
- * The weekday is repeated in the detail only for today and tomorrow, where the word alone does not
- * name a day: **"TODAY · THU 3 SEP"**, **"TOMORROW · FRI 4 SEP"**, **"FRIDAY · 11 SEP"**.
- */
-@Composable
-private fun DayHeader(
-    day: DayView,
-    emptyText: String,
-    previousIsEmpty: Boolean = false,
-    isAX: Boolean,
-    modifier: Modifier = Modifier,
-) {
-    val word = when (day.id) {
-        0 -> Copy.Schedule.today
-        1 -> Copy.Schedule.tomorrow
-        else -> Formatting.weekdayNameMonFirst(Formatting.localMondayCol(day.noon))
-    }
-    val date = Formatting.fmtMonthDay(day.noon)
-    val detail = if (day.id == 0 || day.id == 1) {
-        "${Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon))} $date"
-    } else {
-        date
-    }
-    val text = "$word · $detail"
-
-    // The count, INLINE, on the same separator the date uses. Only when it says something:
-    // "1 episode" over a single row restates the row. It hung at the TRAILING edge until 6 Sep —
-    // the only right-aligned text on the screen — which on an empty today put "TODAY · SUN 6 SEP"
-    // and "NOTHING SCHEDULED" at opposite ends of a bare line with 200 dp of nothing between them,
-    // four small-caps fragments reading as a table header rather than a day ("Today row looks weird
-    // visually", user). An empty day now states itself in a ROW beneath, like every other day.
-    val countText = if (day.count > 1) Copy.episodes(day.count) else null
-    // "'0 episodes' is a count, not a state. An empty today speaks the same words the line under it
-    // prints, so VoiceOver and the screen agree."
-    val spoken = "$text, ${if (day.isEmpty) emptyText else Copy.episodes(day.count)}"
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = ThemeMetrics.gutter)
-            .padding(
-                top = if (previousIsEmpty) ThemeSpace.x4 else ScheduleMetrics.dayGap,
-                bottom = ThemeMetrics.labelGap,
-            )
-            // Children ignored: the header is one element carrying one sentence, marked as a heading
-            // so the heading rotor can skim the agenda a day at a time.
-            .clearAndSetSemantics {
-                contentDescription = spoken
-                heading()
-            },
-        horizontalArrangement = Arrangement.Start,
-        verticalAlignment = Alignment.Top,
-    ) {
-        Row(
-            // `fill = false` caps the group so a long weekday cannot push the count off the trailing
-            // edge, and leaves the slack between the two rather than after both.
-            //
-            // `alignByBaseline` on the GROUP, not only inside it: Compose propagates a child's
-            // alignment lines up through the layouts that contain it, so the count sits on the day
-            // word's own baseline — iOS's `HStack(alignment: .firstTextBaseline)`, in two nested
-            // rows.
-            modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
-            horizontalArrangement = Arrangement.spacedBy(ScheduleMetrics.labelInnerGap),
-            verticalAlignment = Alignment.Top,
-        ) {
-            SectionLabel(
-                text = word,
-                modifier = Modifier.alignByBaseline(),
-                tint = if (day.isToday) ThemeColor.accent else ThemeColor.textSecondary,
-            )
-            SectionLabel(
-                text = "· $detail",
-                modifier = Modifier.alignByBaseline(),
-                tint = ThemeColor.textTertiary,
-            )
-        }
-        if (countText != null) {
-            Spacer(Modifier.width(ScheduleMetrics.labelInnerGap))
-            SectionLabel(
-                text = "· $countText",
-                modifier = Modifier.alignByBaseline(),
-                tint = ThemeColor.textTertiary,
-            )
-        }
-    }
-}
-
 
 /**
  * The end of the horizon — and it NAMES the horizon, which is now true, because the feed holds every
@@ -1818,6 +1726,35 @@ private fun FeedTail(horizonId: Int?, todayNoon: Long, modifier: Modifier = Modi
         color = ColorProducer { ThemeColor.textTertiary },
     )
 }
+
+/** Today with nothing on it, keeping the date column so it has every other day's shape. */
+@Composable
+private fun EmptyDayRow(day: DayView, text: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = ThemeMetrics.gutter)
+            .clearAndSetSemantics {
+                contentDescription = "${Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon))} " +
+                    "${Formatting.localParts(day.noon).d.toString()}, $text"
+            },
+        horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
+        verticalAlignment = Alignment.Top,
+    ) {
+        ScheduleDateColumn(
+            weekday = Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon)),
+            numeral = Formatting.localParts(day.noon).d.toString(),
+            isToday = day.isToday,
+        )
+        BasicText(
+            text = text,
+            style = ThemeType.rowMeta,
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 30.dp),
+            color = ColorProducer { ThemeColor.textTertiary },
+        )
+    }
+}
+
 
 /**
  * Three repeats of the airing card's own anatomy, "so the swap lands in place. It drew poster rows

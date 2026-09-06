@@ -128,12 +128,14 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   fifths of the content width, `ProgressBanner` — the ONE 16:9 art-with-progress card, the bar
   inset on the art over a short scrim; the season screen's header is the same view — with the
   next episode named beneath; the centred cover-flow spotlight is gone), and **Schedule's rows
-  are COMPACT** (`ScheduleAiringRow`, 6 Sep: a 104×59 tile, the show, "6:30 PM · Season 4 ·
+  are COMPACT, and since 7 Sep the DATE RIDES THEM** (`ScheduleDateRow`: a 38-pt date column, an
+  88×50 tile, the show, "Episode 16 · 6:30 PM" — no day bands. It was `ScheduleAiringRow` from
+  6 Sep, a 104×59 tile under a full-width day band: "6:30 PM · Season 4 ·
   Episode 16", the state ladder's slot — five or six per screen). They were gutter-to-gutter 16:9
   `AiringCard`s from 3 to 6 Sep, at which density only two fit on a screen and no two states could
   be compared; the clock was an `OverArtLabel` pill on the art before that, the least legible place
-  for the fact a schedule exists to give. Day headers are eyebrows and carry no rule; the day rail
-  went the way of the calendar strip on 6 Sep — see the Schedule bullet. **Profile is an account
+  for the fact a schedule exists to give. The day BANDS went on 7 Sep (the date rides the row), the
+  day rail went the way of the calendar strip on 6 Sep — see the Schedule bullet. **Profile is an account
   sheet** in the App Store's order: a leading identity row (56-pt disc, name, provenance, one
   quiet line "635 episodes · 5 watching · 13 watched" — no plate of numerals), the Watching
   shelf, then Settings (Notifications · Haptics · Export), a footnote "Up to date · Checked just
@@ -262,10 +264,14 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `HeroCopyScrim(landing:)` lands on `groundTop`, so the hero has no seam ("the details screen
   should have the theme color veil over the entire screen to make the experience more
   immersive", user; a blurred wash behind the header was tried on 30 Aug and stepped 14 levels at
-  the seam because the scrim landed on canvas over it). Android has NOT mirrored the 6 Sep
-  Episodes rebuild (it DID mirror the same day's Schedule rebuild — see that bullet — so the
-  remaining iOS-only work is this list, Today's 6 Sep pass and the iOS-specific keyboard
-  warm-up). Detail's toolbar Add is a bare `plus` glyph (17 semibold,
+  the seam because the scrim landed on canvas over it). **Android mirrors this** (6 Sep):
+  `WHOLE_BELOW`/`WINDOW_BEFORE`/`WINDOW_AFTER`/`GROW_BY`, `episodeAnchor`, `episodeWindow`,
+  `freshEpisode`, the controller's `expanded`/`committing`/`cascadeThrough`/`shown`, `NewTag`,
+  `EpisodeDetails`, the expanders, `MarkRingStyle.Settled` with `fill` + `committing`, and the
+  "All N episodes ›" door deleted. **`EpisodeRow`'s container had to become a `Column`** — left a
+  `Row`, the details laid out BESIDE the row and the list collapsed to a single row on the first
+  tap (caught on the emulator, invisible in the source). The remaining iOS-only work is Today's
+  6 Sep pass and the iOS-specific keyboard warm-up. Detail's toolbar Add is a bare `plus` glyph (17 semibold,
   `interactive`, 44 pt) — no word in the bar. EVERY episode row carries a 120×68 tile
   (`EpisodeArtwork.slot`): the still, else a TRUE 16:9 landscape (the season's, else the show's —
   `FranchisePart.stillLandscape(within:)`, which skips `ultraWide` AniList banners: a 4.75:1
@@ -462,31 +468,52 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   scroll view is greedy and both `maxHeight` forms padded the panel out to the cap and centred
   September inside a hand's width of nothing, while an uncapped six-row month at the accessibility
   sizes ran under the tab bar.
-  **Rows are `ScheduleAiringRow`** — a 104×59 tile, the show, "6:30 PM · Season 4 · Episode 16",
-  the state ladder's slot; five or six per screen. They were gutter-to-gutter 16:9 `AiringCard`s
-  from 3 Sep to 6 Sep, at which density an airing plus its day header is ~305 pt and **exactly two
-  fit between the chrome and the tab bar** — you cannot compare states you cannot see side by side
-  ("the quick scanability is terrible", user). The clock lives IN the caption rather than a 66-pt
-  column of its own: a leading time column is Apple Calendar's answer to a day with many events,
-  and measured on the test library no day in the window carries more than one. The caption is ONE
-  concatenated `Text`, never an `HStack` of clock + meta — as a stack the clock held
-  `layoutPriority` and the meta carried `lineLimit(1)`, so at the accessibility sizes the row
-  printed a bare "6:30 PM" and never said which episode. `tileW` is capped at 128 (uncapped it
-  reached ~150 and left the title a ~110-pt lane that broke it inside a word: "Re:ZER / O"), and
-  the title and caption take an extra line at accessibility sizes rather than truncating.
-  Day sections are `Metrics.dayGap` (24) apart, NOT `ThemeMetrics.sectionGap` (30): a schedule is
-  sparse — ten of the window's twenty-two days carry an episode and none carries more than one — so
-  at the section gap a feed of one-row days was half header by area. The FIRST day header drops the
-  gap entirely (`isFirstDay`).
-  **Nothing in the feed is right-aligned** (6 Sep — "Today row looks weird visually", user). The
-  day header's count sits INLINE on the same "·" separator the date uses ("WEDNESDAY · 9 SEP ·
-  2 EPISODES"), and an empty today gets a quiet `Nothing scheduled` ROW beneath its header rather
-  than a fragment at the trailing edge. Hung at the far edge, an empty today put two small-caps
-  phrases at opposite ends of a bare line with 200 pt of nothing between them — four fragments
-  reading as a table header, and the one day with a header and no body was the day the reader is
-  standing on. The rule that put the statement in the header came from the card era, when a grey
-  line cost a third of a screen; at row density it costs 32 pt and buys today the same shape every
-  other day has.
+  **THE DATE RIDES THE ROW; there are no day bands (7 Sep — "ultra dense and extremely
+  confusing", user).** `ScheduleDateRow` is the feed's only anatomy: a 38-pt DATE COLUMN
+  (`ScheduleDateColumn` — "WED" as `sectionLabel` over the numeral at `ThemeType.time`, both accent
+  on today, blank on the second and later airings of one day, as every agenda prints a date once),
+  an 88×50 tile, the show, "Episode 16 · 6:30 PM", the state ladder's slot. What the measurement
+  showed on the production account (5 airings, 2 shows, 22 days): SIX full-width bands for FIVE
+  rows, a band ~48 pt (24 `dayGap` + label + 10 `labelGap`) against a 59–80 pt row — **~40 % of the
+  feed's height was a banner introducing one row**; and of "7:30 PM · Season 4 · Episode 22" TWO
+  facts are constant for that show across the window (a weekly show cannot leave Season 4 in 22
+  days, and it airs at the same minute every week), so only the episode varied — and it sat LAST on
+  the line. Fifteen middot-joined fragments on one screen, ~five of them news. **The season is
+  dropped here** (`episodeText`, not `watchContext`) and the EPISODE leads the caption. Three shapes
+  were built behind `-scheduleShape` and photographed side by side; the user picked this one. The
+  losers are deleted, not flagged off: **B** kept the bands and only fixed the caption (left the
+  40 %); **C** grouped by show, which killed every repetition but took today off the screen entirely
+  and ran the dates 2, 9, 16, 4, 11, 18 down the page.
+  **THE WIDTH BUDGET is what every question about this row comes back to** (`RowMetrics`). On a
+  393-pt screen: 16 gutter + date + tile + lane + 44 ladder + 16 gutter, 8–12 between.
+  "Reincarnated as a Slime" measures **184 pt** in Outfit SemiBold 17 (measured against the bundled
+  face, not guessed), so the title needs a ≥184-pt lane to hold a two-line break — which leaves
+  ~95 pt for the date column AND the tile together. Hence 38 + 88, not the 104×59 the band-and-row
+  shape carried, and hence three title lines for the longest names. A PORTRAIT poster was built and
+  photographed against it and lost ("A is good but without image it looks too bland" → landscape,
+  portrait and no-art frames): at 48×72 an AniList cover is its own logotype shrunk to mush twelve
+  points from the title that already says it, and the landscape frame also fits the whole window on
+  one screen where the portrait one does not. An art-free row is lighter still (~70 pt an event) and
+  is what the shape spike photographed; it was rejected as bland.
+  **At ACCESSIBILITY sizes the row UNFOLDS** (`stacked`): the date, the tile and the ladder keep one
+  line and the words take the full width beneath them. Four columns cannot survive that type —
+  measured at AX-XL the words were left a ~112-pt lane against a ~28-pt face, and the row printed
+  "Re:ZER / O" broken inside the word, truncated "That Time I Got Reinc…" (a row may grow at these
+  sizes; it may not lie about which show it is) and pushed the ladder off the screen. Same fault,
+  same answer, as the clock column this row replaced.
+  Days are `ThemeSpace.x5` (20) apart — the break belongs to the day's FIRST row, and the feed's
+  first day drops it to x3. An empty today keeps its date column and says "Nothing scheduled" beside
+  it (`emptyDateRow`), so the one day with no body has the same shape as every day that has one.
+  The scroll targets did not move: a day's first row (or its empty row) carries `AgendaID.day(id)`,
+  so `land`, the "Today" button and the month grid's day-tap are unchanged.
+  The band-and-row shape this replaced — `ScheduleAiringRow`, `dayHeader`, `daySection`, `metaLine`,
+  and with them the 6 Sep "nothing in the feed is right-aligned" rule about the header's inline
+  count — is deleted. It had been gutter-to-gutter 16:9 `AiringCard`s from 3 to 6 Sep before that,
+  at which density an airing plus its day header was ~305 pt and exactly two fit between the chrome
+  and the tab bar ("the quick scanability is terrible", user). The caption is still ONE concatenated
+  `Text`, never an `HStack` of two runs: as a stack one run holds `layoutPriority` and the other
+  carries `lineLimit(1)`, so at the accessibility sizes the row printed a bare clock and never said
+  which episode.
   **The state ladder (`AiringState`, `AiringStateControl`) — the second complaint, and it is
   independent of every direction above:** "there is no instant visual distinction between an
   episode that has been marked as completed, not seen, and upcoming. Everything feels of the same
@@ -518,8 +545,10 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   becomes vertically scrollable). The feed walks `FranchisePart.airings` (every dated episode in the
   window) via `AppModel.scheduleDays`; `scheduleAirings` falls back to the next/last slots against a
   server that predates the field, which shows each weekly show once.
-  **Android mirrors all of it** (6 Sep): `ui/schedule/ScheduleParts.kt` (`AiringState`,
-  `AiringStateControl`, `ScheduleAiringRow`, `ScheduleMonthGrid`), the ticker and `AiringCard.kt`
+  **Android mirrors all of it** (6 Sep, and the 7 Sep date row with it): `ui/schedule/ScheduleParts.kt`
+  (`AiringState`, `AiringStateControl`, `ScheduleDateColumn`, `ScheduleDateRow`, `ScheduleMonthGrid`;
+  `ScheduleAiringRow` and the `DayHeader` composable deleted, `FeedItem.DayHeader` gone and a day's
+  FIRST card carrying the `day:` scroll key), the ticker and `AiringCard.kt`
   deleted, `MarkRingStyle.Settled` moved to the disc-with-`fill` form, `receiptIsLive` added beside
   `ReceiptLine` (which self-hides there, so a caller that must SWAP its own line has to ask), the
   overlay mounted inside the feed's box rather than the screen root (as a root child it drew over
@@ -591,7 +620,7 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   a TMDB backdrop and every billboard was a zoomed slice ("supposed to be portrait", "everything
   so zoomed", user) — the rule is wrong for a tall frame, and Android had never left cover-first.
   Landscape stays the choice of every 16:9 surface (`ProgressBanner`, `BannerCard`,
-  `ScheduleAiringRow`'s tile, the Up next cards, episode tiles). Grids, rows and shelves stay `portraitArt`-first. **The
+  `ScheduleDateRow`'s tile, the Up next cards, episode tiles). Grids, rows and shelves stay `portraitArt`-first. **The
   billboard's NAME is the show's LOGO, and the lockup is CENTRED (5 Sep, settled by a placement
   spike):** `HeroTitle` draws `billboardLogo` (`artwork.logos.first`, the server's rank) inside a
   box of ≤ 88 % of the copy run × ≤ 120 pt — EVERY logo, circular emblems (Slime, Demon Slayer)
@@ -790,11 +819,15 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   entrance: on the first live frame a travelling light draws the ribbon (120 pt, a third of the
   screen, centre 0.44 × height, `PreviouslyMark`'s `lit` material — ramp, rim, near/far edges)
   head to foot; its pool of warm light (`RibbonFill(castShadow:)`, a static blurred layer) arrives
-  as it completes; the coral full stop lands with one pulse; the composition HOLDS; once
-  `LaunchHandoff.authReady` the ident pushes through — the composition grows to 1.12 and fades
-  over 0.23 s, the ground over 0.36 s — while the app emerges beneath (RootView scales the app
-  0.96 → 1 on `uiSettle`; the app is never faded: the ident's two layers fading is the same picture
-  without an offscreen pass over the whole tree). `phase == .leaving` sets `surfaceReady` (the
+  as it completes; the coral full stop lands with one pulse; the composition HOLDS, COMPLETE AND
+  STILL; once `LaunchHandoff.authReady` the ident pushes through — the composition grows to 1.10
+  and dissolves over 0.22 s, the ground dissolving off the app beneath over 0.40 s. The app is
+  never scaled or faded (review i5): a transform or an opacity ramp over the whole tree is a
+  full-screen offscreen pass started in the frame the ident begins leaving, and it froze the exit
+  at 80 % for half a second — **the ident's GROUND is the reveal**, so its curve is a smoothstep,
+  never the ease-in the composition uses (an ease-in ground holds full canvas for two thirds of
+  its run and then drops, which is a CUT to the app with a smear on the front of it).
+  `phase == .leaving` sets `surfaceReady` (the
   launch tab's page-in only rises — `pageInTransition(fadeIn: launch.finished)` — and the floating
   tab bar, which the system composites above any overlay, waits on `launch.emerging`). Nothing
   flies into the header; the header draws its own `Wordmark` from the first frame. No stage
@@ -803,18 +836,43 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   actually presented, stalls > 250 ms cut out — a merely slow frame is not, or the motion plays in
   stepped slow motion; `IdentFrame`: the spring step-response, a smoothstep and an ease-in as
   functions): an implicit animation started in `onAppear` is folded into the first frame and never
-  plays, and a `Task.sleep` counts wall time while the main thread is still busy. **Nothing heavy
-  runs per frame:** the ribbon is rasterised once (the reveal is a canvas-coloured cover sliding
-  off it, not a mask; the light is one gradient band), and every exit is a layer opacity or a
-  transform. Beats (live s): preroll 0.22, draw 0.60 (ease-in-out), cast +0.45→0.85, stop at 0.66
-  (0.40/0.72) with a 0.45 pulse, hold until 1.15, exit 0.36. The in-app mark is the icon's own
+  plays, and a `Task.sleep` counts wall time while the main thread is still busy. **But the cut is
+  BUDGETED at 0.40 s total (`stallBudget`, 7 Sep)** — the clock protects the MOTION from a stall,
+  it may not hold the PICTURE hostage to one. Unbudgeted, a launch whose first second is all
+  stall (the app builds its whole tree under the ident, which is what the hold is FOR) froze the
+  ribbon at nothing drawn and showed a bare canvas until the wall ceiling fired. Past the budget
+  wall time drives, so a starved launch plays the drawing in chunky steps instead of not playing.
+  **Nothing heavy runs per frame:** the ribbon is rasterised once (the reveal is a canvas-coloured
+  cover sliding off it, not a mask; the light is one gradient band), and every exit is a layer
+  opacity or a transform. **A blurred layer handed to `drawingGroup()` must be PADDED first**
+  (`.blur(r).padding(3r).drawingGroup().padding(-3r)`, `PreviouslyMark`): the group rasterises the
+  view's BOUNDS, so an unpadded blur is cut off square — the 5 Sep perf pass's shadow rule drew
+  the ribbon's pool of light as a rectangle of lifted canvas with visible edges and put a glowing
+  BOX behind the brand's full stop (seen at full resolution, 7 Sep; invisible in a thumbnail).
+  Beats (live s): preroll 0.14, draw 0.60 (ease-in-out), cast +0.45→0.85, stop at 0.52 (0.40/0.72)
+  with a 0.45 pulse, then `stillFor` 0.20 — **the hold is stated as `preroll + beadAt + bloomFor +
+  stillFor` (1.31) so the mark always stands FINISHED before anything moves**; review passes had
+  shaved it to 0.96, which is 140 ms before the pulse ends, and the exit read as a cut away from
+  something still arriving. `artGrace` 0.15 is all the extra the hero's picture gets (`artReady`
+  never lands inside a cold launch — the art is a network away — and a flat 1.6 s patience made
+  every warm launch 0.96 and every cold one 1.6, no two the same length). Exit 0.40 (composition
+  0.55 of it, ground lagging 0.06); `wallCeiling` 2.8. The in-app mark is the icon's own
   geometry (`MarkGeometry`: 800/376 aspect, 0.40 notch, tangent-arc corners; header 11 pt,
   colophon 9 pt, gate 56 pt lit); the old bookmark-with-slot, `finish: .hero`, the Metal shaders
   and the flight-to-header (tried and retired the same day: a small object shrinking into a corner
-  reads as a window minimising) are gone. Reduce Motion: fade in, hold, crossfade. Capture:
-  `scratchpad/launch/capture.sh <name>` records a cold launch and sheets it; judge the ident from
-  frames, never from a live glance; the sim swallows the first ~0.2 s of any launch.
-- Debug-only launch args: `-openDetail <franchiseId>` lands on a show page (the alert-tap route);
+  reads as a window minimising) are gone. Reduce Motion: fade in, hold, crossfade, and NO art wait.
+  **The ident cannot be filmed (7 Sep).** `simctl io recordVideo` records a black screen through
+  the whole ident while the app's own clock reports a clean 60 fps draw — two instruments against
+  one, and the frame-identical black in the recording is the recorder, not the app; a screenshot
+  costs the app ~0.5 s of stall, so a burst photographs a launch it is itself deforming (that is
+  also why `capture.sh` was reporting a "black launch" this whole time). Photograph it instead:
+  `-identFreeze <seconds>` holds the clock at one moment of the ident (past the hold it clears the
+  ident to leave and stops a hair short of `.done`, so the exit stands still with the app emerging
+  beneath), `-identTrace 1` prints one line per presented frame (wall, gap, live t, reveal, the
+  gates) — and `scratchpad/launch/beats.py <name> <t,…>` is one cold launch per beat, one exact
+  frame each. `capture.sh` and the burst are kept only for what happens AFTER the ident.
+- Debug-only launch args: `-identTrace 1` / `-identFreeze <s>` instrument and photograph the launch
+  ident (see the launch bullet — it cannot be filmed); `-openDetail <franchiseId>` lands on a show page (the alert-tap route);
   on it, `-detailAnchor trailers|people|related|watch` scrolls to a catalogue shelf,
   `-detailTrailer 1` opens the first trailer's sheet and `-detailOpenRelated N` opens the Nth
   related title — the way to photograph the show page when the simulator cannot be touched (on

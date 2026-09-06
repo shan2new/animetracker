@@ -197,10 +197,20 @@ struct RibbonFill: View {
                     // Rasterised ONCE (`drawingGroup`), then faded by layer opacity: a blur
                     // left as a layer filter is re-run by the render server on every frame the
                     // light travels, which is every frame of the ident.
+                    //
+                    // The padding pair is not decoration: `drawingGroup` rasterises the view's
+                    // BOUNDS, so a blur is cut off square at them. Without room to spread, the
+                    // pool of light the ribbon casts became a RECTANGLE of lifted canvas with
+                    // visible edges around the mark (7 Sep, seen at full resolution on the
+                    // launch). The padding grows the buffer; the negative padding hands the
+                    // original frame back to the layout.
+                    let spread = width * 0.16
                     RibbonShape()
                         .fill(MarkGeometry.ribbonShadow.opacity(0.34))
-                        .blur(radius: width * 0.16)
+                        .blur(radius: spread)
+                        .padding(spread * 3)
                         .drawingGroup()
+                        .padding(-spread * 3)
                         .offset(y: width * 0.07)
                         .opacity(castShadow)
                         .allowsHitTesting(false)
@@ -232,10 +242,16 @@ struct PeriodBead: View {
             }
             .background {
                 if lit {
+                    // Padded before the rasterisation, for the reason `RibbonFill`'s shadow is:
+                    // clipped to the bead's own bounds this glow drew a lit SQUARE behind the
+                    // brand's full stop.
+                    let spread = diameter * 0.22
                     Circle()
                         .fill(ThemeColor.brandPeriod.opacity(0.38))
-                        .blur(radius: diameter * 0.22)
+                        .blur(radius: spread)
+                        .padding(spread * 3)
                         .drawingGroup()
+                        .padding(-spread * 3)
                         .offset(y: diameter * 0.10)
                         .allowsHitTesting(false)
                 }

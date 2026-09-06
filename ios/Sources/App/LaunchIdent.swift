@@ -42,7 +42,9 @@ struct LaunchIdent: View {
 
     // The beats, in seconds of live time.
     /// The system's own launch transition swallows the app's first frames; the drawing waits.
-    static let preroll = 0.22
+    // 0.14 (7 Sep): every millisecond here is bare canvas, and the system transition already
+    // covers it — at 0.22 the ident opened on a beat of nothing before the light moved.
+    static let preroll = 0.14
     /// The light draws the ribbon head to foot: gathering, then easing into the tails.
     static let revealFor = 0.60
     /// The full stop lands as the light passes the tails.
@@ -52,28 +54,35 @@ struct LaunchIdent: View {
     static let strike = (response: 0.40, damping: 0.72)
     /// Its one pulse of light.
     static let bloomFor = 0.45
-    /// The composition holds before it may leave.
-    // Stated in the bead's own clock (review i2): `preroll + beadAt + 0.22` — the bead is
-    // scheduled in LIVE time (t − preroll) while the hold is in ident time, and at a flat 0.82
-    // the stop began 60 ms AFTER a fast launch had started leaving, so the brand's period landed
-    // only on a slow network. 0.96 now; the pulse is half through when the exit begins.
-    static let holdUntil = preroll + beadAt + 0.22
-    /// The picture's own patience: the ident may leave without the hero's art after this.
-    static let artPatience = 1.6
-    /// The push through: the composition grows and is gone before the ground has finished
-    /// lifting, so it never lingers as a ghost over the screen arriving beneath it.
-    static let exitFor = 0.28
-    static let exitScale = 1.12
-    static let compositionExitFraction = 0.50
-    /// The ground lifts a beat after the composition starts leaving, so the ribbon is gone
-    /// before the picture is more than half through (review i5: a translucent ribbon over art).
-    static let groundLag = 0.05
+    /// The composition holds, COMPLETE AND STILL, before it may leave.
+    ///
+    /// Stated in the bead's own clock: `preroll + beadAt + bloomFor` is the moment the last thing
+    /// on screen stops moving, and the mark then stands still for `stillFor`. An ident is the
+    /// still beat — the gesture before it is only how the mark got there. Successive review
+    /// passes had shaved this to 0.96 (7 Sep), which is 140 ms BEFORE the full stop's pulse ends:
+    /// the mark never once stood finished, and the exit read as a cut away from something still
+    /// arriving.
+    static let stillFor = 0.20
+    static let holdUntil = preroll + beadAt + bloomFor + stillFor
+    /// How much longer the ident may wait for the hero's picture once it has held its beat. A
+    /// cold launch fetches that art over the network and never has it in time, so this is a
+    /// GRACE on top of the hold, not a second, longer hold: at a flat 1.6 s patience the ident
+    /// ran 0.96 s with a warm cache and 1.6 s without, and no two launches were the same length.
+    static let artGrace = 0.15
+    /// The push through: the composition grows and dissolves, then the ground dissolves off the
+    /// app beneath — overlapping, so the mark is gone before the picture is more than half in
+    /// (review i5: a translucent ribbon over art).
+    static let exitFor = 0.40
+    static let exitScale = 1.10
+    static let compositionExitFraction = 0.55
+    /// The ground follows the composition by a beat.
+    static let groundLag = 0.06
     /// Auth's own wait is capped at 3 s; the ident does not outlast it by much.
     static let patience = 4.0
 
     /// A WALL-clock ceiling from the first frame (review i4): live seconds cut stalls out, so on
     /// a starved device the ident had no ceiling at all and held for six seconds.
-    static let wallCeiling = 2.4
+    static let wallCeiling = 2.8
 
     var body: some View {
         GeometryReader { geo in
@@ -183,30 +192,84 @@ final class IdentClock {
     /// merely slow frame (the simulator at 8–10 fps) must NOT be cut: cutting it plays the motion
     /// in stepped slow motion.
     private static let stall: TimeInterval = 0.25
+    /// The most that may ever be cut. The clock protects the MOTION from a stall; it may not
+    /// hold the PICTURE hostage to one. Unbudgeted, a launch whose first second is all stall —
+    /// the app is building its whole tree under the ident, which is what the hold is for — froze
+    /// the ribbon at nothing drawn and showed a bare canvas until the wall ceiling fired
+    /// (measured 7 Sep: no warm pixel on screen for 1.0 s, and the user's word for it was
+    /// "nuked"). Past the budget wall time drives, so the drawing plays in chunky steps on a
+    /// starved launch instead of not playing at all, and the whole ident stays bounded.
+    private var cut: TimeInterval = 0
+    private static let stallBudget: TimeInterval = 0.40
+
+    #if DEBUG
+    /// `-identTrace 1`: one line per presented frame — the live clock against the wall, so a
+    /// starved launch can be told from a fast one.
+    private static let trace = UserDefaults.standard.bool(forKey: "identTrace")
+    private var frames = 0
+    /// `-identFreeze <seconds>`: hold the ident at one moment of its own clock so that moment can
+    /// be PHOTOGRAPHED. The ident cannot be filmed: `simctl io recordVideo` records a black
+    /// screen through the whole ident while the app's own clock reports a clean 60 fps draw
+    /// (7 Sep — two instruments against one), and a screenshot costs the app ~0.5 s of stall, so
+    /// a burst photographs a launch it is itself deforming. Frozen, one launch = one exact frame.
+    private static let freeze: Double? = {
+        let v = UserDefaults.standard.double(forKey: "identFreeze")
+        return v > 0 ? v : nil
+    }()
+    #endif
 
     func tick(_ date: Date, authReady: Bool, artReady: Bool = true, reduceMotion: Bool) -> Double {
         guard let start else {
             self.start = date
             last = date
+            #if DEBUG
+            if Self.trace { print("ident f0 wall=0.000 gap=---- t=0.000 reveal=0.00") }
+            #endif
             return 0
         }
         // Stalls are cut out only while HOLDING (review i5): once leaving, wall time drives the
         // exit, so a busy main thread shortens the ghost instead of freezing it mid-fade.
-        if leaveAt == nil, let last, date.timeIntervalSince(last) > Self.stall {
-            self.start = start.addingTimeInterval(date.timeIntervalSince(last) - 1.0 / 60.0)
+        let gapNow = last.map { date.timeIntervalSince($0) } ?? 0
+        if leaveAt == nil, cut < Self.stallBudget, gapNow > Self.stall {
+            let take = min(gapNow - 1.0 / 60.0, Self.stallBudget - cut)
+            cut += take
+            self.start = start.addingTimeInterval(take)
         }
         last = date
         let t = date.timeIntervalSince(self.start ?? date)
         if firstFrame == nil { firstFrame = date }
+        #if DEBUG
+        if let freeze = Self.freeze {
+            // Past the hold, a frozen ident is photographing the EXIT: clear it to leave at its
+            // own hold and stop a hair short of `.done`, so the dissolve stands still on screen
+            // with the app already emerging beneath it.
+            let last = LaunchIdent.holdUntil + LaunchIdent.exitFor + LaunchIdent.groundLag - 0.02
+            if freeze > LaunchIdent.holdUntil, leaveAt == nil { leaveAt = LaunchIdent.holdUntil }
+            return min(t, min(freeze, last))
+        }
+        #endif
         if leaveAt == nil {
             let held = t >= (reduceMotion ? 0.6 : LaunchIdent.holdUntil)
             let overdue = date.timeIntervalSince(firstFrame ?? date) >= LaunchIdent.wallCeiling
             // The app emerges beneath the ident WITH its picture (review i2: it used to come
             // through as a tint, then a blur, then the poster — three arrivals in the first
             // second); auth's patience stays the ceiling.
-            let ready = authReady && (artReady || t >= LaunchIdent.artPatience)
+            // Reduce Motion never waits on the picture: its ident is a crossfade, and holding a
+            // still frame longer for art that has not arrived is exactly the delay it asks to be
+            // spared.
+            let ready = authReady && (reduceMotion || artReady || t >= LaunchIdent.holdUntil + LaunchIdent.artGrace)
             if held, ready || t >= LaunchIdent.patience { leaveAt = t } else if overdue { leaveAt = t }
         }
+        #if DEBUG
+        if Self.trace {
+            frames += 1
+            let wall = date.timeIntervalSince(firstFrame ?? date)
+            let f = IdentFrame(t: t, leaveAt: leaveAt, reduceMotion: reduceMotion)
+            print(String(format: "ident f%d wall=%.3f gap=%.3f t=%.3f reveal=%.2f auth=%d art=%d leave=%@",
+                         frames, wall, gapNow, t, f.reveal, authReady ? 1 : 0, artReady ? 1 : 0,
+                         leaveAt.map { String(format: "%.3f", $0) } ?? "-"))
+        }
+        #endif
         return t
     }
 }
@@ -262,7 +325,10 @@ struct IdentFrame: Equatable {
             let out = IdentFrame.easeIn(since, over: LaunchIdent.exitFor * LaunchIdent.compositionExitFraction)
             scale = 1 + (LaunchIdent.exitScale - 1) * out
             opacity = 1 - out
-            ground = 1 - IdentFrame.easeIn(since - LaunchIdent.groundLag, over: LaunchIdent.exitFor)
+            // Smoothstep, not ease-IN: an ease-in ground holds full canvas for two thirds of its
+            // run and then drops, which is a CUT to the app with a smear on the front of it. A
+            // symmetric dissolve is the app coming up through the ident.
+            ground = 1 - IdentFrame.ease(since - LaunchIdent.groundLag, over: LaunchIdent.exitFor)
             stage = since >= LaunchIdent.exitFor + LaunchIdent.groundLag ? .done : .leaving
         } else {
             scale = 1

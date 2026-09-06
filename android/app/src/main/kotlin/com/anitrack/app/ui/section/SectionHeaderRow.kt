@@ -447,19 +447,18 @@ fun HeroBadge(text: String, modifier: Modifier = Modifier, attention: Boolean = 
 
     var lifted by remember(attention) { mutableStateOf(!animate) }
     var ringOut by remember(attention) { mutableStateOf(false) }
-    // NOT VERIFIED MOVING ON THE EMULATOR (7 Sep). A band pinned mid-sweep DRAWS — 461 light
-    // pixels over a resting chip, so the paint and the modifier order are right — but neither a
-    // hand-rolled `Animatable` loop nor this transition advanced the value: fourteen frames across
-    // ~3.5 cycles held the chip's mean brightness to 0.4/255. The resting form below is what
-    // carries the prominence either way (that is iOS's own rule — "motion cannot be the carrier,
-    // because motion has to stop"), so this ships as the correct idiom with the sweep unproven.
-    // Next thing to test: whether `attention` is actually reaching this composable.
-    //
     // An INFINITE TRANSITION, not a hand-rolled `LaunchedEffect` loop: the loop's `animateTo`
-    // never advanced the value on the emulator (the draw path was proven with a pinned probe, so
-    // it was the loop, not the paint), and a transition is also immune to the hero subtree
-    // re-entering composition under the billboard's drift. The keyframes carry the sweep and the
-    // rest in one cycle: light crosses the chip, then the chip is a still object until the next.
+    // is also immune to the hero subtree re-entering composition under the billboard's drift, and
+    // it needs no cancellation bookkeeping. The keyframes carry the sweep and the rest in ONE
+    // cycle: light crosses the chip, then the chip is a still object until the next pass.
+    //
+    // **Measure this on a hardware-GPU emulator or not at all.** A whole session was spent
+    // concluding the sweep "did not animate" — three implementations rewritten, an additive blend
+    // wrongly blamed — because the AVD had been booted with `-gpu swiftshader_indirect` and the
+    // app was running at 1.9 fps: a 1350-ms sweep got TWO frames, so every screenshot caught the
+    // chip parked. On `-gpu host` the same code runs at a measured 60 fps and a sweep lifts the
+    // chip's mean brightness 92 -> 124 every 3.9 s. **A frame counter in the effect is the cheap
+    // guard: log `withFrameNanos` ticks before believing anything about motion.**
     val transition = rememberInfiniteTransition(label = "heroBadgeSheen")
     val sweep by transition.animateFloat(
         initialValue = 0f,
@@ -537,20 +536,19 @@ fun HeroBadge(text: String, modifier: Modifier = Modifier, attention: Boolean = 
                 drawRect(
                     brush = Brush.horizontalGradient(
                         0f to Color.Transparent,
-                        0.34f to Color.White.copy(alpha = 0.22f),
-                        0.5f to Color.White.copy(alpha = 0.62f),
-                        0.66f to Color.White.copy(alpha = 0.22f),
+                        0.34f to Color.White.copy(alpha = 0.30f),
+                        0.5f to Color.White.copy(alpha = 0.85f),
+                        0.66f to Color.White.copy(alpha = 0.30f),
                         1f to Color.Transparent,
                         startX = x,
                         endX = x + band,
                     ),
                     topLeft = Offset(x, 0f),
                     size = Size(band, size.height),
-                    // SrcOver, not `BlendMode.Plus`: an additive blend needs the destination in a
-                    // compositing layer, and without one it drew NOTHING on the emulator — ten
-                    // frames across two and a half sweep cycles moved the chip's mean brightness
-                    // by 0.2/255 (measured 7 Sep). White over an opaque amber chip reads as the
-                    // same light and needs no layer.
+                    // `Plus`, iOS's `plusLighter`: the band BRIGHTENS the chip rather than washing
+                    // it. Measured working — a sweep lifts the chip's mean from 92 to 124 with
+                    // 1,789 near-white pixels where there were none.
+                    blendMode = BlendMode.Plus,
                 )
                 // One ring LEAVING the tag — an edge, not a wash. An amber glow behind an amber
                 // tag moved no pixels on film (6 Sep); an expanding stroke has its own contrast.

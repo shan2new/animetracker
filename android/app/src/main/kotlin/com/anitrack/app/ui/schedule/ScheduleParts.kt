@@ -18,8 +18,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorProducer
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
@@ -50,6 +51,7 @@ import com.anitrack.app.ui.art.LandscapeArt
 import com.anitrack.app.ui.control.MarkRing
 import com.anitrack.app.ui.control.MarkRingStyle
 import com.anitrack.app.ui.control.PressStyle
+import com.anitrack.app.ui.section.SectionLabel
 import com.anitrack.app.ui.state.ReceiptLine
 import com.anitrack.app.ui.state.receiptIsLive
 import com.anitrack.model.Formatting
@@ -191,64 +193,95 @@ private fun Modifier.clearForDecoration(): Modifier =
 // The row
 // -------------------------------------------------------------------------------------
 
-private val tileWidth = 104.dp
-private val tileHeight = 59.dp
+private val dateColumnWidth = 38.dp
+private val tileWidth = 88.dp
+private val tileHeight = 50.dp
 
 /**
- * One airing: a 104x59 tile, the show, the clock and its facts, and the ladder's slot.
- *
- * The card this replaces was 16:9 gutter to gutter — two per screen, so nothing could be compared
- * with anything. This runs six deep on the same feed. The clock moves INTO the caption rather than
- * holding a column of its own: a leading time column is Apple Calendar's answer to a day with many
- * events, and measured on the test library no day in the window carries more than one. It keeps its
- * colour, which is the part that was load-bearing.
+ * "WED" over "9" — the weekday as the app's eyebrow, the numeral in the calendar grid's own `time`
+ * face, so the column reads as the same instrument the month grid does. Today is accent, the one
+ * rule this screen already follows for today. Blank on the second and later airings of a day: the
+ * date is printed once and its rows stack under it, as every agenda does.
  */
 @Composable
-fun ScheduleAiringRow(
+fun ScheduleDateColumn(weekday: String?, numeral: String?, isToday: Boolean) {
+    Column(
+        modifier = Modifier.width(dateColumnWidth).clearAndSetSemantics {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        if (weekday != null && numeral != null) {
+            SectionLabel(
+                text = weekday,
+                tint = if (isToday) ThemeColor.accent else ThemeColor.textTertiary,
+            )
+            BasicText(
+                text = numeral,
+                style = ThemeType.time,
+                maxLines = 1,
+                color = ColorProducer {
+                    if (isToday) ThemeColor.accent else ThemeColor.textSecondary
+                },
+            )
+        }
+    }
+}
+
+/**
+ * One airing: the date at a fixed x, the show's art, the show, what varies about this episode, and
+ * the ladder's slot. No day band — the dates ARE the calendar at rest, and the month grid behind
+ * the bar's glyph is still there for the shape of a month.
+ *
+ * THE WIDTH BUDGET, because every question about this row is really a question about it. On a
+ * 393-dp screen: 16 gutter + date + tile + lane + 44 ladder + 16 gutter, with 8-12 between.
+ * "Reincarnated as a Slime" measures 184 dp in Outfit SemiBold 17, so the title needs a lane of at
+ * least ~184 to keep a two-line break. That leaves ~95 dp for the date column AND the tile
+ * together, which is why the tile is 88x50 rather than the 104x59 the band-and-row shape carried,
+ * and why the longest names take a third line here. A portrait poster was photographed against it
+ * and lost: at 48x72 an AniList cover is its own logotype shrunk to mush, twelve points from the
+ * title that already says it.
+ */
+@Composable
+fun ScheduleDateRow(
+    weekday: String?,
+    numeral: String?,
+    isToday: Boolean,
     franchise: Franchise,
-    meta: String,
+    episodeText: String,
     time: String?,
     state: AiringState,
     hasReminder: Boolean,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
     receiptHost: String? = null,
+    isAX: Boolean = false,
     trailing: @Composable () -> Unit = {},
 ) {
     // TalkBack hears the FULL title, never the shortened one.
-    val spokenLabel = listOfNotNull(franchise.title, meta, time).joinToString(", ")
+    val spokenDate = if (weekday != null && numeral != null) "$weekday $numeral" else null
+    val spokenLabel = listOfNotNull(spokenDate, franchise.title, episodeText, time).joinToString(", ")
     val spokenValue = when {
         state.isWatched -> Copy.Accessibility.complete
         time != null && hasReminder -> "$time, ${Copy.Schedule.reminderSet}"
         time != null -> time
         else -> ""
     }
+    val frame = modifier
+        .fillMaxWidth()
+        .semantics(mergeDescendants = true) {
+            contentDescription = spokenLabel
+            if (spokenValue.isNotEmpty()) stateDescription = spokenValue
+            role = Role.Button
+            onClick { onOpen(); true }
+        }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            // The tile is the row's floor, so a one-line row and a two-line row still read as one
-            // rhythm down the column.
-            .heightIn(min = tileHeight)
-            .semantics(mergeDescendants = true) {
-                contentDescription = spokenLabel
-                if (spokenValue.isNotEmpty()) stateDescription = spokenValue
-                role = Role.Button
-                onClick { onOpen(); true }
-            },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
-    ) {
-        RowTile(franchise = franchise, watched = state.isWatched, onOpen = onOpen)
-
+    val words: @Composable (Modifier) -> Unit = { slot ->
         Column(
-            modifier = Modifier
-                .weight(1f)
-                .clickable(
-                    interactionSource = null,
-                    indication = PressStyle.control,
-                    onClick = onOpen,
-                ),
+            modifier = slot.clickable(
+                interactionSource = null,
+                indication = PressStyle.control,
+                onClick = onOpen,
+            ),
             verticalArrangement = Arrangement.spacedBy(ThemeSpace.x0_5),
         ) {
             BasicText(
@@ -257,29 +290,64 @@ fun ScheduleAiringRow(
                 color = ColorProducer {
                     if (state.isWatched) ThemeColor.textSecondary else ThemeColor.textPrimary
                 },
-                maxLines = 2,
+                maxLines = if (isAX) 4 else 3,
                 overflow = TextOverflow.Ellipsis,
             )
             if (receiptHost != null && receiptIsLive(receiptHost)) {
                 ReceiptLine(host = receiptHost, compact = true)
             } else {
-                CaptionLine(time = time, meta = meta, state = state, hasReminder = hasReminder)
+                CaptionLine(time = time, meta = episodeText, state = state, hasReminder = hasReminder)
             }
         }
+    }
 
-        trailing()
+    if (isAX) {
+        // At the LARGEST font scales the row UNFOLDS: the date, the tile and the ladder keep one
+        // line and the words take the screen's full width beneath them. Four columns cannot survive
+        // that type — measured on iOS at AX-XL the words were left a ~112-pt lane against a ~28-pt
+        // face, and the row printed "Re:ZER / O" broken inside the word, truncated the long title
+        // (a row may grow at these sizes; it may not lie about which show it is) and pushed the
+        // ladder off the screen.
+        Column(frame, verticalArrangement = Arrangement.spacedBy(ThemeSpace.x2)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
+            ) {
+                ScheduleDateColumn(weekday, numeral, isToday)
+                RowTile(franchise = franchise, watched = state.isWatched, onOpen = onOpen)
+                Spacer(Modifier.weight(1f))
+                trailing()
+            }
+            words(Modifier.fillMaxWidth())
+        }
+    } else {
+        Row(
+            // The tile is the row's floor, so a one-line row and a three-line row still read as one
+            // rhythm down the column.
+            modifier = frame.heightIn(min = tileHeight),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x3),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(ThemeSpace.x2)) {
+                ScheduleDateColumn(weekday, numeral, isToday)
+                RowTile(franchise = franchise, watched = state.isWatched, onOpen = onOpen)
+            }
+            words(Modifier.weight(1f))
+            trailing()
+        }
     }
 }
 
 /**
- * "6:30 PM · Season 4 · Episode 16" — the clock keeps the colour it had in its own column and the
- * rest of the line is the row's meta.
+ * "Episode 16 · 6:30 PM" — the fact that VARIES leads, the clock follows it. No season: a weekly
+ * show cannot leave its season inside a 22-day window, so on this screen it was a constant printed
+ * once per row, and the biggest single contributor to the run-on grammar this row replaced.
  *
  * ONE annotated string, not a Row of two texts. As a row the clock held the space and the meta
- * carried `maxLines = 1`, so at the largest font scales the clock took the whole line and
- * "Season 4 · Episode 15" was squeezed out of existence — the row printed a bare time and never
- * said which episode, which is the one fact it exists to give. As one string the run wraps like
- * prose and every part survives.
+ * carried `maxLines = 1`, so at the largest font scales the clock took the whole line and the
+ * episode was squeezed out of existence — the one fact the row exists to give. As one string the
+ * run wraps like prose and every part survives.
  */
 @Composable
 private fun CaptionLine(
@@ -296,7 +364,9 @@ private fun CaptionLine(
     val metaInk = if (state.isWatched) ThemeColor.textTertiary else ThemeColor.textSecondary
     val text: AnnotatedString = remember(time, meta, clockInk, metaInk, hasReminder) {
         buildAnnotatedString {
+            withStyle(SpanStyle(color = metaInk)) { append(meta) }
             if (time != null) {
+                withStyle(SpanStyle(color = ThemeColor.textTertiary)) { append(" · ") }
                 withStyle(SpanStyle(color = clockInk)) { append(time) }
                 // A reminder is armed for this exact episode — passive, never a control; the row's
                 // spoken value says it. A bell glyph inline would need an inline-content slot, and
@@ -304,15 +374,13 @@ private fun CaptionLine(
                 if (hasReminder) {
                     withStyle(SpanStyle(color = ThemeColor.textTertiary)) { append(" •") }
                 }
-                withStyle(SpanStyle(color = ThemeColor.textTertiary)) { append(" · ") }
             }
-            withStyle(SpanStyle(color = metaInk)) { append(meta) }
         }
     }
     BasicText(
         text = text,
         style = ThemeType.rowMeta,
-        maxLines = 2,
+        maxLines = 3,
         overflow = TextOverflow.Ellipsis,
     )
 }

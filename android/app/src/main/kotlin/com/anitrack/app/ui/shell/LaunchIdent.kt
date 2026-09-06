@@ -103,18 +103,26 @@ private object Beats {
     const val PULSE_AT = 0.52f
     const val PULSE_FOR = 0.45f
 
-    /** The composition holds before it may leave. */
-    // Stated in the stop's own clock (i2-2): SWEEP_AT + PULSE_AT + 0.22, so the brand's period
-    // lands on every launch, fast network or slow.
-    const val HOLD_UNTIL = SWEEP_AT + PULSE_AT + 0.22f
+    /**
+     * The composition holds, COMPLETE AND STILL, before it may leave.
+     *
+     * Stated in the stop's own clock: `SWEEP_AT + PULSE_AT + PULSE_FOR` is the moment the last
+     * thing on screen stops moving, and the mark then stands still for [STILL_FOR]. An ident IS
+     * the still beat — the gesture before it is only how the mark got there. Review passes had
+     * shaved this to 0.94, which is before the full stop's pulse ends: the mark never once stood
+     * finished, and the exit read as a cut away from something still arriving (7 Sep, mirrored
+     * from iOS).
+     */
+    const val STILL_FOR = 0.20f
+    const val HOLD_UNTIL = SWEEP_AT + PULSE_AT + PULSE_FOR + STILL_FOR
 
     /**
-     * The push through: the composition grows and is gone before the ground has finished lifting,
-     * so it never lingers as a ghost over the screen arriving beneath it.
+     * The push through: the composition grows and dissolves, then the ground dissolves off the
+     * app beneath — overlapping, so the mark is gone before the picture is more than half in.
      */
-    const val EXIT_FOR = 0.28f
-    const val EXIT_SCALE = 1.12f
-    const val COMPOSITION_EXIT_FRACTION = 0.65f
+    const val EXIT_FOR = 0.40f
+    const val EXIT_SCALE = 1.10f
+    const val COMPOSITION_EXIT_FRACTION = 0.55f
 
     /** Under Reduce Motion: the hold before the crossfade, and the crossfade. */
     const val REDUCED_HOLD = 0.6f
@@ -123,11 +131,16 @@ private object Beats {
     /** Auth's own wait is capped at 3 s; the ident does not outlast it by much. */
     const val PATIENCE = 4.0f
 
-    /** How long the ident waits for the billboard's art after auth has answered (i2). */
-    const val ART_PATIENCE = 1.6f
+    /**
+     * How much longer the ident may wait for the billboard's art once it has held its beat. A
+     * cold launch fetches that art over the network and never has it in time, so this is a GRACE
+     * on top of the hold, not a second, longer hold: at a flat 1.6 s patience the ident ran 0.94 s
+     * with a warm cache and 1.6 s without, and no two launches were the same length.
+     */
+    const val ART_GRACE = 0.15f
 
     /** A WALL ceiling from the first frame (i4): live seconds cut stalls out, so a starved device had none. */
-    const val WALL_CEILING = 2.4f
+    const val WALL_CEILING = 2.8f
 }
 
 private object Geometry {
@@ -247,7 +260,10 @@ private class IdentFrame(t: Float, leaveAt: Float?, reduceMotion: Boolean) {
                 val out = easeIn(since, Beats.EXIT_FOR * Beats.COMPOSITION_EXIT_FRACTION)
                 scale = 1f + (Beats.EXIT_SCALE - 1f) * out
                 opacity = 1f - out
-                ground = 1f - easeIn(since, Beats.EXIT_FOR)
+                // Smoothstep, not ease-IN: an ease-in ground holds full canvas for two thirds
+                // of its run and then drops, which is a CUT to the app with a smear on the front
+                // of it. A symmetric dissolve is the app coming up through the ident.
+                ground = 1f - ease(since, Beats.EXIT_FOR)
                 stage = if (since >= Beats.EXIT_FOR) Stage.Done else Stage.Leaving
             } else {
                 scale = 1f
@@ -268,6 +284,7 @@ private class IdentClock {
     private var last = 0L
     private var firstNanos = 0L
     private var frames = 0
+    private var cut = 0f
     var leaveAt: Float? = null
         private set
 
@@ -279,13 +296,25 @@ private class IdentClock {
             return 0f
         }
         val gap = (nanos - last) / 1_000_000_000f
-        if (gap > STALL) start += nanos - last - 16_666_667L
+        // Stalls are cut out only while HOLDING, and only up to [STALL_BUDGET] in total. The
+        // clock protects the MOTION from a stall; it may not hold the PICTURE hostage to one —
+        // unbudgeted, a launch whose first second is all stall (the app builds its whole tree
+        // under the ident, which is what the hold is for) froze the ribbon at nothing drawn and
+        // showed a bare canvas until the wall ceiling fired (7 Sep, measured on iOS).
+        if (leaveAt == null && cut < STALL_BUDGET && gap > STALL) {
+            val take = minOf(nanos - last - 16_666_667L, ((STALL_BUDGET - cut) * 1_000_000_000f).toLong())
+            cut += take / 1_000_000_000f
+            start += take
+        }
         last = nanos
         val t = (nanos - start) / 1_000_000_000f
         if (BuildConfig.DEBUG && ++frames % 30 == 0) Log.d("Launch", "ident t=%.2f gap=%.0fms".format(t, gap * 1000f))
         if (leaveAt == null) {
             val held = t >= if (reduceMotion) Beats.REDUCED_HOLD else Beats.HOLD_UNTIL
-            val ready = authReady && (artReady || t >= Beats.ART_PATIENCE)
+            // Reduce Motion never waits on the picture: its ident is a crossfade, and holding a
+            // still frame longer for art that has not arrived is exactly the delay it asks to be
+            // spared.
+            val ready = authReady && (reduceMotion || artReady || t >= Beats.HOLD_UNTIL + Beats.ART_GRACE)
             val overdue = (nanos - firstNanos) / 1_000_000_000f >= Beats.WALL_CEILING
             if (held && (ready || t >= Beats.PATIENCE)) leaveAt = t else if (overdue) leaveAt = t
         }
@@ -299,6 +328,9 @@ private class IdentClock {
          * motion, which reads as dropped frames on top of the drop itself.
          */
         const val STALL = 0.25f
+
+        /** The most that may ever be cut out of the clock. Past it, wall time drives. */
+        const val STALL_BUDGET = 0.40f
     }
 }
 

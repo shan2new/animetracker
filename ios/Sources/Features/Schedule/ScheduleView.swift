@@ -702,8 +702,8 @@ struct ScheduleView: View {
                 }
             } else {
                 // The past, then today (always), then what is ahead — one agenda, no fold. The
-                // feed lands on today (`land`); the strip's dimmed cells are the way back.
-                ForEach(daysToDraw(d)) { day in daySection(day) }
+                // feed lands on today (`land`); the calendar's dimmed cells are the way back.
+                ForEach(daysToDraw(d)) { day in dateColumnDay(day) }
                 feedTail
             }
         }
@@ -747,117 +747,14 @@ struct ScheduleView: View {
 
     // MARK: - Day
 
-    @ViewBuilder
-    private func daySection(_ day: Day) -> some View {
-        Section {
-            if day.isEmpty {
-                // A ROW, at every size (6 Sep). Today is the day the reader is standing on, and
-                // as a fragment in the header's trailing slot it was the thinnest, emptiest thing
-                // on the screen — the one day with a header and no body. The rule that put it in
-                // the header came from the card era, when a grey line cost a third of a screen;
-                // at row density it costs 32 pt and buys today the same shape every other day has.
-                emptyDayRow
-            } else {
-                ForEach(Array(day.rows.enumerated()), id: \.element.id) { i, r in
-                    row(r, day: day.id, last: i == day.rows.count - 1)
-                }
-            }
-        } header: {
-            dayHeader(day)
-        }
-    }
-
     /// What an empty today says. "No episodes" when the filter is what emptied it.
     private var emptyDayText: String {
         derived.todayFiltered ? Copy.Schedule.noEpisodes : Copy.Schedule.nothingScheduled
     }
 
-    /// Today, with nothing on it. Only today can be empty — every other empty day is filtered out
-    /// of the feed — and it has to be SAID rather than skipped: an agenda whose first section is a
-    /// future day tells the reader the first row is tonight's.
-    private var emptyDayRow: some View {
-        Text(emptyDayText)
-            .type(ThemeType.rowMeta)
-            .foregroundStyle(ThemeColor.textTertiary)
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-            .padding(.horizontal, ThemeMetrics.gutter)
-    }
-
-    /// "TODAY · THU 3 SEP" / "TOMORROW · FRI 4 SEP" / "FRIDAY · 11 SEP" — the day as the app's
-    /// EYEBROW (`SectionLabel`'s small caps), the way a calendar's list labels its days. Today's
-    /// word is accent (today is STATE — the same rule the ticker's cell follows); the date beside
-    /// it is a step quieter. Not the section-title family any more (3 Sep): the card under this
-    /// label names its show at `rowTitle`, Outfit SemiBold 17, ten points down — a day set in
-    /// Outfit SemiBold 20 was the same shape in the same ink, and "Tomorrow" and "Mushoku Tensei"
-    /// read as two rows of one list. A label above a title is the hierarchy every other grouped
-    /// list in the app draws. No ground of its own: the wash is the screen's ground and a plate
-    /// here would carve a step out of it.
-    private func dayHeader(_ day: Day) -> some View {
-        let word = dayWord(day)
-        let date = Formatting.fmtMonthDay(day.noon)
-        let shortDay = Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon))
-        let detail = day.id == 0 || day.id == 1 ? "\(shortDay) \(date)" : date
-        let text = "\(word) · \(detail)"
-        return HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(word)
-                    .foregroundStyle(day.isToday ? ThemeColor.accent : ThemeColor.textSecondary)
-                Text("· \(detail)")
-                    .foregroundStyle(ThemeColor.textTertiary)
-            }
-            // The count, INLINE, on the same separator the date uses. Only when it says
-            // something: "1 episode" over a single row restates the row. It hung at the trailing
-            // edge until 6 Sep — the only right-aligned text on the screen — which on an empty
-            // today put "TODAY · SUN 6 SEP" and "NOTHING SCHEDULED" at opposite ends of a bare
-            // line with 200 pt of nothing between them, four small-caps fragments reading as a
-            // table header rather than a day ("Today row looks weird visually", user).
-            if day.count > 1 {
-                Text("· \(Copy.episodes(day.count))")
-                    .foregroundStyle(ThemeColor.textTertiary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-            .type(ThemeType.sectionLabel)
-            .textCase(.uppercase)
-            .lineLimit(1)
-        .padding(.horizontal, ThemeMetrics.gutter)
-        // A new day is a section break; the label belongs to the card under it. An EMPTY day is
-        // a line, not a room (review i2): no label gap under it, and the day after it keeps x4
-        // instead of the section gap, so the two eyebrows read as one list of days.
-        // The FIRST day sits under the rail, not a section gap below it: a section gap is the
-        // room between two days, and above the first one it was 56 pt of nothing under the
-        // header (captured 6 Sep).
-        .padding(.top, isFirstDay(day) ? ThemeSpace.x3
-                 : (previousDayIsEmpty(day) ? ThemeSpace.x4 : Metrics.dayGap))
-        .padding(.bottom, ThemeMetrics.labelGap)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        // "0 episodes" is a count, not a state. An empty today speaks the same words the line
-        // under it prints, so VoiceOver and the screen agree.
-        .accessibilityLabel("\(text), \(day.isEmpty ? emptyDayText : Copy.episodes(day.count))")
-        .accessibilityAddTraits(.isHeader)
-        .id(AgendaID.day(day.id))
-    }
-
     /// The first day drawn in the feed.
     private func isFirstDay(_ day: Day) -> Bool {
         (derived.earlier + derived.ahead).first?.id == day.id
-    }
-
-    /// The day drawn immediately above this one in the feed was empty (today, with nothing on it).
-    private func previousDayIsEmpty(_ day: Day) -> Bool {
-        let days = derived.earlier + derived.ahead
-        guard let i = days.firstIndex(where: { $0.id == day.id }), i > 0 else { return false }
-        return days[i - 1].isEmpty
-    }
-
-    private func dayWord(_ day: Day) -> String {
-        switch day.id {
-        case 0: return Copy.Schedule.today
-        case 1: return Copy.Schedule.tomorrow
-        default: return Formatting.weekdayNameMonFirst(Formatting.localMondayCol(day.noon))
-        }
     }
 
     /// The end of the horizon, and it NAMES the horizon — and it is now true, because the feed
@@ -876,67 +773,122 @@ struct ScheduleView: View {
 
     // MARK: - Row
 
-    private func row(_ r: Row, day: Int, last: Bool) -> some View {
+    /// Everything a row needs, whatever anatomy draws it — computed once, so the four shapes
+    /// cannot disagree about a row's state the way the pre-6-Sep card's three corners did.
+    private struct RowFacts {
+        let state: AiringState
+        let time: String?
+        let hasReminder: Bool
+        let zoom: String
+        let isCommitted: Bool
+        let batch: Bool
+        let count: Int
+        /// The show is in the library and the episode has aired, so there is progress to write.
+        let showsAction: Bool
+        let host: String
+    }
+
+    private func facts(_ r: Row) -> RowFacts {
         let f = r.franchise
         let isCommitted = committed.contains(r.id)
         // `-scheduleDemoStates`: one aired row is drawn as though it were still waiting, so the
-        // ladder can be photographed with all three rungs on one screen.
+        // ladder can be photographed with all three rungs.
         let demoUnseen = derived.demoUnwatched == r.id && !isCommitted
+        // The control stays put through the commit so the check can DRAW in place; only a row that
+        // was already watched when the screen loaded starts as a settled one.
         let watched = (r.watched && !demoUnseen) || isCommitted
-        // The control stays put through the commit so the check can DRAW in place; only a row
-        // that was already watched when the screen loaded starts as a settled one.
-        let showsAction = r.aired && !watched && appModel.isInLibrary(f.id)
-        // THE state, decided once and read by every part of the row that shows it — the ladder's
-        // control, the clock's ink and the art's exposure. It used to be three unrelated booleans
-        // computed at three different depths, which is why the three states never lined up.
-        let state: AiringState = !r.aired ? .upcoming : (watched ? .watched : .toWatch)
-        let batch = r.aired && r.episode > r.part.progress + 1
-        let time = r.dateOnly ? nil : Formatting.fmtTime(r.at, anchor: f.timeAnchor)
-        let hasReminder = !r.aired && ScheduleReminders.shared.has(mediaId: r.part.mediaId, episode: r.episode)
-        // ONE trailing column, and one rule for what is in it: the action while there is something
-        // to do, the clock once there is not. The clock is not ALSO appended to the meta line —
-        // appended, it wrapped ("Season 5 · Episode 9 ·" / "8:30 PM", a line ending on a separator);
-        // inlined into a fixed column beside the ring, it truncated ("…Episode 9 · 8:3…"), which is
-        // what the shipped row did. An aired episode's exact minute is the least load-bearing fact
-        // on a row that already names its day and offers its action; VoiceOver still speaks it.
-        //
-        // At ACCESSIBILITY sizes the clock has no column at all: "7:30 PM" set in accessibility type
-        // is ~180 pt wide, and holding that beside the title squeezed the title into a ~150-pt lane
-        // where it broke inside a word ("Reincarn / ated"). There it joins the meta line, which
-        // wraps under the title with the row's full width to use.
-        let zoom = "sched/\(f.id)/\(r.episode)"
-        let open = { onOpenDetail(f.id, zoom, EpisodeFocus(mediaId: r.part.mediaId, episode: r.episode)) }
-        let ladder = {
-            AiringStateControl(state: state, episode: r.episode, committing: isCommitted,
-                               title: f.title, batch: batch,
-                               count: r.episode - r.part.progress, canMark: showsAction) {
-                guard !isCommitted else { return }
-                mark(r, batch: batch)
-            }
-        }
-        return ScheduleAiringRow(franchise: f, meta: metaLine(r), time: time, state: state,
-                                 hasReminder: hasReminder, zoomID: zoom,
-                                 receiptHost: ReceiptHost.schedule(r.part.mediaId, r.episode),
-                                 trailing: ladder, action: open)
-        .padding(.horizontal, ThemeMetrics.gutter)
-        .padding(.bottom, last ? 0 : Metrics.rowGap)
-        // The same long-press menu every Library card carries; a row here is the same show.
-        .franchiseQuickActions(appModel.isInLibrary(f.id) ? f : nil, appModel: appModel)
-        .accessibilityValue(watched ? Copy.Accessibility.complete : (time.map { "\($0)\(hasReminder ? ", \(Copy.Schedule.reminderSet)" : "")" } ?? ""))
-        .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: isCommitted)
-        .id(AgendaID.row(day, r.id))
+        return RowFacts(state: !r.aired ? .upcoming : (watched ? .watched : .toWatch),
+                        time: r.dateOnly ? nil : Formatting.fmtTime(r.at, anchor: f.timeAnchor),
+                        hasReminder: !r.aired && ScheduleReminders.shared.has(mediaId: r.part.mediaId,
+                                                                             episode: r.episode),
+                        zoom: "sched/\(f.id)/\(r.episode)",
+                        isCommitted: isCommitted,
+                        batch: r.aired && r.episode > r.part.progress + 1,
+                        count: r.episode - r.part.progress,
+                        showsAction: r.aired && !watched && appModel.isInLibrary(f.id),
+                        host: ReceiptHost.schedule(r.part.mediaId, r.episode))
     }
 
-    /// One meta line for both sources: THE watch-context rule (a single-part show prints no
-    /// season), shared with Today — and a same-day drop says how many.
-    private func metaLine(_ r: Row) -> String {
-        let n = r.episodes.count
-        if n > 1 {
-            let label = r.part.canonicalLabel
-            let drop = "\(Copy.episodes(n))"
-            return label.isEmpty || r.franchise.parts.count == 1 ? drop : "\(label) · \(drop)"
+    private func openAction(_ r: Row, _ x: RowFacts) -> () -> Void {
+        { onOpenDetail(r.franchise.id, x.zoom,
+                       EpisodeFocus(mediaId: r.part.mediaId, episode: r.episode)) }
+    }
+
+    private func ladder(_ r: Row, _ x: RowFacts) -> some View {
+        AiringStateControl(state: x.state, episode: r.episode, committing: x.isCommitted,
+                           title: r.franchise.title, batch: x.batch,
+                           count: x.count, canMark: x.showsAction) {
+            guard !x.isCommitted else { return }
+            mark(r, batch: x.batch)
         }
-        return r.franchise.watchContext(part: r.part, episode: r.episode)
+    }
+
+    // MARK: - The feed
+
+    /// No header: the day's FIRST row carries the date and the rest stack under it, so a day costs
+    /// nothing until it has something to say (Google Calendar's Schedule view).
+    @ViewBuilder
+    private func dateColumnDay(_ day: Day) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.rowGap) {
+            if day.isEmpty {
+                emptyDateRow(day)
+            } else {
+                ForEach(Array(day.rows.enumerated()), id: \.element.id) { i, r in
+                    dateRow(r, day: day, showsDate: i == 0)
+                }
+            }
+        }
+        // A day break, not a section break — there is no band to give air to any more.
+        .padding(.top, isFirstDay(day) ? ThemeSpace.x3 : ThemeSpace.x5)
+        .id(AgendaID.day(day.id))
+    }
+
+    private func dateRow(_ r: Row, day: Day, showsDate: Bool) -> some View {
+        let f = r.franchise
+        let x = facts(r)
+        return ScheduleDateRow(weekday: showsDate ? shortWeekday(day) : nil,
+                               numeral: showsDate ? dayNumeral(day) : nil,
+                               isToday: day.isToday,
+                               franchise: f,
+                               episodeText: episodeText(r), time: x.time, state: x.state,
+                               hasReminder: x.hasReminder, zoomID: x.zoom,
+                               receiptHost: x.host,
+                               trailing: { ladder(r, x) }, action: openAction(r, x))
+            .padding(.horizontal, ThemeMetrics.gutter)
+            .franchiseQuickActions(appModel.isInLibrary(f.id) ? f : nil, appModel: appModel)
+            .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: x.isCommitted)
+            .id(AgendaID.row(day.id, r.id))
+    }
+
+    /// Today with nothing on it, in shape A's anatomy: the date keeps its column, so the one day
+    /// with no body still has the same shape as every day that has one.
+    private func emptyDateRow(_ day: Day) -> some View {
+        HStack(alignment: .top, spacing: ThemeSpace.x3) {
+            ScheduleDateColumn(weekday: shortWeekday(day), numeral: dayNumeral(day),
+                               isToday: day.isToday)
+            Text(emptyDayText)
+                .type(ThemeType.rowMeta)
+                .foregroundStyle(ThemeColor.textTertiary)
+                .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+        }
+        .padding(.horizontal, ThemeMetrics.gutter)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func shortWeekday(_ day: Day) -> String {
+        Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon))
+    }
+
+    private func dayNumeral(_ day: Day) -> String { "\(Formatting.localParts(day.noon).d)" }
+
+    // MARK: - What the row says
+
+    /// What actually VARIES down the feed, with the season dropped. A weekly show cannot leave its
+    /// season inside a 22-day window, so on this screen "Season 4" is a constant printed once per
+    /// row — the biggest single contributor to the run-on grammar the spike is testing against.
+    private func episodeText(_ r: Row) -> String {
+        let n = r.episodes.count
+        return n > 1 ? Copy.episodes(n) : Copy.episode(r.episode)
     }
 
     // MARK: - Mark as watched (the only write)
