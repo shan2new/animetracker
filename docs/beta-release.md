@@ -26,12 +26,44 @@ old splash's `SplashShaders.metal` went with the 4 Sep launch rebuild), so the s
 no Metal toolchain download; if one is ever added back, Xcode 26 stopped bundling `metal` and
 needs `xcodebuild -downloadComponent MetalToolchain` once.
 
-## 1. Deploy the backend first
+## 1. Legal pages — served by the landing site, not the backend
 
-The app's Privacy Policy and Terms URLs point at `https://anime.cognipin.com/{privacy,terms}`
-(`server/src/routes/legal.ts`). Those routes must be **live before** the build goes for Beta App
-Review — a 404 on the privacy URL is a rejection. The domain fronts the Mac mini through
-Cloudflare, so deploying means pulling and restarting *there*, not on the laptop:
+The app's Privacy Policy and Terms URLs point at the **landing site** (`landing/`, deployed to
+Vercel), and those pages are already live. Nothing has to be deployed for them.
+
+This reversed the 3 Sep decision, on 7 Sep. The backend used to serve its own copy
+(`server/src/routes/legal.ts`, now deleted) so the URLs would sit on the one HTTPS domain the app
+already used. Two things were wrong with that once the landing site existed:
+
+- **It put the one URL Apple re-checks on a home Mac mini** behind a Cloudflare tunnel. Apple
+  re-fetches the privacy URL after approval, so a dead link is a live-listing compliance problem,
+  not just a broken page. Vercel stays up when the mini does not.
+- **Two hand-written copies of the same documents drift, and had.** The backend text was dated
+  3 September 2026 and read as final; the landing text still labelled itself a working draft.
+
+Verify the pages from anywhere:
+
+```bash
+for p in privacy terms support delete-account; do
+  printf "%-16s " "/$p"
+  curl -s -o /dev/null -w "%{http_code}\n" "https://landing-ten-theta-55.vercel.app/$p"
+done   # want 200 four times
+```
+
+The landing site is on a **default `vercel.app` URL**. That is fine for the beta; put it on a real
+domain before any public listing.
+
+### Does the Mac mini need a deploy?
+
+For the legal pages, no — they no longer live there. Check whether the *app's* server code has
+moved at all before assuming a deploy is needed:
+
+```bash
+git diff --stat <deployed-commit> -- server/    # empty output = nothing to deploy
+```
+
+When it is not empty, deploying means pulling and restarting *on the mini*, not on the laptop —
+the laptop's `tsx watch` on :8787 looks deployed and is not:
 
 ```bash
 # on the Mac mini
@@ -39,14 +71,8 @@ cd ~/…/animetracker && git pull && cd server && npm install && npm run db:migr
 # then restart however the process is supervised (launchd / pm2 / tmux)
 ```
 
-Verify from anywhere:
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://anime.cognipin.com/privacy   # want 200
-```
-
-Also confirm production still refuses the dev bearer — `assertAuthConfig` enforces it at boot, but
-check the deploy rather than trust it:
+Either way, confirm production still refuses the dev bearer — `assertAuthConfig` enforces it at
+boot, but check the deploy rather than trust it:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer dev:probe" \
@@ -104,6 +130,26 @@ Worth doing for the second build; the Organizer is less setup for the first.
 rejects a build number it has already seen, and `manageAppVersionAndBuildNumber` is deliberately
 `false` in `ExportOptions.plist` so nothing edits it behind your back.
 
+### Enrolment went live 7 Sep — this section is history
+
+The paid team was confirmed active on 7 Sep 2026: the portal issued `iOS Team Store Provisioning
+Profile` entries for both bundle IDs with **one-year** expiry (`2027-09-07`, against the 7-day
+profiles a free personal team had been issuing), created the `Apple Distribution: Shantanu Sinha
+(YLPZXZS2F4)` certificate, and `-exportArchive` succeeded. Team ID did not change, so no
+`DEVELOPMENT_TEAM` / `teamID` edits were needed.
+
+Two things that look like failures and are not: `TeamName` still reads "Shantanu Sinha" (that is
+the individual-enrolment name, not a free-team tell — lifetime is the tell), and
+`security find-identity` does not list the distribution cert, because Xcode 26 keeps
+automatically-managed identities in the data-protection keychain that the legacy `security` CLI
+cannot enumerate. Confirm signing from the artefact instead:
+
+```bash
+codesign -dvvv /path/to/Payload/*.app 2>&1 | grep Authority   # want "Apple Distribution: …"
+```
+
+Keep the diagnosis below for the next time signing breaks.
+
 ### If the export fails with "does not have permission to create iOS App Store profiles"
 
 Seen on the first attempt, 3 Sep, with `No provider associated with App Store Connect user`. It
@@ -144,7 +190,7 @@ This is the fast path for one trusted friend; it does give them some App Store C
 **External** (up to 10 000, public link, no ASC access): needs **Beta App Review** on the first
 build of a version — roughly a day — plus, in App Information / TestFlight:
 
-- Privacy Policy URL — `https://anime.cognipin.com/privacy`
+- Privacy Policy URL — `https://landing-ten-theta-55.vercel.app/privacy`
 - Feedback email — the support address in `project.yml`
 - Beta app description and **review notes**. Say plainly that the backend is a self-hosted personal
   server, that sign-in is email-based via Clerk, and that the catalogue comes from AniList/TMDB and
@@ -162,6 +208,13 @@ Things that bite on a first submission and are done — don't redo them:
   `CA92.1`. Apple diffs this against the App Privacy answers in App Store Connect, so answer those
   to match. **Update it in the same commit as any change to what the app collects.**
 - In-app account deletion (guideline 5.1.1(v)) — Profile → Delete Account → `DELETE /me`.
+  **Incomplete as of 7 Sep, and it blocks a public listing** (not internal TestFlight, which has no
+  review). `DELETE /me` erases every user-owned table in one transaction, but the server makes **no
+  Clerk API call at all** — grep for `deleteUser` / `clerkClient` returns nothing — so the auth
+  identity survives. The email stays in Clerk and the person can sign straight back in to a fresh
+  empty account, which is not deletion. Fix: call Clerk's Backend API to delete the user after the
+  DB transaction commits (it is an external call, so it cannot sit inside the transaction) and
+  decide what happens when that call fails — the DB rows are already gone by then.
 - No entitlements are needed: the Live Activity requires only `NSSupportsLiveActivities`, episode
   alerts are local notifications, and there is no App Group or push certificate.
 - The developer sign-in panel is double-gated (`#if DEBUG` **and** `AppConfig.isLocalBackend`), so

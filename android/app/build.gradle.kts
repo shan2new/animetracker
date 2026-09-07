@@ -49,8 +49,8 @@ android {
         // A placeholder URL baked into a shipped string is a broken Privacy Policy link, which is
         // itself a store rejection — so a blank or `REPLACE_ME` value omits the row rather than
         // drawing one that goes nowhere.
-        buildConfigField("String", "PRIVACY_POLICY_URL", "\"https://anime.cognipin.com/privacy\"")
-        buildConfigField("String", "TERMS_URL", "\"https://anime.cognipin.com/terms\"")
+        buildConfigField("String", "PRIVACY_POLICY_URL", "\"https://landing-ten-theta-55.vercel.app/privacy\"")
+        buildConfigField("String", "TERMS_URL", "\"https://landing-ten-theta-55.vercel.app/terms\"")
         buildConfigField("String", "SUPPORT_EMAIL", "\"shantanusinha95@gmail.com\"")
     }
 

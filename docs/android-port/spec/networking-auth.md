@@ -56,8 +56,8 @@ the equivalent is `buildConfigField("String", "API_BASE_URL", …)` per build ty
 |---|---|---|---|---|
 | `APIBaseURL` | `API_BASE_URL` | `https://anime.cognipin.com` | `AppConfig.apiBaseURL: URL` | falls back to `http://localhost:8787` |
 | `ClerkPublishableKey` | `CLERK_PUBLISHABLE_KEY` | `pk_test_bGVnaWJsZS1nb2JibGVyLTU3LmNsZXJrLmFjY291bnRzLmRldiQ` | `clerkPublishableKey: String` | empty string |
-| `PrivacyPolicyURL` | `PRIVACY_POLICY_URL` | `https://anime.cognipin.com/privacy` | `privacyURL: URL?` | `nil` → Profile omits the row |
-| `TermsURL` | `TERMS_URL` | `https://anime.cognipin.com/terms` | `termsURL: URL?` | `nil` → row omitted |
+| `PrivacyPolicyURL` | `PRIVACY_POLICY_URL` | `https://landing-ten-theta-55.vercel.app/privacy` | `privacyURL: URL?` | `nil` → Profile omits the row |
+| `TermsURL` | `TERMS_URL` | `https://landing-ten-theta-55.vercel.app/terms` | `termsURL: URL?` | `nil` → row omitted |
 | `SupportEmail` | `SUPPORT_EMAIL` | `shantanusinha95@gmail.com` | `supportEmail: String?`, `supportURL: URL?` (`mailto:`) | `nil` → row omitted |
 
 Validation rules, exactly:

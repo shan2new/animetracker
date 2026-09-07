@@ -134,10 +134,16 @@ targets:
         # For local development, override with a LAN URL such as
         # "http://Shantanus-MacBook-Air.local:8787" (NSAllowsLocalNetworking permits it).
         API_BASE_URL: "https://anime.cognipin.com"
-        # Guideline 5.1.1 — served by the backend itself (server/src/routes/legal.ts), so the
-        # URLs live on the same HTTPS domain the app already talks to and need no extra hosting.
-        PRIVACY_POLICY_URL: "https://anime.cognipin.com/privacy"
-        TERMS_URL: "https://anime.cognipin.com/terms"
+        # Guideline 5.1.1 — served by the LANDING SITE (landing/, deployed to Vercel), not by the
+        # backend. The backend copy (server/src/routes/legal.ts) was the 3 Sep decision, taken
+        # before the landing site existed; it put the one URL Apple re-checks on the Mac mini,
+        # which is a home machine behind a Cloudflare tunnel. Vercel stays up when the mini does
+        # not, and two hand-written copies of the same documents had already drifted (the backend
+        # text was dated 3 Sep, the landing text still labelled itself a working draft). One
+        # source of truth, on the host that does not go down. Custom domain still to come — the
+        # default vercel.app URL is fine for the beta, not for a public listing.
+        PRIVACY_POLICY_URL: "https://landing-ten-theta-55.vercel.app/privacy"
+        TERMS_URL: "https://landing-ten-theta-55.vercel.app/terms"
         SUPPORT_EMAIL: "shantanusinha95@gmail.com"
         # === SIGNING ===
         DEVELOPMENT_TEAM: YLPZXZS2F4
