@@ -411,6 +411,10 @@ enum ThemeMetrics {
     /// strip. Over-drawing past the layout's edge is the only honest fix; the tab bar is drawn by
     /// the `TabView` above its children, so this passes underneath it and gives its glass an
     /// opaque ground to refract.
+    ///
+    /// **iOS 18's story only** (8 Sep): from iOS 26 the tab bar is a floating pill the layout is not
+    /// inset by, this whole band lands 180 pt below the screen's bottom edge (measured with it
+    /// painted red), and the bottom edge is the system's — see `ScrollEdgeChrome.systemOwnsBottom`.
     static let bottomUnderfill: CGFloat = 180
 
     /// The ambient art wash under a TAB ROOT's inline navigation bar — Schedule, Library, Search.

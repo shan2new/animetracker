@@ -159,7 +159,7 @@ struct LibraryView: View {
         .scrollEdgeChromeBody(top: true, bottom: true, softTop: true, topRaised: raisedTop,
                               topHold: ThemeMetrics.inlineBarBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .chromeScrollEdgeHidden(.all)
+        .chromeScrollEdgeHidden(.top)
         .navigationTitle(Copy.Library.title)
         // Inline on every root — Schedule's model. A large title collapses on the first scroll and
         // moves the top safe area ~50 pt mid-flight; an inline one holds still over the wash.
@@ -871,7 +871,7 @@ struct LibraryAllView: View {
                               softTop: true, topRaised: raisedTop,
                               topHold: searchChromeBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .chromeScrollEdgeHidden(.all)
+        .chromeScrollEdgeHidden(.top)
         .laneClearance(appModel, base: ThemeMetrics.tabBarClearance)
         // The rail owns a lane. Rows reserve it through `listTrailingInset`, so a chevron and an
         // index letter can never land on the same 4 pt of screen, and the poster grid narrows its

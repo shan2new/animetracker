@@ -45,9 +45,16 @@ enum ChromeEdge {
 extension View {
     /// Suppresses the system scroll-edge effect.
     ///
-    /// Every screen here draws its own veil instead (`scrollEdgeChromeBody`), so the system effect
-    /// is always unwanted where this is called. Below iOS 26 there is no system effect to
-    /// suppress and the shim is a plain no-op — which is exact, not a degradation.
+    /// **`.top` is the only edge a screen here passes any more** (8 Sep). The top band is OURS
+    /// because it is a bar — opaque canvas through the whole bar's height, a docked title riding on
+    /// it — which no blur can stand in for. The BOTTOM edge is the system's: from iOS 26 the tab bar
+    /// floats and the layout is not inset by it, so our bottom band lands 180 pt below the screen
+    /// (`ScrollEdgeChrome.systemOwnsBottom` carries the measurement) and suppressing the system's
+    /// effect on top of that left the glass pill refracting live body copy. A PUSHED screen now
+    /// hides nothing at all — the system owns both of its edges.
+    ///
+    /// Below iOS 26 there is no system effect to suppress and the shim is a plain no-op — which is
+    /// exact, not a degradation.
     @ViewBuilder
     func chromeScrollEdgeHidden(_ edge: ChromeEdge) -> some View {
         if #available(iOS 26.0, *) {
@@ -72,18 +79,6 @@ extension View {
             case .top: scrollEdgeEffectStyle(.hard, for: .top)
             case .bottom: scrollEdgeEffectStyle(.hard, for: .bottom)
             }
-        } else {
-            self
-        }
-    }
-
-    /// The tab bar getting out of the way of a long read on a downward scroll, the way Music's and
-    /// Photos' do. There is no iOS 18 equivalent; the bar stays put, which is what an iOS 18 user
-    /// expects of a tab bar anyway — so this is a missing flourish, not a broken layout.
-    @ViewBuilder
-    func chromeTabBarMinimizeOnScroll() -> some View {
-        if #available(iOS 26.0, *) {
-            tabBarMinimizeBehavior(.onScrollDown)
         } else {
             self
         }

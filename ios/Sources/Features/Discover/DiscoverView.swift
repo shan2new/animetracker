@@ -170,7 +170,7 @@ struct DiscoverView: View {
                               softTop: true, topRaised: raisedTop,
                               topHold: searchChromeBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .chromeScrollEdgeHidden(.all)
+        .chromeScrollEdgeHidden(.top)
         // Inline on every root (user decision): the field is the screen's identity here, and a
         // large title over it put two headlines on one screen.
         .navigationTitle(Copy.Search.title)

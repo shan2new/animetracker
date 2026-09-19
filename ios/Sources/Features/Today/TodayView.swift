@@ -28,7 +28,8 @@ private enum TodayCopy {
 //   calm     → the copy table's calm state over an ambient wash of the next known event.
 //
 // Presentation is derived from AppModel feeds (outNow → keepWatching → nextUp); the view owns only
-// timing state. One haptic per transaction; the Undo toast lands when the handoff settles.
+// timing state. One haptic per transaction; the committed capsule and the handoff ARE the
+// confirmation — no receipt line is drawn under the hero (removed 17 Sep).
 struct TodayView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AuthManager.self) private var auth
@@ -73,7 +74,6 @@ struct TodayView: View {
     @State private var committedEpisode: Int?
     /// Queue rows whose ring is drawing its check (650 ms after a tap).
     @State private var committedQueue: Set<String> = []
-    @State private var pendingUndo: UndoState?
     @State private var batchPrompt: BatchPrompt?
     /// True from the moment a mark commits until the INCOMING card has finished arriving.
     ///
@@ -1760,21 +1760,21 @@ struct TodayView: View {
         guard committedEpisode == nil, !handoffInFlight else { return }
         let snapshot = items
         guard let undo = appModel.markNext(franchiseId: f.id) else { return }
-        // The receipt lands IN PLACE, under this capsule (`ReceiptLine` in `HeroFocus`).
-        settleHero(snapshot: snapshot, undo: undo.placed(at: ReceiptHost.todayHero(f.id)))
+        // No receipt under the capsule (removed 17 Sep — the committed frame already confirms the
+        // mark; the line read as an extra). The undo for a hero mark lives on the show page's
+        // episode list; the Up next cards keep their own in-place receipts.
+        settleHero(snapshot: snapshot, undo: undo)
     }
 
     /// The committed frame, shared by the single mark and the batch behind the chevron: 650 ms
     /// of the drawn check and the advanced bar on the SAME card, then the handoff to the next
-    /// show, then the toast. The batch used to skip all of it — confirm six episodes and the
-    /// hero was simply someone else, with no acknowledgement that anything had been recorded.
+    /// show. The batch used to skip all of it — confirm six episodes and the hero was simply
+    /// someone else, with no acknowledgement that anything had been recorded.
+    ///
+    /// No receipt is presented here (17 Sep): the committed frame is the confirmation, and the
+    /// in-place line under the capsule was read as a duplicate of it.
     private func settleHero(snapshot: [Franchise], undo: UndoState) {
         pinned = snapshot
-        pendingUndo = undo
-        // The receipt lands at the TAP (interactive review: it used to arrive 1.4 s later, 0.4 s
-        // after the capsule had flipped back to amber and looked unacted). The committed frame
-        // and the line overlap for 650 ms — the signature and its receipt, together.
-        appModel.presentUndo(undo)
         handoffInFlight = true
         withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
             committedEpisode = undo.episode
@@ -1788,7 +1788,6 @@ struct TodayView: View {
                 pinned = nil
                 committedEpisode = nil
             } completion: {
-                pendingUndo = nil
                 // The incoming card's insertion is delayed by `handoff` and then runs `uiSettle`;
                 // it is not tappable until it has actually arrived.
                 Task { @MainActor in
@@ -1828,7 +1827,7 @@ struct TodayView: View {
                 let snapshot = items
                 guard let undo = appModel.markThrough(franchiseId: f.id, mediaId: part.mediaId,
                                                       episode: through, present: false) else { return }
-                settleHero(snapshot: snapshot, undo: undo.placed(at: ReceiptHost.todayHero(f.id)))
+                settleHero(snapshot: snapshot, undo: undo)
                 Announce.status(Copy.Confirm.batchMarkConfirm(count))
             }
         )
@@ -2146,7 +2145,6 @@ private struct HeroFocus: View {
                    progressSpoken: progressSpoken,
                    onOpen: onOpen,
                    interactive: interactive,
-                   receiptHost: ReceiptHost.todayHero(franchise.id),
                    accessory: { EmptyView() }) {
             if let ctaEpisode {
                 MarkSplitButton(episode: ctaEpisode,

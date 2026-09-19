@@ -363,7 +363,7 @@ struct ScheduleView: View {
         // modifier, rather than diverging here.)
         .scrollEdgeChromeBody(top: false, bottom: true)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .chromeScrollEdgeHidden(.all)
+        .chromeScrollEdgeHidden(.top)
         .previouslyRefreshable { await appModel.reload() }
         .task { await ScheduleReminders.shared.refresh() }
         // The feed opens on TODAY — which is no longer its first item, now that the past sits

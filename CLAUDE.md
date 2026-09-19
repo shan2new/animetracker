@@ -100,7 +100,7 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `DesignSystem/GlassHelpers.swift`, which is the one home for "iOS 26 flourish, graceful fallback":
   `glassChrome` (→ `.ultraThinMaterial`), `chromeScrollEdgeHidden(_:)` / `chromeScrollEdgeHard(_:)`
   (no-ops below 26 — there is no system scroll-edge effect to suppress or harden),
-  `chromeTabBarMinimizeOnScroll()`, `chromeSharedBackgroundHidden()` (a `ToolbarContent` extension:
+  `chromeSharedBackgroundHidden()` (a `ToolbarContent` extension:
   below 26 a toolbar item has no shared glass capsule to drop) and `chromeNavigationSubtitle(_:)`.
   `ToolbarSpacer` is gated inline in Detail's toolbar because it is a `ToolbarContent` *value*, not
   a modifier. The shims take a local `ChromeEdge` enum rather than Apple's edge set: a signature
@@ -399,8 +399,20 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `xcrun simctl push` + a banner tap). Alerts: three per watching anime show from `part.airings`,
   round-robin so every show keeps its soonest before any gets its second, armed the moment the
   primer's Allow lands (`alertsWereAllowed`). A Schedule-routed `focus` pushes the season list
-  once (`focusConsumed`) — it used to re-push on every pop and trap the user. The tab bar
-  minimises on scroll (`tabBarMinimizeBehavior(.onScrollDown)`); docked bar titles (Today, Detail,
+  once (`focusConsumed`) — it used to re-push on every pop and trap the user. **The tab bar is STATIC** (8 Sep):
+  `tabBarMinimizeBehavior(.onScrollDown)` and its shim are gone — the bar's ground is
+  `bottomUnderfill`'s 180 pt of opaque canvas (the glass pill needs something to refract that is
+  not live body copy), that ground is full width, and a minimised bar is a 60-pt disc on the
+  leading edge, so every downward scroll ended on a bare black band with one circle floating in it
+  ("what is this trash blackish footer man?", user). A ground is invisible only while the thing it
+  was drawn for stands on it. **And on iOS 26 that ground never landed anyway** — from 26 the bar is
+  a floating pill the layout is NOT inset by, so the 244-pt bottom band (`ScrollEdgeChrome(side:
+  .bottom)`) sits 180 pt below the screen's bottom edge; a build with the underfill painted red put
+  a 2-pt sliver of its last stop on the edge and nothing else on screen, while the pill refracted a
+  live "Announced" header. So the BOTTOM edge is the SYSTEM's from 26
+  (`ScrollEdgeChrome.systemOwnsBottom`: our band draws only where there is no system effect, i.e. on
+  the iOS 18 floor, `chromeScrollEdgeHidden(.top)` is the only edge a root suppresses — the top band
+  is a BAR, not a blur, and stays ours — and a pushed screen suppresses nothing). Docked bar titles (Today, Detail,
   Season, History) use `displayTitle`. Watch sessions live in `RewatchStore` (device-local JSON).
 - **Auth hand-off:** `AuthManager.bootstrap()` waits (≤3 s) for `Clerk.shared.isLoaded`, then
   follows `Clerk.shared.auth.events` for session changes; the splash leaves only when both its

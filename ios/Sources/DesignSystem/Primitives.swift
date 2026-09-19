@@ -1170,6 +1170,20 @@ final class ScrollOffset {
 /// ZStack { ArtBackdrop(...); ScrollView { … } }.scrollEdgeChrome()
 /// ```
 struct ScrollEdgeChrome: View {
+    /// **The bottom edge belongs to the SYSTEM on iOS 26** (8 Sep). Everything below about the
+    /// bottom band — the 64-pt ramp, the 180-pt underfill, the two failures that sized them — is
+    /// iOS 18's story, where a tab bar is an opaque strip the layout is inset by. On 26 the bar is
+    /// a floating glass pill that content passes *behind*, and Apple ships the edge effect written
+    /// for exactly that; ours was MEASURED — a build with the underfill painted red and the ramp's
+    /// last stop green — landing 180 pt below the screen's bottom edge: of 244 pt of veil the only
+    /// thing on screen was a 2-pt sliver of the last stop, and the pill was left refracting a live
+    /// section header ("Announced" ghosted inside the bar, Library, 8 Sep). One of the two had to go, and the one that goes is the
+    /// hand-rolled slab: it is what a downward scroll used to end on ("what is this trash blackish
+    /// footer man?", user, same day, with the bar minimised out of its own ground).
+    static let systemOwnsBottom: Bool = {
+        if #available(iOS 26.0, *) { true } else { false }
+    }()
+
     enum Side { case top, bottom }
     let side: Side
     /// Top only: total height, safe area included.
@@ -1319,7 +1333,9 @@ private struct ScrollEdgeChromeModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottom) { if bottom { ScrollEdgeChrome(side: .bottom) } }
+            .overlay(alignment: .bottom) {
+                if bottom && !ScrollEdgeChrome.systemOwnsBottom { ScrollEdgeChrome(side: .bottom) }
+            }
             .overlay(alignment: .top) {
                 if top {
                     // A soft top is the AT-REST edge: the wash runs to the screen's top under a
@@ -1374,7 +1390,7 @@ extension View {
     /// of every scroll view (a primary CTA at the bottom read as disabled).
     func scrollEdgeChrome(top: Bool = true, bottom: Bool = true,
                           topHeight: CGFloat = ThemeMetrics.topChromeHeight) -> some View {
-        scrollEdgeChromeBody(top: top, bottom: bottom, topHeight: topHeight).chromeScrollEdgeHidden(.all)
+        scrollEdgeChromeBody(top: top, bottom: bottom, topHeight: topHeight).chromeScrollEdgeHidden(.top)
     }
 
     /// `topRaised`: content has scrolled under the bar, so a soft top hardens to the opaque
@@ -1412,11 +1428,12 @@ extension View {
     /// fix six times; it is the pushed-screen scaffold, so it lives on the navigation destination
     /// (`RootView.detailDestinations`) and every future push inherits it.
     ///
-    /// The top edge is deliberately untouched: a pushed screen has a real navigation bar and the
-    /// system owns that edge. Only the bottom system effect is suppressed, because ours replaces it.
+    /// Neither system edge is suppressed here: a pushed screen has a real navigation bar and the
+    /// system owns that top edge, and since iOS 26 it owns the bottom one too
+    /// (`ScrollEdgeChrome.systemOwnsBottom`). Below 26 this modifier's own bottom band is the only
+    /// thing drawing there, which is what it was written for.
     func pushedScreenChrome() -> some View {
         scrollEdgeChromeBody(top: false, bottom: true)
-            .chromeScrollEdgeHidden(.bottom)
             .contentMargins(.bottom, ThemeMetrics.tabBarClearance, for: .scrollContent)
     }
 

@@ -30,7 +30,6 @@ enum ReceiptPlacement: Hashable {
 
 /// The in-place hosts' names — one spelling per surface, so the write and the view agree.
 enum ReceiptHost {
-    static func todayHero(_ franchiseId: String) -> String { "today.hero/\(franchiseId)" }
     static func todayQueue(_ franchiseId: String) -> String { "today.queue/\(franchiseId)" }
     static func detailHero(_ franchiseId: String) -> String { "detail.hero/\(franchiseId)" }
     static func episodes(_ mediaId: Int) -> String { "episodes/\(mediaId)" }
@@ -263,8 +262,8 @@ struct LaneFallback: View {
 #if DEBUG
 /// `-toastDemo mark|lane|notice`: a receipt that writes nothing, once the library has loaded —
 /// the only way to photograph one without moving the test account's progress. `mark` lands in
-/// place on the hero of `-toastDemoFranchise <id>` (else `-openDetail`'s show, else the first
-/// in the library); `lane` is that show's removal receipt; `notice` is "Episode alerts on".
+/// place on the show page's hero, so it needs `-openDetail` (the Today hero's receipt was removed
+/// 17 Sep); `lane` is the chosen show's removal receipt; `notice` is "Episode alerts on".
 @MainActor
 enum ToastDemo {
     static func arm(_ appModel: AppModel) {
@@ -277,7 +276,6 @@ enum ToastDemo {
             let wanted = UserDefaults.standard.string(forKey: "toastDemoFranchise")
                 ?? UserDefaults.standard.string(forKey: "openDetail")
             guard let f = wanted.flatMap({ appModel.franchise(id: $0) }) ?? appModel.library.first else { return }
-            let onDetail = UserDefaults.standard.string(forKey: "openDetail") != nil
             switch mode {
             case "lane":
                 appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 0, title: f.title,
@@ -285,7 +283,7 @@ enum ToastDemo {
             case "notice":
                 appModel.showNotice(Copy.Toast.alertsOn)
             default:
-                let host = onDetail ? ReceiptHost.detailHero(f.id) : ReceiptHost.todayHero(f.id)
+                let host = ReceiptHost.detailHero(f.id)
                 appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 18,
                                                title: f.title, episode: 19, undoAction: {}).placed(at: host))
             }

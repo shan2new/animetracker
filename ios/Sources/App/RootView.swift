@@ -249,9 +249,15 @@ struct MainTabView: View {
             // The bar's selected item is state, so it alone is amber; every stack inside re-tints
             // to ink (above) so the amber never reaches a back button or an alert.
             .tint(ThemeColor.accent)
-            // The bar gets out of the way of a long read the way Music's and Photos' do, and
-            // comes back on the first upward scroll.
-            .chromeTabBarMinimizeOnScroll()
+            // THE BAR IS STATIC (8 Sep, "I don't want the floating nav to collapse while
+            // scrolling", user). `tabBarMinimizeBehavior(.onScrollDown)` was here for the Music /
+            // Photos flourish, and on this app it cost more than it bought: the bar's GROUND is
+            // opaque canvas (`ThemeMetrics.bottomUnderfill`, 180 pt of it, so the glass pill has
+            // something to refract instead of live body copy), and a minimised bar shrinks to a
+            // 60-pt disc on the leading edge while that ground stays full width — so every
+            // downward scroll ended in ~130 pt of bare black across the screen with one small
+            // circle floating in it ("what is this trash blackish footer", same message). The
+            // ground is only invisible while the bar it was drawn for is standing on it.
             // The receipt LANE (5 Sep): a removal, a move, an add, a notice or a failure as the
             // bar's own accessory — the lane Music's mini player lives in. Below 26.1 the
             // `ToastHost` draws the same lane attached above the bar.

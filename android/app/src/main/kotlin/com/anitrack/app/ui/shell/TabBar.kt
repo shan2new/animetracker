@@ -63,9 +63,11 @@ import com.anitrack.app.ui.control.PressStyle
  * own bar for no reason a reader could name. A `Row` at the token's height, plus the navigation-bar
  * inset, is the whole chassis.
  *
- * The bar is STATIC. iOS's `tabBarMinimizeBehavior(.onScrollDown)` is an iOS 26 flourish that is
- * already a no-op on the iOS 18 floor this port targets, and a hand-rolled `NestedScrollConnection`
- * version is a different component with different physics (PLAN D10).
+ * The bar is STATIC, and iOS is now static too (8 Sep): `tabBarMinimizeBehavior(.onScrollDown)` was
+ * a no-op on the iOS 18 floor this port targets anyway, and where it did run it left the bar's own
+ * opaque ground bare across the width with one 60-dp disc floating in it. A hand-rolled
+ * `NestedScrollConnection` version was never going to be built (PLAN D10); now there is nothing to
+ * mirror.
  */
 
 /**
