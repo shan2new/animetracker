@@ -144,10 +144,9 @@ object ToastDuration {
 }
 
 /**
- * "Present when the handoff settles" — the one place a toast is NOT presented immediately.
+ * The committed-card handoff timing.
  *
- * A single mark **on a card that hands over to its successor** waits for the outgoing card to
- * leave. Today's hero is the reference implementation:
+ * A single mark on Today's hero holds its exact committed state before the outgoing card leaves:
  *
  * ```
  * tap Mark
@@ -156,17 +155,15 @@ object ToastDuration {
  *  ├─ (the queue row's committed membership lasts the same beat)
  *  └─ delay(HOLD_MILLIS)                        // 650
  *       └─ uiSettle: pinned = null; committedEpisode = null
- *            when it finishes:
- *              ├─ presentUndo(pendingUndo)      // ← the toast lands HERE
- *              └─ delay(tailMillis(reduceMotion)) → handoffInFlight = false
+ *            └─ delay(tailMillis(reduceMotion)) → handoffInFlight = false
  * ```
  *
  * The incoming card's insertion is delayed by `ThemeMotion.handoffEnter` and is **not tappable
  * until it has actually arrived** (`handoffInFlight` covers the window `committedEpisode` cannot).
  *
- * **Every other surface presents immediately** — Today's queue rows ("Unlike the hero there is no
- * card handing over here"), Schedule's airing cards, Detail's episode rows, Library's context menu,
- * and `removeWithUndo` ("unlike a mark, a removal has no handoff to wait for").
+ * The capsule's drawn check and "Episode N watched" wording are the receipt; adding the same fact
+ * immediately below it created two confirmations for one tap. Compact queue and Schedule rings
+ * still use their in-place Undo receipts because those controls do not carry the fact in words.
  */
 object HandoffUndo {
     /** The beat the committed card holds before it hands over. */

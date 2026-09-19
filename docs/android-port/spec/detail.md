@@ -1007,12 +1007,10 @@ private func mark(_ f: Franchise, part: FranchisePart) {
         }
     }
     pinned = snapshot
-    pendingUndo = undo
     withAnimation(pick(uiMicro)) { committedEpisode = undo.episode }
     Task { @MainActor in
         try? await Task.sleep(for: .milliseconds(650))
         withAnimation(pick(uiSettle)) { pinned = nil; committedEpisode = nil }
-        completion: { if let u = pendingUndo { appModel.presentUndo(u); pendingUndo = nil } }
     }
 }
 ```
@@ -1025,7 +1023,8 @@ Sequence on Android:
 4. `pinned` freezes the pre-mark `Franchise` so the block keeps showing the episode that was just marked for the result window.
 5. `committedEpisode` set on `uiMicro` → the capsule flips to `"Episode N watched"` at `accent @ 0.18` with the check drawing in.
 6. **650 ms**, then `pinned`/`committedEpisode` clear on `uiSettle` — the `.id(identity)` change fires the asymmetric handoff.
-7. **On the animation's completion**, the Undo toast is presented (`"{title} · Episode N watched" · Undo`, 6 s).
+7. No inline toast is added below the capsule. Its drawn check and `"Episode N watched"` wording
+   are already the complete receipt; the episode list below provides the reversible watched state.
 
 The swap happens in a `ZStack`, **out of the flow layout**:
 
@@ -2301,4 +2300,3 @@ Severity: **blocker** = no faithful equivalent, design decision needed · **hard
 | **Non-breaking space / word joiner in copy** | – | easy | Keep U+00A0 in `plural()` and U+2060 around the range dash in `markThrough` — both fix real line-break bugs. |
 | **Live Activities / Dynamic Island** | – | n/a | Not used in this area. |
 | **Atomic JSON + one backup generation** (`RewatchStore`) | – | easy | Write to a temp file and `renameTo`, after copying the current file to `.backup.json`. |
-

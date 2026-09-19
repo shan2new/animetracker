@@ -1,9 +1,9 @@
 import SwiftUI
 
 // Franchise Detail (spec board 06). The hero is identity; the Next up card owns the single action
-// and shares Today's mark timeline (pinned snapshot → result → handoff → toast on settle).
+// and shares Today's mark timeline (pinned snapshot → committed result → handoff).
 // Seasons & movies are flat rows in the source's own labels; a season pushes its episode list.
-// Every write has Undo or a confirmation that states its exact blast radius.
+// Every multi-item write has Undo or a confirmation that states its exact blast radius.
 struct FranchiseDetailView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -47,7 +47,6 @@ struct FranchiseDetailView: View {
     // Mark timeline (identical to Today)
     @State private var pinned: Franchise?
     @State private var committedEpisode: Int?
-    @State private var pendingUndo: UndoState?
     @State private var prompt: WritePrompt?
     @State private var showStartRewatch = false
     /// Minted when a mark completes a season; the hairline sweep draws once per token.
@@ -981,7 +980,6 @@ struct FranchiseDetailView: View {
                           third: state.line3,
                           progress: bar?.ratio,
                           progressSpoken: bar?.spoken,
-                          receiptHost: ReceiptHost.detailHero(f.id),
                           accessory: {
                               if !isAX, let ep = revealTarget { revealGlyph(ep) }
                           }) {
@@ -1234,16 +1232,15 @@ struct FranchiseDetailView: View {
             }
         }
         pinned = snapshot
-        // The receipt lands IN PLACE, under this capsule (`ReceiptLine` in the lockup).
-        pendingUndo = undo.placed(at: ReceiptHost.detailHero(f.id))
         withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { committedEpisode = undo.episode }
+        // The capsule's drawn check and exact episode are the confirmation. Repeating that fact in
+        // an inline receipt directly beneath it made one write look like two competing responses.
+        Announce.status(Copy.Progress.episodeWatched(undo.episode))
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(650))
             withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
                 pinned = nil
                 committedEpisode = nil
-            } completion: {
-                if let u = pendingUndo { appModel.presentUndo(u); pendingUndo = nil }
             }
         }
     }
@@ -1268,8 +1265,7 @@ struct FranchiseDetailView: View {
             let prev = part.progress
             appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: through)
             appModel.presentUndo(UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev,
-                                           title: f.title, episode: through, count: count)
-                                    .placed(at: ReceiptHost.detailHero(f.id)))
+                                           title: f.title, episode: through, count: count))
         }
     }
 

@@ -201,7 +201,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import com.anitrack.app.data.ReceiptHost
 import com.anitrack.app.ui.state.ReceiptLine
 import com.anitrack.model.shelfShortened
 import androidx.compose.foundation.border
@@ -363,9 +362,6 @@ class DetailScreenState {
     var pinned: Franchise? by mutableStateOf(null)
 
     var committedEpisode: Int? by mutableStateOf(null)
-
-    /** Held back until the handoff settles, so the toast and the card do not talk over each other. */
-    var pendingUndo: UndoState? by mutableStateOf(null)
 
     var sweepToken: String? by mutableStateOf(null)
 
@@ -1656,7 +1652,6 @@ private fun DetailHeroCopy(
         minScale = HERO_TITLE_MIN_SCALE,
         maxLines = if (isAX) Int.MAX_VALUE else 3,
         accessory = accessory,
-        receiptHost = ReceiptHost.detailHero(franchise.id),
     ) {
         if (part != null && episode != null &&
             (nextUp.kind == NextUp.Kind.ACTIONABLE || nextUp.kind == NextUp.Kind.BACKLOG)
@@ -2155,8 +2150,8 @@ internal fun seasonLabel(part: FranchisePart): String =
  * commit; 3. the optimistic write (**a progress write never rolls back**; a failure goes to the
  * SyncBanner with a Retry); 4. `pinned` freezes the pre-mark franchise so the block keeps showing the
  * episode it just wrote for the result window; 5. the capsule flips to "Episode N watched" with the
- * check drawing in; 6. after 650 ms the pin clears and the handoff runs; 7. **once the handoff has
- * settled** the Undo toast is presented.
+ * check drawing in; 6. after 650 ms the pin clears and the handoff runs. The committed capsule is
+ * the receipt; repeating its fact in an inline toast directly beneath it is redundant.
  */
 private fun mark(
     scope: CoroutineScope,
@@ -2197,18 +2192,11 @@ private fun mark(
     }
 
     state.pinned = snapshot
-    // The receipt lands IN PLACE, under this capsule (`ReceiptLine` in the lockup).
-    state.pendingUndo = undo.placed(ReceiptHost.detailHero(franchise.id))
     state.committedEpisode = undo.episode
     scope.launch {
         delay(MARK_RESULT_WINDOW_MILLIS)
         state.pinned = null
         state.committedEpisode = null
-        // Presented once the card's handoff has settled, so the toast and the swap do not talk over
-        // each other.
-        delay(ThemeMotion.handoffSettleMillis.toLong())
-        state.pendingUndo?.let { appModel.presentUndo(it) }
-        state.pendingUndo = null
     }
 }
 
@@ -2230,7 +2218,7 @@ internal fun promptBatchMark(
         confirm = Copy.Confirm.batchMarkConfirm(count),
     ) {
         appModel.markThrough(franchise.id, part.mediaId, through, present = false)
-            ?.let { appModel.presentUndo(it, host = ReceiptHost.detailHero(franchise.id)) }
+            ?.let { appModel.presentUndo(it) }
     }
 }
 

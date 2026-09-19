@@ -911,10 +911,10 @@ the one control whose whole purpose is a batch."*
 (`if let cur = undo, cur.added, cur.franchiseId == franchiseId { undo = nil }`), and `setStatus`'s
 failure path does the same for its `customMessage` toast.
 
-### 6.5 "Present when the handoff settles"
+### 6.5 The committed-card handoff
 
-A **single mark on a card that hands over to its successor** does not present its toast immediately;
-it presents it when the outgoing card has left. Today's hero is the reference implementation:
+A single mark on a hero holds its exact committed state before the outgoing card leaves. The
+control itself is the receipt; it does not add an inline toast beneath itself:
 
 ```
 tap Mark
@@ -925,16 +925,13 @@ tap Mark
  └─ Task: sleep 650 ms
       └─ withAnimation(pick(uiSettle)) { pinned = nil; committedEpisode = nil }
            completion:
-             ├─ presentUndo(pendingUndo)          // ← the toast lands HERE
              └─ Task: sleep 300 ms (0 under Reduce Motion) → handoffInFlight = false
 ```
 The incoming card's insertion is delayed by `AnyTransition.handoff` (0.08 s) and then runs
 `uiSettle`; it is **not tappable until it has actually arrived** (`handoffInFlight`).
 
-Surfaces **without** a handoff present immediately: Today's queue rows (*"Unlike the hero there is no
-card handing over here, so the toast is presented immediately rather than deferred"*), Schedule's
-airing cards, Detail's episode rows, Library's context menu, and `removeWithUndo` (*"unlike a mark, a
-removal has no handoff to wait for"*).
+Compact controls that do not carry a fact in words still present immediately: Today's queue rows,
+Schedule's airing cards, Library's context menu, and `removeWithUndo`.
 
 Queue-row marks also carry a 650-ms `committedQueue` membership so the row draws its committed state
 for the same beat, then reverts.

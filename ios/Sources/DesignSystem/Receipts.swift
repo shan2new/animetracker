@@ -5,11 +5,10 @@ import SwiftUI
 // The transient confirmation, rebuilt from the toast. A receipt is drawn in ONE of two places,
 // decided at the write:
 //
-//   • IN PLACE — under the control that was pressed, when that control stays on screen: every
-//     mark from a capsule (Today's hero, the show page) or a ring (Schedule's cards, the Up next
-//     cards, the episode list). One quiet line, "✓ Episode 19 watched · Undo", for the undo
-//     window. Feedback where the finger is — Gmail's "Message sent · Undo", Spotify's heart
-//     filling in place — instead of a bar 330 pt below the capsule, over the shelf.
+//   • IN PLACE — under a compact ring whose result cannot carry its own wording (Schedule and
+//     Up next). One quiet line, "✓ Episode 19 watched · Undo", for the undo window. Hero
+//     capsules do not use it: their drawn check and "Episode N watched" label are already the
+//     complete receipt, and repeating the same fact underneath is jarring.
 //   • THE LANE — the tab bar's bottom accessory (iOS 26.1, the lane Music's mini player lives
 //     in, which folds into the bar when it minimises; below 26.1 the same lane sits attached
 //     above the bar): the poster, the fact, the show, Undo. For everything whose object LEFT the
@@ -31,7 +30,6 @@ enum ReceiptPlacement: Hashable {
 /// The in-place hosts' names — one spelling per surface, so the write and the view agree.
 enum ReceiptHost {
     static func todayQueue(_ franchiseId: String) -> String { "today.queue/\(franchiseId)" }
-    static func detailHero(_ franchiseId: String) -> String { "detail.hero/\(franchiseId)" }
     static func episodes(_ mediaId: Int) -> String { "episodes/\(mediaId)" }
     static func schedule(_ mediaId: Int, _ episode: Int) -> String { "schedule/\(mediaId)/\(episode)" }
 }
@@ -261,9 +259,8 @@ struct LaneFallback: View {
 
 #if DEBUG
 /// `-toastDemo mark|lane|notice`: a receipt that writes nothing, once the library has loaded —
-/// the only way to photograph one without moving the test account's progress. `mark` lands in
-/// place on the show page's hero, so it needs `-openDetail` (the Today hero's receipt was removed
-/// 17 Sep); `lane` is the chosen show's removal receipt; `notice` is "Episode alerts on".
+/// the only way to photograph one without moving the test account's progress. `mark` and `lane`
+/// use the bottom lane; `notice` is "Episode alerts on".
 @MainActor
 enum ToastDemo {
     static func arm(_ appModel: AppModel) {
@@ -283,9 +280,8 @@ enum ToastDemo {
             case "notice":
                 appModel.showNotice(Copy.Toast.alertsOn)
             default:
-                let host = ReceiptHost.detailHero(f.id)
                 appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 18,
-                                               title: f.title, episode: 19, undoAction: {}).placed(at: host))
+                                               title: f.title, episode: 19, undoAction: {}))
             }
         }
     }

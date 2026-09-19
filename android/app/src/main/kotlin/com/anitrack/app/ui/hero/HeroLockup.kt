@@ -37,7 +37,6 @@ import com.anitrack.app.ui.section.HeroBadge
 import com.anitrack.model.BillboardName
 import com.anitrack.model.copy.Copy
 import androidx.compose.ui.text.style.TextAlign
-import com.anitrack.app.ui.state.ReceiptLine
 
 /**
  * The billboard LOCKUP — Today's hero and the show page's, ONE composable (5 Sep, iOS `HeroLockup`).
@@ -82,8 +81,6 @@ fun HeroLockup(
     onOpen: (() -> Unit)? = null,
     interactive: Boolean = true,
     accessory: (@Composable () -> Unit)? = null,
-    /** The in-place receipt's host, drawn as an OVERLAY hanging under the actions — never a layout child. */
-    receiptHost: String? = null,
     actions: @Composable ColumnScope.() -> Unit = {},
 ) {
     val isAX = isAccessibilityTextSize()
@@ -184,17 +181,7 @@ fun HeroLockup(
             }
         }
 
-        Box(Modifier.fillMaxWidth()) {
-            Column(Modifier.fillMaxWidth(), content = actions)
-            if (receiptHost != null) {
-                ReceiptLine(
-                    host = receiptHost,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .offset(y = HeroLockupDefaults.receiptHang),
-                )
-            }
-        }
+        Column(Modifier.fillMaxWidth(), content = actions)
     }
 }
 
@@ -220,8 +207,6 @@ object HeroLockupDefaults {
     /** The minimum target of an accessory. */
     val accessoryTarget: Dp = 44.dp
 
-    /** How far the in-place receipt hangs under the actions' bottom edge: its own 28 dp plus a gap. */
-    val receiptHang: Dp = 24.dp
 }
 
 /**

@@ -367,13 +367,14 @@ fun TodayScreen(
         // the committed state clears at 650 ms and the next show's card fades in over ~460 ms with
         // its button already hit-testable at partial opacity, so a user clearing three episodes has
         // tap 2 swallowed and tap 3 land on a button belonging to a *different franchise* — the
-        // write goes to the wrong show, and the single Undo toast only covers the most recent one.
+        // write goes to the wrong show.
         if (marks.committedEpisode != null || marks.handoffInFlight) return
         val snapshot = items
         // The haptic is fired inside the write. One per transaction, and the view never fires one.
         val undo = appModel.markNext(f.id) ?: return
-        // The receipt lands IN PLACE, under this capsule (`ReceiptLine` in `HeroFocus`).
-        marks.settle(scope, appModel, snapshot, undo.placed(ReceiptHost.todayHero(f.id)), reduceMotion, announce) { recap.clearStrip() }
+        // The committed capsule already draws the check and names the exact episode. A second
+        // receipt directly beneath it repeats the same event and makes the handoff feel jarring.
+        marks.settle(scope, snapshot, undo, reduceMotion, announce) { recap.clearStrip() }
     }
 
     fun markQueueRow(f: Franchise) {
@@ -402,7 +403,7 @@ fun TodayScreen(
             episode = prompt.through,
             present = false,
         ) ?: return
-        marks.settle(scope, appModel, snapshot, undo.placed(ReceiptHost.todayHero(prompt.franchiseId)), reduceMotion, announce) { recap.clearStrip() }
+        marks.settle(scope, snapshot, undo, reduceMotion, announce) { recap.clearStrip() }
         announce(Copy.Confirm.batchMarkConfirm(prompt.count))
     }
 
@@ -746,7 +747,6 @@ private fun Hero(
                 )
                 HeroFocus(
                     slate = slate,
-                    franchiseId = franchise.id,
                     fullTitle = franchise.title,
                     committed = committed != null,
                     interactive = !marks.handoffInFlight,
@@ -1594,7 +1594,6 @@ private fun TodaySkeleton(isAX: Boolean) {
  *  │                                  // advance IN THE SAME FRAME
  *  └─ 650 ms
  *       ├─ pinned = null; committedEpisode = null   → the hero hands over
- *       ├─ presentUndo(...)                          → the toast lands here, not at the tap
  *       └─ 300 ms → handoffInFlight = false
  * ```
  */
@@ -1614,11 +1613,8 @@ private class MarkTimeline {
 
     var committedQueue by mutableStateOf(emptySet<String>())
 
-    private var pendingUndo: UndoState? = null
-
     fun settle(
         scope: CoroutineScope,
-        appModel: AppModel,
         snapshot: List<Franchise>,
         undo: UndoState,
         reduceMotion: Boolean,
@@ -1626,7 +1622,6 @@ private class MarkTimeline {
         clearRecapStrip: () -> Unit,
     ) {
         pinned = snapshot
-        pendingUndo = undo
         handoffInFlight = true
         committedEpisode = undo.episode
         announce(Copy.Progress.episodeWatched(undo.episode))
@@ -1635,8 +1630,6 @@ private class MarkTimeline {
             delay(HandoffUndo.HOLD_MILLIS)
             pinned = null
             committedEpisode = null
-            pendingUndo?.let { appModel.presentUndo(it) }
-            pendingUndo = null
             delay(HandoffUndo.tailMillis(reduceMotion))
             handoffInFlight = false
         }

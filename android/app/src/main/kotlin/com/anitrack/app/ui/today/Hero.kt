@@ -80,8 +80,6 @@ import com.anitrack.model.shelfShortened
 import com.anitrack.model.timeAnchor
 import com.anitrack.model.watchContext
 import com.anitrack.model.copy.Copy
-import com.anitrack.app.data.ReceiptHost
-import com.anitrack.app.ui.state.ReceiptLine
 import com.anitrack.app.design.brand.LocalLaunchHandoff
 
 // =====================================================================================
@@ -669,7 +667,6 @@ private fun StretchingHeroArt(
 @Composable
 fun HeroFocus(
     slate: HeroSlate,
-    franchiseId: String,
     fullTitle: String,
     committed: Boolean,
     interactive: Boolean,
@@ -698,7 +695,6 @@ fun HeroFocus(
         maxLines = if (isAX) 3 else 2,
         onOpen = onOpen,
         interactive = interactive,
-        receiptHost = ReceiptHost.todayHero(franchiseId),
     ) {
         if (slate.ctaEpisode != null) {
             MarkSplitButton(

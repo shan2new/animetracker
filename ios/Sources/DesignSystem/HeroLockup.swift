@@ -41,10 +41,6 @@ struct HeroLockup<Accessory: View, Actions: View>: View {
     var onOpen: (() -> Void)? = nil
     /// False while a mark is handing over to the next show on Today.
     var interactive: Bool = true
-    /// The in-place receipt's host (`ReceiptHost`), drawn as an OVERLAY hanging under the
-    /// actions — never a layout child: mounted in the flow it pushed the whole lockup up 48 pt a
-    /// second after the tap and dropped it back six seconds later (review, 5 Sep).
-    var receiptHost: String? = nil
     @ViewBuilder var accessory: () -> Accessory
     @ViewBuilder var actions: () -> Actions
 
@@ -71,18 +67,6 @@ struct HeroLockup<Accessory: View, Actions: View>: View {
             // the moment. A lone grey capsule under it read as a primary that had gone missing.
             actions()
                 .padding(.top, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
-                .overlay(alignment: .bottom) {
-                    if let receiptHost {
-                        ReceiptLine(host: receiptHost)
-                            // Hung under the capsule's bottom edge, in the room between it and
-                            // the next section, so nothing it confirms moves. An offset by its
-                            // own height, not an alignment guide: a guide set inside the
-                            // overlay's conditional was ignored and the line sat on the capsule.
-                            // By its own height, no more (review i3: at +34 the line sat three
-                            // times closer to the next section's title than to the capsule).
-                            .offset(y: ReceiptLine.height)
-                    }
-                }
         }
         .allowsHitTesting(interactive)
     }

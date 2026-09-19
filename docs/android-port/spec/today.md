@@ -1383,7 +1383,6 @@ func mark(_ f: Franchise) {
 
 func settleHero(snapshot:undo:) {
     pinned = snapshot
-    pendingUndo = undo
     handoffInFlight = true
     withAnimation(pick(uiMicro)) { committedEpisode = undo.episode }
     Announce.status("Episode \(undo.episode) watched")
@@ -1392,7 +1391,6 @@ func settleHero(snapshot:undo:) {
         try? await Task.sleep(for: .milliseconds(650))
         withAnimation(pick(uiSettle)) { pinned = nil; committedEpisode = nil }
         completion: {
-            if let undo = pendingUndo { appModel.presentUndo(undo); pendingUndo = nil }
             Task { @MainActor in
                 if !reduceMotion { try? await Task.sleep(for: .milliseconds(300)) }
                 handoffInFlight = false
@@ -1408,15 +1406,15 @@ Timeline, in order:
    support and progress bar all advance **in the same frame** (see §6.3).
 2. **t=650 ms** — `pinned`/`committedEpisode` cleared on `uiSettle`; the hero hands over to the next
    show via `handoff` (outgoing fades on `uiDismiss` 160 ms, incoming on `uiSettle` delayed 80 ms).
-3. **on completion** — the Undo toast is presented (6 s; **10 s under VoiceOver**), then
-   `handoffInFlight` clears 300 ms later (immediately under Reduce Motion).
+3. **on completion** — `handoffInFlight` clears 300 ms later (immediately under Reduce Motion).
+   There is no second receipt under the capsule: its drawn check and "Episode 19 watched" label
+   already state the committed result in the same frame.
 
 `handoffInFlight` covers the window `committedEpisode` cannot:
 > Without it the hero is a trap: `committedEpisode` clears at 650 ms and the next show's card fades
 > in over 460 ms with its Mark button already live and hit-testable at partial opacity, so a user
 > clearing three episodes has tap 2 swallowed and tap 3 land on a half-faded button belonging to a
-> *different franchise* — the write goes to the wrong show and the single Undo toast only covers the
-> most recent one.
+> *different franchise* — the write goes to the wrong show.
 
 `pinned` is a **snapshot of `items`** held for the 650 ms so the card keeps describing the show it
 just wrote to, even though the live feed has already moved on.

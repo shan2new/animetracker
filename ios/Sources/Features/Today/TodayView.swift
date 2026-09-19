@@ -80,8 +80,7 @@ struct TodayView: View {
     /// Without it the hero is a trap: `committedEpisode` clears at 650 ms and the next show's card
     /// fades in over 460 ms with its Mark button already live and hit-testable at partial opacity,
     /// so a user clearing three episodes has tap 2 swallowed and tap 3 land on a half-faded button
-    /// belonging to a *different franchise* — the write goes to the wrong show and the single Undo
-    /// toast only covers the most recent one.
+    /// belonging to a *different franchise* — the write goes to the wrong show.
     @State private var handoffInFlight = false
 
     /// Measured height of the copy laid on the hero art. The scrim that protects it is sized to

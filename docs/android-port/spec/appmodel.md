@@ -793,15 +793,15 @@ private func celebrate(_ franchiseId: String) {
 ```
 Only **one** undo can be on screen at a time — `undo` is a single optional, and a new `presentUndo` restarts the dismissal timer.
 
-**Undo-toast presentation timing (the "handoff").** A mark's toast is *not* presented by the model; the card that owns the animation presents it when its commit choreography settles. Today's `settleHero`:
-1. `pinned = snapshot` (freeze the list), `pendingUndo = undo`, `handoffInFlight = true`.
+**Hero handoff timing.** A hero mark is confirmed by its own committed control, not by an additional inline toast. Today's `settleHero`:
+1. `pinned = snapshot` (freeze the list), `handoffInFlight = true`.
 2. `withAnimation(pick(.uiMicro, reduceMotion)) { committedEpisode = undo.episode }` — the drawn check + advanced bar on the **same** card.
 3. `Announce.status(Copy.Progress.episodeWatched(undo.episode))` (VoiceOver).
 4. sleep **650 ms**.
-5. `withAnimation(pick(.uiSettle, reduceMotion)) { pinned = nil; committedEpisode = nil }` with a completion that (a) calls `presentUndo(pendingUndo)` and (b) after a further **300 ms** (skipped entirely under Reduce Motion) sets `handoffInFlight = false`.
+5. `withAnimation(pick(.uiSettle, reduceMotion)) { pinned = nil; committedEpisode = nil }`, then after a further **300 ms** (skipped entirely under Reduce Motion) set `handoffInFlight = false`.
 
 A second mark is refused while `committedEpisode != nil || handoffInFlight` — *"`handoffInFlight` covers the window `committedEpisode` cannot: the 460 ms during which the NEXT show's card is fading in with a live Mark button on it."*
-Detail's `mark(_:part:)` runs the same 650 ms + `.uiSettle` + `presentUndo` sequence without the 300 ms tail. Schedule's `commit(_:then:)` runs `.uiMicro` on the ring and presents in its completion.
+Detail's `mark(_:part:)` runs the same 650 ms + `.uiSettle` sequence without the 300 ms tail. Schedule's compact ring still presents its in-place Undo receipt in the completion because the ring does not state the episode fact in words.
 
 ### 7.7 `UndoState` and its message table
 

@@ -367,9 +367,7 @@ sealed class ReceiptPlacement {
 
 /** The in-place hosts' names — one spelling per surface, so the write and the view agree. */
 object ReceiptHost {
-    fun todayHero(franchiseId: String): String = "today.hero/$franchiseId"
     fun todayQueue(franchiseId: String): String = "today.queue/$franchiseId"
-    fun detailHero(franchiseId: String): String = "detail.hero/$franchiseId"
     fun episodes(mediaId: Int): String = "episodes/$mediaId"
     fun schedule(mediaId: Int, episode: Int): String = "schedule/$mediaId/$episode"
 }
