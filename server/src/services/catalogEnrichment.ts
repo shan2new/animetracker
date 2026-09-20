@@ -10,8 +10,9 @@ import type {
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, subscriptions } from '../db/schema.js'
 import { getShow, type TmdbRequestOptions } from '../tmdb/client.js'
-import { tmdbFranchiseEnrichment } from '../tmdb/mapping.js'
-import type { CatalogPerson, FranchiseEnrichment, FranchisePeople, RelatedTitle } from '../types/api.js'
+import { tmdbArtwork, tmdbFranchiseEnrichment } from '../tmdb/mapping.js'
+import type { ArtworkGallery, CatalogPerson, FranchiseEnrichment, FranchisePeople, RelatedTitle } from '../types/api.js'
+import { rankArtwork } from '../util/artwork.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
 import { syncRecommendationEdges } from './recommendations.js'
 
@@ -156,6 +157,19 @@ function stillFresh(value: FranchiseEnrichment | null | undefined): boolean {
   return Number.isFinite(checked) && checked > Date.now() - REFRESH_AFTER_MS
 }
 
+function mergeArtwork(
+  current: ArtworkGallery | null | undefined,
+  incoming: ArtworkGallery,
+): ArtworkGallery {
+  const merge = (stored: ArtworkGallery['portraits'] = [], fetched: ArtworkGallery['portraits'] = []) =>
+    rankArtwork([...stored, ...fetched])
+  return {
+    portraits: merge(current?.portraits, incoming.portraits),
+    landscapes: merge(current?.landscapes, incoming.landscapes),
+    logos: merge(current?.logos, incoming.logos),
+  }
+}
+
 /** Refresh one franchise's expensive catalogue metadata. Safe to call repeatedly. */
 export async function refreshFranchiseEnrichment(
   franchiseId: string,
@@ -173,9 +187,10 @@ export async function refreshFranchiseEnrichment(
     const show = await getShow(row.externalId, { ...options.tmdbRequest, enrichment: true })
     if (!show) return false
     const value = tmdbFranchiseEnrichment(show)
+    const artwork = mergeArtwork(row.artwork, tmdbArtwork(show))
     await db
       .update(franchise)
-      .set({ enrichment: value, updatedAt: new Date() })
+      .set({ enrichment: value, artwork, updatedAt: new Date() })
       .where(eq(franchise.id, franchiseId))
     await syncRecommendationEdges(franchiseId, value.related)
     return true
