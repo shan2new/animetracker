@@ -100,6 +100,19 @@ actor ImageLoader {
     static let shared = ImageLoader()
     private var inFlight: [String: Task<UIImage, Error>] = [:]
 
+    /// Pictures get their own session and a disk cache sized for them. `URLSession.shared` keeps
+    /// 10 MB on disk and refuses any response over 5 % of that, so a billboard's 2000-px poster
+    /// (1–3 MB) was never stored: every cold launch fetched the hero over the network again, and
+    /// the launch could not land on it (24 Sep).
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("images", isDirectory: true)
+        config.urlCache = URLCache(memoryCapacity: 8 * 1024 * 1024, diskCapacity: 256 * 1024 * 1024, directory: directory)
+        config.requestCachePolicy = .returnCacheDataElseLoad
+        return URLSession(configuration: config)
+    }()
+
     func image(for url: URL, maxPixel: CGFloat) async throws -> UIImage {
         if let cached = ImageCache.shared.image(for: url, atLeast: maxPixel) { return cached }
 
@@ -112,7 +125,7 @@ actor ImageLoader {
         let task = Task.detached(priority: .userInitiated) { () throws -> UIImage in
             var request = URLRequest(url: url)
             request.cachePolicy = .returnCacheDataElseLoad // URLCache handles the on-disk layer
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await ImageLoader.session.data(for: request)
             if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                 throw ImageLoadError.badData
             }
