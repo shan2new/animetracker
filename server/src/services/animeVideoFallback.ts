@@ -12,14 +12,13 @@ import { tmdbArtwork, tmdbEpisodes, tmdbFranchiseEnrichment, tmdbMovieArtwork, t
 import type { TmdbSeason, TmdbSeasonDetail, TmdbShow, TmdbVideo } from '../tmdb/types.js'
 import type { ArtworkGallery, CatalogVideo, EpisodeMeta, FranchiseEnrichment } from '../types/api.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
-import { rankArtwork } from '../util/artwork.js'
+import { rankArtwork, rankLogos } from '../util/artwork.js'
 import {
   resolveAnimeTmdbTarget,
   type AnimeTmdbMediaType,
   type AnimeTmdbTarget,
 } from './animeTmdbMatch.js'
 import { getCatalogLink, upsertCatalogLink } from './catalogLinks.js'
-import { syncRecommendationEdges } from './recommendations.js'
 
 const D = 86_400_000
 const VIDEO_TTL_MS = 7 * D
@@ -164,13 +163,13 @@ export function mergeArtwork(
   primary: ArtworkGallery | null | undefined,
   fallback: ArtworkGallery | null | undefined,
 ): ArtworkGallery {
-  const merge = (a: ArtworkGallery['portraits'] = [], b: ArtworkGallery['portraits'] = []) => {
-    return rankArtwork([...a, ...b])
+  const merge = (a: ArtworkGallery['portraits'] = [], b: ArtworkGallery['portraits'] = [], preserveTextless = true) => {
+    return rankArtwork([...a, ...b], 6, preserveTextless)
   }
   return {
     portraits: merge(primary?.portraits, fallback?.portraits),
     landscapes: merge(primary?.landscapes, fallback?.landscapes),
-    logos: merge(primary?.logos, fallback?.logos),
+    logos: rankLogos([...(primary?.logos ?? []), ...(fallback?.logos ?? [])], 6),
   }
 }
 
@@ -396,7 +395,9 @@ export async function refreshAnimeVideoFallback(
     confidence: target ? 0.9 : null,
     evidence: { aliases: aliases.slice(0, 10), year: primary.year, partMappings },
   })
-  await syncRecommendationEdges(franchiseId, enrichment.related)
+  // No recommendation edges here: an anime's ranked list is AniList's own (catalogEnrichment writes
+  // it with the ranker's facts). The TMDB twin's `related` only fills the show page's "More like
+  // this" when AniList has none; re-writing edges from it clobbered the ranked list every night.
   return { checked: true, matched: target != null, updated: true, videos: videos.length }
 }
 

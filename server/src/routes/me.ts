@@ -13,10 +13,11 @@ import {
   unsubscribe,
 } from '../services/library.js'
 import { db } from '../db/index.js'
-import { notifications, progress, subscriptions, userPreferences, users } from '../db/schema.js'
+import { notifications, progress, recommendationFeedback, subscriptions, userPreferences, users } from '../db/schema.js'
 import { eq } from 'drizzle-orm'
-import type { AccountDeletedResponse } from '../types/api.js'
+import type { AccountDeletedResponse, RecommendationsResponse } from '../types/api.js'
 import { enqueueAnimeVideoFallback } from '../services/animeVideoFallback.js'
+import { enqueueRecommendationRefresh } from '../services/catalogEnrichment.js'
 import {
   applyProviderPreferences,
   getUserPreferences,
@@ -24,11 +25,17 @@ import {
   saveUserPreferences,
 } from '../services/preferences.js'
 import { getAvailabilityPreviews } from '../services/watchAvailability.js'
-import { getDiscover } from '../services/recommendations.js'
+import {
+  clearRecommendationFeedback,
+  getRecommendations,
+  recordRecommendationFeedback,
+} from '../services/recommendations.js'
 
 // Board 09's status vocabulary. `subscriptions.status` is a text() column, so the two added
 // values need no migration.
 const statusEnum = z.enum(['watching', 'completed', 'planned', 'paused', 'dropped'])
+/** A recommendation's stable key: `anilist:<series root id>` or `tmdb:<show id>`. */
+const recommendationKey = z.string().regex(/^(anilist|tmdb):[1-9][0-9]{0,9}$/)
 const countrySchema = z.string().regex(/^[a-z]{2}$/i).transform((value) => value.toUpperCase())
 const countryQuery = z.object({ country: countrySchema.optional() })
 
@@ -78,9 +85,31 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     return saveUserPreferences(req.user!.id, body)
   })
 
-  app.get('/me/discover', async (req) => {
-    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20) }).parse(req.query)
-    return { items: await getDiscover(req.user!.id, limit) }
+  // "Recommended for you" — second-degree picks out of the user's own library, deterministic for
+  // (user, UTC day). See services/recommendationRank.ts and docs/api-contract.md.
+  app.get('/me/recommendations', async (req, reply) => {
+    const query = z.object({ limit: z.coerce.number().int().min(1).max(30).default(12) }).safeParse(req.query)
+    if (!query.success) return reply.code(400).send({ error: 'invalid request' })
+    const body: RecommendationsResponse = await getRecommendations(req.user!.id, query.data.limit)
+    return body
+  })
+
+  app.post('/me/recommendations/feedback', async (req, reply) => {
+    const body = z.object({
+      key: recommendationKey,
+      kind: z.enum(['dismissed', 'seen']),
+    }).strict().safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ error: 'invalid request' })
+    await recordRecommendationFeedback(req.user!.id, body.data.key, body.data.kind)
+    return reply.code(204).send()
+  })
+
+  // Undo of either verdict.
+  app.delete('/me/recommendations/feedback', async (req, reply) => {
+    const body = z.object({ key: recommendationKey }).strict().safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ error: 'invalid request' })
+    await clearRecommendationFeedback(req.user!.id, body.data.key)
+    return reply.code(204).send()
   })
 
   app.post('/me/subscriptions', async (req, reply) => {
@@ -88,6 +117,8 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     if (!(await franchiseExists(body.franchiseId))) return reply.code(404).send({ error: 'franchise not found' })
     await subscribe(req.user!.id, body.franchiseId, body.status)
     enqueueAnimeVideoFallback(body.franchiseId)
+    // A newly followed show votes at once, not after the next weekly enrichment.
+    enqueueRecommendationRefresh(body.franchiseId)
     return { ok: true }
   })
 
@@ -165,6 +196,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
       await tx.delete(subscriptions).where(eq(subscriptions.userId, userId))
       await tx.delete(progress).where(eq(progress.userId, userId))
       await tx.delete(userPreferences).where(eq(userPreferences.userId, userId))
+      await tx.delete(recommendationFeedback).where(eq(recommendationFeedback.userId, userId))
       // Last: everything that references it is gone, so this succeeds with or without the cascade.
       await tx.delete(users).where(eq(users.id, userId))
     })
@@ -181,4 +213,10 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
  * and is not listed here, `me.account.test.ts` fails rather than the deletion quietly leaving that
  * table's rows behind.
  */
-export const accountOwnedTableNames = ['notifications', 'subscriptions', 'progress', 'user_preferences'] as const
+export const accountOwnedTableNames = [
+  'notifications',
+  'subscriptions',
+  'progress',
+  'user_preferences',
+  'recommendation_feedback',
+] as const

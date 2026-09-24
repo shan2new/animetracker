@@ -15,6 +15,7 @@ import { ensureTvFranchise, refreshTvUpcomingFact } from '../tmdb/service.js'
 import type { FranchiseSummary } from '../types/api.js'
 import { withTimeout } from '../util/abort.js'
 import { applyProviderPreferences, resolveUserPreferences } from '../services/preferences.js'
+import { findLocalFranchise } from '../services/recommendations.js'
 import { groupFromSeed } from '../grouping/service.js'
 
 const countrySchema = z.string().regex(/^[a-z]{2}$/i).transform((value) => value.toUpperCase())
@@ -226,11 +227,14 @@ export const franchiseRoutes: FastifyPluginAsync = async (app) => {
     }).strict().safeParse(req.body)
     if (!body.success) return reply.code(400).send({ error: 'invalid request' })
     try {
-      const outcome = body.data.source === 'anilist'
-        ? await groupFromSeed(body.data.externalId)
-        : await ensureTvFranchise(body.data.externalId)
-      if (!outcome) return reply.code(422).send({ error: 'title could not be materialized' })
-      const [summary] = await getSummaries([outcome.franchiseId])
+      // The database first: a title that already has a show page opens it without the provider
+      // round trips (`groupFromSeed` always re-walks AniList, 3–15 s, even for a grouped title).
+      const local = await findLocalFranchise(body.data.source, body.data.externalId)
+      const franchiseId = local ?? (body.data.source === 'anilist'
+        ? (await groupFromSeed(body.data.externalId)).franchiseId
+        : (await ensureTvFranchise(body.data.externalId))?.franchiseId)
+      if (!franchiseId) return reply.code(422).send({ error: 'title could not be materialized' })
+      const [summary] = await getSummaries([franchiseId])
       if (!summary) return reply.code(422).send({ error: 'title could not be materialized' })
       return summary
     } catch (error) {

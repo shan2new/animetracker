@@ -178,15 +178,23 @@ export interface TmdbShow {
     }[]
   }
   keywords?: { results?: { id: number; name: string }[] }
-  recommendations?: {
-    results?: {
-      id: number
-      name: string
-      poster_path: string | null
-      backdrop_path: string | null
-      first_air_date: string | null
-      adult?: boolean
-      media_type?: string
-    }[]
-  }
+  recommendations?: { results?: TmdbRecommendation[] }
+}
+
+/** One entry of `/tv/{id}` `recommendations` (page 1: up to 20). */
+export interface TmdbRecommendation {
+  id: number
+  name: string
+  poster_path: string | null
+  backdrop_path: string | null
+  first_air_date: string | null
+  adult?: boolean
+  media_type?: string
+  // Already in the payload; the recommendation ranker's quality / taste / boundary facts.
+  vote_average?: number | null
+  vote_count?: number | null
+  popularity?: number | null
+  genre_ids?: number[]
+  origin_country?: string[]
+  original_language?: string | null
 }

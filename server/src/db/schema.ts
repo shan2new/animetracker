@@ -15,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core'
 import type {
   ArtworkGallery,
+  ArtworkSet,
   CatalogVideo,
   EpisodeMeta,
   FranchiseEnrichment,
@@ -242,6 +243,9 @@ export const watchAvailabilitySnapshots = pgTable(
   ],
 )
 
+// One franchise's source-native "if you liked this" list (AniList community recommendations, TMDB
+// /recommendations), replaced atomically on every refresh. The ranker (services/recommendationRank)
+// spreads ONE vote per followed franchise over this list, so the list's order and depth matter.
 export const recommendationEdges = pgTable(
   'recommendation_edges',
   {
@@ -250,17 +254,87 @@ export const recommendationEdges = pgTable(
       .references(() => franchise.id, { onDelete: 'cascade' }),
     source: text('source').notNull(),
     externalId: integer('external_id').notNull(),
+    // Write-time resolution only (kept for the index); the ranker resolves ownership LIVE on read.
     targetFranchiseId: uuid('target_franchise_id').references(() => franchise.id, { onDelete: 'set null' }),
+    /** Legacy strength (AniList votes). Superseded by `rank` + `votes`. */
     score: real('score'),
     title: text('title').notNull(),
     year: integer('year'),
     images: jsonb('images').$type<RelatedTitle['images']>().notNull(),
+    /** 0-based position in the seed's list, strongest first. Null only on rows from before 0009. */
+    rank: integer('rank'),
+    /** AniList: the community vote count behind the pair. TMDB only ranks, so null there. */
+    votes: integer('votes'),
     checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.franchiseId, t.source, t.externalId] }),
     index('recommendation_edges_target_idx').on(t.targetFranchiseId),
   ],
+)
+
+// One row per recommended title, SHARED by every user and every seed that points at it: the facts
+// the ranker filters and scores on, plus the title's series identity. An AniList recommendation
+// often names a later season ("My Hero Academia Season 4"); `root_*` is the series it belongs to
+// (the first season), which is what a recommendation is keyed, titled and materialised by.
+export const recommendationTargets = pgTable(
+  'recommendation_targets',
+  {
+    source: text('source').notNull(), // anilist | tmdb
+    externalId: integer('external_id').notNull(), // AniList media id | TMDB show id
+    title: text('title').notNull(),
+    year: integer('year'),
+    images: jsonb('images').$type<ArtworkSet>().notNull(),
+    format: text('format'), // AniList format; 'TV' for TMDB
+    status: text('status'), // AniList status; null for TMDB (the recommendation payload has none)
+    episodes: integer('episodes'),
+    /** 0–100 on both sources: AniList averageScore (meanScore fallback), TMDB vote_average × 10. */
+    averageScore: real('average_score'),
+    /** TMDB vote_count (AniList's sample size is `popularity`). */
+    voteCount: integer('vote_count'),
+    popularity: real('popularity'),
+    genres: jsonb('genres').$type<string[]>().notNull().default([]),
+    isAdult: boolean('is_adult').notNull().default(false),
+    countryOfOrigin: text('country_of_origin'),
+    /** The title or a known part of its series is releasing. */
+    airing: boolean('airing').notNull().default(false),
+    /** A known part of its series is announced but unreleased (a "new season announced"). */
+    announced: boolean('announced').notNull().default(false),
+    /** TMDB first_air_date / AniList start date (YYYY-MM-DD) when complete. */
+    releaseDate: text('release_date'),
+    rootId: integer('root_id').notNull(),
+    rootTitle: text('root_title').notNull(),
+    rootYear: integer('root_year'),
+    rootFormat: text('root_format'),
+    rootEpisodes: integer('root_episodes'),
+    rootImages: jsonb('root_images').$type<ArtworkSet>().notNull(),
+    /** Known ids of the same series (relation component, as far as it was walked). */
+    memberIds: jsonb('member_ids').$type<number[]>().notNull().default([]),
+    /** Ids related as a separate work of the same universe (spin-off, alternative, …). */
+    worldIds: jsonb('world_ids').$type<number[]>().notNull().default([]),
+    rootCheckedAt: timestamp('root_checked_at', { withTimezone: true }).defaultNow().notNull(),
+    checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.source, t.externalId] }),
+    index('recommendation_targets_root_idx').on(t.source, t.rootId),
+  ],
+)
+
+// A user's verdict on a recommendation: "Not interested" (dismissed) or "Mark as watched" (seen).
+// Keyed by the recommendation's stable key (`anilist:<root id>` / `tmdb:<show id>`). User data —
+// erased with the account (DELETE /me).
+export const recommendationFeedback = pgTable(
+  'recommendation_feedback',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    kind: text('kind').notNull(), // dismissed | seen
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.key] })],
 )
 
 // ---------- Announcements & notifications ----------

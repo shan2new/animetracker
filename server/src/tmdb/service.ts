@@ -7,6 +7,7 @@ import { upsertMediaRows } from '../services/mediaStore.js'
 import { resolveUpcomingWithCatalog } from '../services/catalogUpcoming.js'
 import { enqueueFranchiseEnrichment } from '../services/catalogEnrichment.js'
 import { upsertCatalogLink } from '../services/catalogLinks.js'
+import { syncRecommendationEdges } from '../services/recommendationEdges.js'
 import type { CatalogVideo, EpisodeMeta, FranchiseUpcoming } from '../types/api.js'
 import { getSeason, getShow, tmdbEnabled, type TmdbRequestOptions } from './client.js'
 import {
@@ -16,6 +17,7 @@ import {
   tmdbEpisodes,
   tmdbFranchiseEnrichment,
   tmdbArtwork,
+  tmdbRecommendationTargets,
   tmdbSeasonToMediaRow,
   tmdbShowUpcoming,
   tmdbShowToGroupingResult,
@@ -193,6 +195,13 @@ export async function ensureTvFranchise(
     matchMethod: 'catalogue_owner',
     confidence: 1,
   })
+  // The deep payload's enrichment is born "full" and fresh, so the queued refresh below skips it
+  // for a week: write the recommendation list from this same payload now, or a show someone just
+  // added would recommend nothing until then.
+  if (outcome.created && show.recommendations) {
+    const reco = tmdbRecommendationTargets(show)
+    await syncRecommendationEdges(outcome.franchiseId, reco.edges, reco.targets)
+  }
   enqueueFranchiseEnrichment(outcome.franchiseId)
   return outcome
 }

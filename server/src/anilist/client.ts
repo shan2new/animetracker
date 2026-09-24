@@ -1,4 +1,4 @@
-import type { AniListMedia, AniListMediaEnrichment } from './types.js'
+import type { AniListMedia, AniListMediaEnrichment, AniListRootNode } from './types.js'
 import { abortReason, abortableSleep, isAbortError, withTimeout } from '../util/abort.js'
 
 const ENDPOINT = 'https://graphql.anilist.co'
@@ -31,6 +31,12 @@ const MEDIA_FIELDS = `
   relations { edges { relationType node { id type format } } }
 `
 
+// A related node, as much as the recommendation ranker needs (identity, kind, state).
+const RELATED_NODE_FIELDS = 'id type format status season seasonYear'
+
+// `recommendations` carries the ranker's facts per title (format/status/scores/genres/…) plus ONE
+// level of relations, so a later season can find its series and a spin-off its universe without
+// another request. Measured on 20 titles: 2.75 s → ~4 s, still one request (reco spike §4).
 const ENRICHMENT_FIELDS = `
   id
   isAdult
@@ -45,19 +51,46 @@ const ENRICHMENT_FIELDS = `
       voiceActors(language: JAPANESE, sort: [RELEVANCE]) { id name { full } image { large } }
     }
   }
-  recommendations(perPage: 10, sort: [RATING_DESC]) {
+  recommendations(perPage: 20, sort: [RATING_DESC]) {
     nodes {
       rating
       mediaRecommendation {
         id
         type
+        format
+        status
+        episodes
+        averageScore
+        meanScore
+        popularity
+        genres
+        isAdult
+        countryOfOrigin
+        season
+        seasonYear
+        startDate { year month day }
         title { romaji english }
         coverImage { extraLarge large }
         bannerImage
-        seasonYear
+        relations { edges { relationType node { ${RELATED_NODE_FIELDS} } } }
       }
     }
   }
+`
+
+// The series-root walk (services/recommendationRoots.ts): a recommended "Season 4" climbs its
+// PREQUEL/PARENT chain to the first season. Slim on purpose — 50 ids per request, no payload.
+const ROOT_NODE_FIELDS = `
+  id
+  format
+  status
+  episodes
+  season
+  seasonYear
+  title { romaji english }
+  coverImage { extraLarge large }
+  bannerImage
+  relations { edges { relationType node { ${RELATED_NODE_FIELDS} } } }
 `
 
 function chunked<T>(arr: T[], size: number): T[][] {
@@ -190,6 +223,24 @@ export async function fetchEnrichmentByIds(
     ),
   )
   return batches.flatMap((data) => data.Page.media)
+}
+
+/**
+ * Slim nodes for the series-root walk (id, kind, status, title, art, one level of relations).
+ * Batched 50 ids per request; missing/non-anime ids are simply omitted.
+ */
+export async function fetchRootNodes(ids: number[], options: AniListRequestOptions = {}): Promise<AniListRootNode[]> {
+  if (ids.length === 0) return []
+  const out: AniListRootNode[] = []
+  for (const chunk of chunked(ids, 50)) {
+    const data = await gql<{ Page: { media: AniListRootNode[] } }>(
+      `query ($ids: [Int]) { Page(perPage: 50) { media(id_in: $ids, type: ANIME) { ${ROOT_NODE_FIELDS} } } }`,
+      { ids: chunk },
+      options,
+    )
+    out.push(...data.Page.media)
+  }
+  return out
 }
 
 /** Fetch a single media with relations (used while expanding the franchise graph). */

@@ -8,15 +8,18 @@ import {
   isJapaneseAnimation,
   isJapaneseAnimationShow,
   tmdbEpisodes,
+  tmdbArtwork,
   tmdbFranchiseEnrichment,
+  tmdbGenreNames,
   tmdbNetworks,
+  tmdbRecommendationTargets,
   tmdbSeasonMediaId,
   tmdbSeasonToMediaRow,
   tmdbShowUpcoming,
   tmdbShowToGroupingResult,
   tmdbVideos,
 } from './mapping.js'
-import type { TmdbEpisode, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
+import type { TmdbEpisode, TmdbRecommendation, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
 
 // Fixed "now": 2026-07-01T00:00Z.
 const NOW = Date.UTC(2026, 6, 1)
@@ -66,6 +69,29 @@ function result(opts: Partial<TmdbSearchResult> = {}): TmdbSearchResult {
     ...opts,
   }
 }
+
+describe('tmdbArtwork', () => {
+  it('retains a lower-resolution clean poster through mapping and primary-poster fallback', () => {
+    const posters = Array.from({ length: 8 }, (_, index) => ({
+      file_path: `/titled-${index}.jpg`, width: 2000, height: 3000, iso_639_1: 'en', vote_average: 8 - index,
+    }))
+    const gallery = tmdbArtwork(show({ images: { posters: [...posters, {
+      file_path: '/clean.jpg', width: 1000, height: 1500, iso_639_1: null, vote_average: 1,
+    }], backdrops: [], logos: [] } }))
+    expect(gallery.portraits).toHaveLength(6)
+    expect(gallery.portraits[0]?.url).toBe('https://image.tmdb.org/t/p/w780/titled-0.jpg')
+    expect(gallery.portraits.at(-1)).toMatchObject({
+      url: 'https://image.tmdb.org/t/p/w780/clean.jpg', width: 1000, height: 1500, language: null,
+    })
+  })
+
+  it('does not label the URL-only primary poster as measured textless art', () => {
+    expect(tmdbArtwork(show()).portraits).toEqual([{
+      url: 'https://image.tmdb.org/t/p/w780/poster.jpg', source: 'tmdb',
+      width: null, height: null, language: null, score: null,
+    }])
+  })
+})
 
 function episode(n: number, opts: Partial<TmdbEpisode> = {}): TmdbEpisode {
   return {
@@ -515,5 +541,92 @@ describe('tmdbShowToGroupingResult', () => {
         relationship: 'SEQUEL', optional: false, label: 'Season 2',
       },
     ])
+  })
+})
+
+describe('TMDB recommendations', () => {
+  function rec(id: number, opts: Partial<TmdbRecommendation> = {}): TmdbRecommendation {
+    return {
+      id,
+      name: `Rec ${id}`,
+      poster_path: `/p${id}.jpg`,
+      backdrop_path: `/b${id}.jpg`,
+      first_air_date: '2019-06-01',
+      media_type: 'tv',
+      adult: false,
+      vote_average: 7.85,
+      vote_count: 1200,
+      popularity: 64.2,
+      genre_ids: [10765, 18],
+      origin_country: ['US'],
+      ...opts,
+    }
+  }
+  const page = [
+    rec(1),
+    rec(2, { media_type: 'movie' }),
+    rec(3, { adult: true }),
+    rec(4, { genre_ids: [16, 10759], origin_country: ['JP'] }), // an anime's TMDB twin
+    rec(42), // the show itself
+    rec(5, { name: '' }),
+    rec(1), // a duplicate
+    ...Array.from({ length: 30 }, (_, i) => rec(100 + i)),
+  ]
+
+  it('keeps twenty TV titles for the ranker, in TMDB order, with the facts already in the payload', () => {
+    const { edges, targets } = tmdbRecommendationTargets(show({ recommendations: { results: page } }))
+    expect(edges).toHaveLength(20)
+    expect(edges.slice(0, 3)).toEqual([
+      { source: 'tmdb', externalId: 1, rank: 0, votes: null },
+      { source: 'tmdb', externalId: 100, rank: 1, votes: null },
+      { source: 'tmdb', externalId: 101, rank: 2, votes: null },
+    ])
+    expect(targets.map((t) => t.externalId)).toEqual(edges.map((e) => e.externalId))
+    expect(targets[0]).toEqual({
+      source: 'tmdb',
+      externalId: 1,
+      title: 'Rec 1',
+      year: 2019,
+      images: { portrait: 'https://image.tmdb.org/t/p/w780/p1.jpg', landscape: 'https://image.tmdb.org/t/p/w1280/b1.jpg' },
+      format: 'TV',
+      status: null,
+      episodes: null,
+      averageScore: 78.5,
+      voteCount: 1200,
+      popularity: 64.2,
+      genres: ['Sci-Fi & Fantasy', 'Drama'],
+      isAdult: false,
+      countryOfOrigin: 'US',
+      airing: false,
+      announced: false,
+      releaseDate: '2019-06-01',
+      rootId: 1,
+      rootTitle: 'Rec 1',
+      rootYear: 2019,
+      rootFormat: 'TV',
+      rootEpisodes: null,
+      rootImages: { portrait: 'https://image.tmdb.org/t/p/w780/p1.jpg', landscape: 'https://image.tmdb.org/t/p/w1280/b1.jpg' },
+      memberIds: [],
+      worldIds: [],
+    })
+  })
+
+  it('keeps the show page at ten and never offers Japanese animation, films, adult titles or the show itself', () => {
+    const related = tmdbFranchiseEnrichment(show({ recommendations: { results: page } }), NOW).related
+    expect(related).toHaveLength(10)
+    expect(related.map((r) => r.externalId)).toEqual([1, 100, 101, 102, 103, 104, 105, 106, 107, 108])
+    expect(related[0]!.score).toBe(10)
+  })
+
+  it('reads missing vote data as unmeasured, not as zero', () => {
+    const { targets } = tmdbRecommendationTargets(show({ recommendations: { results: [rec(7, {
+      vote_average: undefined, vote_count: undefined, popularity: undefined, genre_ids: undefined, origin_country: undefined, first_air_date: null,
+    })] } }))
+    expect(targets[0]).toMatchObject({ averageScore: null, voteCount: null, popularity: null, genres: [], countryOfOrigin: null, releaseDate: null, year: null })
+  })
+
+  it('names TV genres from their ids, once each, ignoring unknown ids', () => {
+    expect(tmdbGenreNames([10759, 16, 10759, 99999, 10764])).toEqual(['Action & Adventure', 'Animation', 'Reality'])
+    expect(tmdbGenreNames(undefined)).toEqual([])
   })
 })

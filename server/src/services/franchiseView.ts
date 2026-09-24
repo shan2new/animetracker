@@ -31,6 +31,7 @@ import { withReleaseWindow } from './releaseWindow.js'
 import { resolveRelatedFranchiseIds } from './catalogEnrichment.js'
 import { stripHtml } from '../util/text.js'
 import { catalogLinkViews } from './catalogLinks.js'
+import { limitArtwork, rankLogos } from '../util/artwork.js'
 
 const D = 86_400_000
 const KIND_ORDER: PartKind[] = ['season', 'movie', 'ova', 'ona', 'special', 'music']
@@ -50,18 +51,13 @@ function artworkGallery(
   const fallback = (url: string | null): ArtworkImage[] => url ? [{
     url, source, width: null, height: null, language: null, score: null,
   }] : []
-  const merge = (items: ArtworkImage[]) => {
-    const seen = new Set<string>()
-    return items.filter((item) => {
-      if (seen.has(item.url)) return false
-      seen.add(item.url)
-      return true
-    }).slice(0, 6)
-  }
+  const merge = (items: ArtworkImage[], preserveTextless = true) => limitArtwork(items, 6, preserveTextless)
   return {
     portraits: merge([...(stored?.portraits ?? []), ...fallback(images.portrait), ...additions.flatMap((item) => item.portraits)]),
     landscapes: merge([...(stored?.landscapes ?? []), ...fallback(images.landscape), ...additions.flatMap((item) => item.landscapes)]),
-    logos: merge([...(stored?.logos ?? []), ...additions.flatMap((item) => item.logos)]),
+    // Re-ranked on READ, so galleries stored under the old size-first order are corrected
+    // without a re-enrichment pass (`rankLogos`).
+    logos: rankLogos([...(stored?.logos ?? []), ...additions.flatMap((item) => item.logos)], 6),
   }
 }
 
@@ -294,7 +290,9 @@ function toPart(
     lastAiredAt,
     synopsis: stripHtml(m.description),
     genres: (m.genres ?? []).slice(0, 4),
-    progress: watched,
+    // Read-time guard for rows written before the write clamp (`clampProgress`): a season that
+    // has not premiered reports only what has aired of it, so a stale mark cannot pre-empt it.
+    progress: m.status === 'NOT_YET_RELEASED' ? Math.min(watched, airedEpisodes) : watched,
     year: m.seasonYear ?? null,
     studios: m.studios ?? [],
     nextAiringCount,
@@ -528,10 +526,12 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
         artwork: gallery,
         isReleasing: releasing,
         // The count Detail prints under "Seasons & movies": episodic members only, never OVAs,
-        // specials or music videos — Search and Detail must agree.
+        // specials or music videos — Search and Detail must agree. RELEASED members only: an
+        // announced season is news, not a season you can watch ("3 seasons" for ONE PIECE with
+        // two aired — review i4, N11).
         partCount: mems.filter((mem) => {
           const m = mediaById.get(mem.mediaId)
-          if (!m) return false
+          if (!m || m.status === 'NOT_YET_RELEASED') return false
           const kind = partKindForFormat((m.format as MediaFormat | null) ?? null)
           return kind === 'season' || kind === 'movie'
         }).length,

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   listAnnouncementObservations: vi.fn(),
   ensureTvFranchise: vi.fn(),
   groupFromSeed: vi.fn(),
+  findLocalFranchise: vi.fn(),
 }))
 
 vi.mock('../services/watchAvailability.js', () => ({
@@ -38,6 +39,7 @@ vi.mock('../tmdb/service.js', () => ({
   ensureTvFranchise: mocks.ensureTvFranchise,
 }))
 vi.mock('../grouping/service.js', () => ({ groupFromSeed: mocks.groupFromSeed }))
+vi.mock('../services/recommendations.js', () => ({ findLocalFranchise: mocks.findLocalFranchise }))
 vi.mock('../services/preferences.js', () => ({
   resolveUserPreferences: mocks.resolveUserPreferences,
   applyProviderPreferences: (value: unknown) => value,
@@ -89,6 +91,7 @@ beforeEach(() => {
   mocks.listAnnouncementObservations.mockReset().mockResolvedValue([])
   mocks.ensureTvFranchise.mockReset()
   mocks.groupFromSeed.mockReset()
+  mocks.findLocalFranchise.mockReset().mockResolvedValue(null)
   mocks.getWatchAvailability.mockResolvedValue({
     country: 'IN',
     status: 'not_available',
@@ -334,6 +337,48 @@ describe('GET /franchises/:id/watch-providers', () => {
 
     expect(res.statusCode, res.body).toBe(200)
     expect(mocks.getWatchAvailability).toHaveBeenCalledWith(ID, 'IN')
+    await app.close()
+  })
+})
+
+describe('POST /franchises/resolve', () => {
+  const summary = { id: ID, title: 'Hunter x Hunter (2011)' }
+
+  it('opens a title that already has a show page without asking a provider', async () => {
+    mocks.findLocalFranchise.mockResolvedValueOnce(ID)
+    mocks.getSummaries.mockResolvedValueOnce([summary])
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'POST', url: '/franchises/resolve', payload: { source: 'anilist', externalId: 11061 } })
+
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).toEqual(summary)
+    expect(mocks.findLocalFranchise).toHaveBeenCalledWith('anilist', 11061)
+    expect(mocks.groupFromSeed).not.toHaveBeenCalled()
+    expect(mocks.ensureTvFranchise).not.toHaveBeenCalled()
+    await app.close()
+  })
+
+  it('materialises a title the catalogue has never grouped, per source', async () => {
+    mocks.groupFromSeed.mockResolvedValueOnce({ franchiseId: ID, created: true, attached: 0 })
+    mocks.ensureTvFranchise.mockResolvedValueOnce({ franchiseId: ID, created: true, attached: 0 })
+    mocks.getSummaries.mockResolvedValue([summary])
+    const app = await appWithUser()
+    const anime = await app.inject({ method: 'POST', url: '/franchises/resolve', payload: { source: 'anilist', externalId: 20832 } })
+    const tv = await app.inject({ method: 'POST', url: '/franchises/resolve', payload: { source: 'tmdb', externalId: 63210 } })
+
+    expect(anime.statusCode, anime.body).toBe(200)
+    expect(tv.statusCode, tv.body).toBe(200)
+    expect(mocks.groupFromSeed).toHaveBeenCalledWith(20832)
+    expect(mocks.ensureTvFranchise).toHaveBeenCalledWith(63210)
+    await app.close()
+  })
+
+  it('answers 422 when source policy refuses the title', async () => {
+    mocks.ensureTvFranchise.mockResolvedValueOnce(null)
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'POST', url: '/franchises/resolve', payload: { source: 'tmdb', externalId: 106480 } })
+
+    expect(res.statusCode, res.body).toBe(422)
     await app.close()
   })
 })

@@ -13,8 +13,18 @@ import type {
   RelatedTitle,
   VideoKind,
 } from '../types/api.js'
-import type { TmdbEpisode, TmdbImage, TmdbMovie, TmdbSearchResult, TmdbSeason, TmdbShow, TmdbVideo } from './types.js'
-import { rankArtwork } from '../util/artwork.js'
+import type {
+  TmdbEpisode,
+  TmdbImage,
+  TmdbMovie,
+  TmdbRecommendation,
+  TmdbSearchResult,
+  TmdbSeason,
+  TmdbShow,
+  TmdbVideo,
+} from './types.js'
+import type { RecommendationEdgeFacts, RecommendationTargetFacts } from '../services/recommendationRank.js'
+import { rankArtwork, rankLogos } from '../util/artwork.js'
 
 // Pure TMDB → local-model mapping. No I/O here — everything is unit-testable.
 
@@ -45,7 +55,10 @@ function rankedArtwork(
   orientation: 'portrait' | 'landscape' | 'logo',
 ): ArtworkImage[] {
   const size = orientation === 'portrait' ? 'w780' : 'w1280'
-  return rankArtwork(
+  const rank = orientation === 'logo'
+    ? (images: ArtworkImage[], limit: number) => rankLogos(images, limit)
+    : (images: ArtworkImage[], limit: number, preserveTextless: boolean) => rankArtwork(images, limit, preserveTextless)
+  return rank(
     (items ?? [])
     .flatMap((item) => {
       const url = imageUrl(item.file_path, size)
@@ -58,7 +71,7 @@ function rankedArtwork(
         language: item.iso_639_1 ?? null,
         score: item.vote_average ?? null,
       }]
-    }),
+    }), 6, orientation !== 'logo',
   )
 }
 
@@ -66,7 +79,7 @@ function prependArtwork(items: ArtworkImage[], url: string | null): ArtworkImage
   if (!url || items.some((item) => item.url === url)) return items
   return rankArtwork([...items, {
     url, source: 'tmdb' as const, width: null, height: null, language: null, score: null,
-  }])
+  }], 6, true)
 }
 
 export function tmdbArtwork(show: TmdbShow, season?: TmdbSeason): ArtworkGallery {
@@ -109,9 +122,41 @@ export function airDateToMs(date: string | null | undefined): number | null {
 
 const ANIMATION_GENRE_ID = 16
 
-/** Search-boundary rule: Japanese animation belongs to AniList, so its TMDB twin is suppressed. */
-export function isJapaneseAnimation(r: TmdbSearchResult): boolean {
+/**
+ * Search-boundary rule: Japanese animation belongs to AniList, so its TMDB twin is suppressed.
+ * Takes any list-shaped TMDB entry (search/trending results, a show's recommendations).
+ */
+export function isJapaneseAnimation(r: Pick<TmdbSearchResult, 'genre_ids' | 'origin_country'> | TmdbRecommendation): boolean {
   return (r.genre_ids ?? []).includes(ANIMATION_GENRE_ID) && (r.origin_country ?? []).includes('JP')
+}
+
+/** TMDB's TV genre list (`/genre/tv/list`) — list entries carry ids only. */
+export const TMDB_TV_GENRES: Readonly<Record<number, string>> = {
+  10759: 'Action & Adventure',
+  16: 'Animation',
+  35: 'Comedy',
+  80: 'Crime',
+  99: 'Documentary',
+  18: 'Drama',
+  10751: 'Family',
+  10762: 'Kids',
+  9648: 'Mystery',
+  10763: 'News',
+  10764: 'Reality',
+  10765: 'Sci-Fi & Fantasy',
+  10766: 'Soap',
+  10767: 'Talk',
+  10768: 'War & Politics',
+  37: 'Western',
+}
+
+export function tmdbGenreNames(ids: number[] | null | undefined): string[] {
+  const out: string[] = []
+  for (const id of ids ?? []) {
+    const name = TMDB_TV_GENRES[id]
+    if (name && !out.includes(name)) out.push(name)
+  }
+  return out
 }
 
 /**
@@ -298,6 +343,79 @@ function tmdbThemes(show: TmdbShow): string[] {
   return [...new Set(themes)].slice(0, 10)
 }
 
+/** Show page "More like this" keeps ten; the recommendation ranker reads the full page of twenty. */
+const TMDB_RELATED_TITLES = 10
+const TMDB_RANKED_RECOMMENDATIONS = 20
+
+/**
+ * A show's TV recommendations that may be offered at all: series (never a film), not adult, named,
+ * not the show itself, and never Japanese animation — AniList owns that, so its TMDB twin would be
+ * a second copy of an anime (the same boundary `ensureTvFranchise` enforces). Duplicates dropped.
+ */
+function tmdbRecommendationEntries(show: TmdbShow): TmdbRecommendation[] {
+  const seen = new Set<number>()
+  return (show.recommendations?.results ?? []).filter((item) => {
+    if (item.media_type === 'movie' || item.adult === true || !item.name || item.id === show.id) return false
+    if (isJapaneseAnimation(item) || seen.has(item.id)) return false
+    seen.add(item.id)
+    return true
+  })
+}
+
+function airDateYear(date: string | null | undefined): number | null {
+  return date ? Number(date.slice(0, 4)) || null : null
+}
+
+/**
+ * The ranker's view of a show's recommendations: up to twenty edges in TMDB's order, and the facts
+ * TMDB already puts on each entry (vote average/count, popularity, genres, origin, first air date).
+ * No extra request — they arrive with the appended `recommendations`.
+ */
+export function tmdbRecommendationTargets(show: TmdbShow): {
+  edges: RecommendationEdgeFacts[]
+  targets: RecommendationTargetFacts[]
+} {
+  const entries = tmdbRecommendationEntries(show).slice(0, TMDB_RANKED_RECOMMENDATIONS)
+  return {
+    edges: entries.map((item, rank) => ({ source: 'tmdb', externalId: item.id, rank, votes: null })),
+    targets: entries.map((item): RecommendationTargetFacts => {
+      const images = {
+        portrait: imageUrl(item.poster_path, 'w780'),
+        landscape: imageUrl(item.backdrop_path, 'w1280'),
+      }
+      const year = airDateYear(item.first_air_date)
+      return {
+        source: 'tmdb',
+        externalId: item.id,
+        title: item.name,
+        year,
+        images,
+        format: 'TV',
+        status: null,
+        episodes: null,
+        // 0–100 like AniList's averageScore, one decimal kept.
+        averageScore: item.vote_average != null ? Math.round(item.vote_average * 100) / 10 : null,
+        voteCount: item.vote_count ?? null,
+        popularity: item.popularity ?? null,
+        genres: tmdbGenreNames(item.genre_ids),
+        isAdult: item.adult === true,
+        countryOfOrigin: item.origin_country?.[0] ?? null,
+        airing: false,
+        announced: false,
+        releaseDate: item.first_air_date && /^\d{4}-\d{2}-\d{2}$/.test(item.first_air_date) ? item.first_air_date : null,
+        rootId: item.id,
+        rootTitle: item.name,
+        rootYear: year,
+        rootFormat: 'TV',
+        rootEpisodes: null,
+        rootImages: images,
+        memberIds: [],
+        worldIds: [],
+      }
+    }),
+  }
+}
+
 /** Franchise-level catalogue metadata. Missing appended fields intentionally yield a basic row. */
 export function tmdbFranchiseEnrichment(show: TmdbShow, nowMs = Date.now()): FranchiseEnrichment {
   const hasDeepPayload =
@@ -307,9 +425,8 @@ export function tmdbFranchiseEnrichment(show: TmdbShow, nowMs = Date.now()): Fra
     .map((item) => ({ country: item.iso_3166_1.toUpperCase(), rating: item.rating }))
     .filter((item, index, all) => all.findIndex((other) => other.country === item.country) === index)
     .sort((a, b) => a.country.localeCompare(b.country))
-  const related: RelatedTitle[] = (show.recommendations?.results ?? [])
-    .filter((item) => item.media_type !== 'movie' && item.adult !== true && !!item.name)
-    .slice(0, 10)
+  const related: RelatedTitle[] = tmdbRecommendationEntries(show)
+    .slice(0, TMDB_RELATED_TITLES)
     .map((item, index) => ({
       source: 'tmdb',
       externalId: item.id,

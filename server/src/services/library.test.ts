@@ -47,6 +47,12 @@ describe('progressWritesForCommand', () => {
     ])
   })
 
+  it('never lets a season that has not premiered hold progress', () => {
+    expect(progressWritesForCommand(rows, { parts: [{ mediaId: 3, episodes: 5 }] })).toEqual([
+      { mediaId: 3, episodes: 0 },
+    ])
+  })
+
   it('rejects foreign and duplicate media ids before the transaction can partially write', () => {
     expect(() => progressWritesForCommand(rows, { parts: [{ mediaId: 99, episodes: 1 }] }))
       .toThrow(FranchiseProgressError)

@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, gt } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions, users } from '../db/schema.js'
 import type { FranchiseProgressCommandResponse, WatchStatus } from '../types/api.js'
@@ -89,9 +89,49 @@ function airedForProgress(row: ProgressMediaRow): number {
   })
 }
 
+/**
+ * One-off, idempotent repair (review i4): progress stored on a season that has not premiered —
+ * written before the write clamp existed — comes back the day the season does. Every read guard
+ * stops at the premiere: Avatar: Seven Havens, 13 of 13 marked a fortnight before its 9 Oct
+ * premiere, would open that day at "Season 1 · Episode 14" with thirteen watched discs over
+ * unaired episodes, never behind and never on Today. Each unaired season is set to what has aired
+ * (nothing, until it does). Run at boot and hourly; a no-op once the rows are clean.
+ */
+export async function clampUnairedProgress(): Promise<number> {
+  const rows = await db
+    .select({
+      userId: progress.userId,
+      mediaId: progress.mediaId,
+      watched: progress.episodesWatched,
+      status: media.status,
+      episodes: media.episodes,
+      next: media.nextAiringEpisode,
+      episodesList: media.episodesList,
+    })
+    .from(progress)
+    .innerJoin(media, eq(media.id, progress.mediaId))
+    .where(and(eq(media.status, 'NOT_YET_RELEASED'), gt(progress.episodesWatched, 0)))
+  let fixed = 0
+  for (const row of rows) {
+    const aired = airedForProgress(row)
+    if (row.watched <= aired) continue
+    await db
+      .update(progress)
+      .set({ episodesWatched: aired, updatedAt: new Date() })
+      .where(and(eq(progress.userId, row.userId), eq(progress.mediaId, row.mediaId)))
+    fixed++
+  }
+  return fixed
+}
+
 function clampProgress(row: Omit<ProgressMediaRow, 'mediaId'>, episodes: number): number {
   const value = Number.isFinite(episodes) ? Math.max(0, Math.floor(episodes)) : 0
-  const ceiling = Math.max(row.episodes ?? 0, airedForProgress({ ...row, mediaId: 0 }))
+  const aired = airedForProgress({ ...row, mediaId: 0 })
+  // A season that has not premiered cannot have been watched: it takes what has aired, which is
+  // nothing until it does. The size-of-season ceiling let 13 marks land on Avatar: Seven Havens
+  // a fortnight before its premiere, so it would never read as behind, NEW or on Today (23 Sep).
+  if (row.status === 'NOT_YET_RELEASED') return Math.min(value, aired)
+  const ceiling = Math.max(row.episodes ?? 0, aired)
   return ceiling > 0 ? Math.min(value, ceiling) : value
 }
 

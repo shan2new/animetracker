@@ -1,23 +1,31 @@
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, max, sql } from 'drizzle-orm'
 import { fetchEnrichmentByIds, type AniListRequestOptions } from '../anilist/client.js'
 import type {
   AniListCharacterEdge,
   AniListMedia,
   AniListMediaEnrichment,
   AniListPerson,
+  AniListRecommendedMedia,
   AniListStaffEdge,
 } from '../anilist/types.js'
 import { db } from '../db/index.js'
-import { franchise, franchiseMember, media, subscriptions } from '../db/schema.js'
-import { getShow, type TmdbRequestOptions } from '../tmdb/client.js'
-import { tmdbArtwork, tmdbFranchiseEnrichment } from '../tmdb/mapping.js'
+import { franchise, franchiseMember, media, recommendationEdges, subscriptions } from '../db/schema.js'
+import { getShow, tmdbEnabled, type TmdbRequestOptions } from '../tmdb/client.js'
+import { tmdbArtwork, tmdbFranchiseEnrichment, tmdbRecommendationTargets } from '../tmdb/mapping.js'
 import type { ArtworkGallery, CatalogPerson, FranchiseEnrichment, FranchisePeople, RelatedTitle } from '../types/api.js'
 import { rankArtwork } from '../util/artwork.js'
+import { mapWithConcurrency } from '../util/concurrency.js'
+import { createPacer } from '../util/pacer.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
-import { syncRecommendationEdges } from './recommendations.js'
+import { storedRoots, syncRecommendationEdges, type RecommendationTargetWrite } from './recommendationEdges.js'
+import type { RecommendationEdgeFacts } from './recommendationRank.js'
+import { resolveSeriesRoots, type RootWalkOptions, type RootWalkStart } from './recommendationRoots.js'
 
 const D = 86_400_000
 const REFRESH_AFTER_MS = 7 * D
+/** A series root rarely changes; re-walk it monthly. */
+const ROOT_REFRESH_MS = 30 * D
+const TMDB_RECOMMENDATIONS_REFRESH_MS = 20 * 60 * 60 * 1000
 const ANILIST_BACKGROUND_INTERVAL_MS = 2_100
 const EMPTY_PEOPLE: FranchisePeople = { creators: [], directors: [], cast: [] }
 
@@ -93,6 +101,137 @@ export function basicAniListEnrichment(
   }
 }
 
+/** Show page "More like this" keeps ten; the recommendation ranker reads twenty (twice the consensus). */
+const ANILIST_RELATED_TITLES = 10
+const ANILIST_RANKED_RECOMMENDATIONS = 20
+/** Relations that keep a title inside its own series (the grouping graph's FOLLOW set). */
+const SERIES_RELATIONS = new Set(['SEQUEL', 'PREQUEL', 'PARENT', 'SIDE_STORY'])
+/** Relations to a separate work of the same universe. */
+const WORLD_RELATIONS = new Set(['SPIN_OFF', 'ALTERNATIVE', 'CHARACTER', 'OTHER', 'SUMMARY'])
+const UP_RELATIONS = new Set(['PREQUEL', 'PARENT'])
+
+interface RankedAniListRecommendation {
+  media: AniListRecommendedMedia
+  rating: number | null
+  title: string
+}
+
+/**
+ * A franchise's AniList recommendations in stored order: anime only, never one of its own parts,
+ * titled, strongest community vote first, each title once. Both the show page's ten and the ranker's
+ * twenty are prefixes of this one list.
+ */
+function rankedAniListRecommendations(
+  items: AniListMediaEnrichment[],
+  memberIds: Set<number>,
+): RankedAniListRecommendation[] {
+  const nodes = items
+    .flatMap((item) => item.recommendations?.nodes ?? [])
+    .filter((node) => node.mediaRecommendation?.type === 'ANIME' && !memberIds.has(node.mediaRecommendation.id))
+    .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+  const seen = new Set<number>()
+  const out: RankedAniListRecommendation[] = []
+  for (const node of nodes) {
+    const candidate = node.mediaRecommendation
+    if (!candidate || seen.has(candidate.id)) continue
+    const title = (candidate.title.english || candidate.title.romaji || '').trim()
+    if (!title) continue
+    seen.add(candidate.id)
+    out.push({ media: candidate, rating: node.rating ?? null, title })
+  }
+  return out
+}
+
+function isoDate(date: AniListRecommendedMedia['startDate']): string | null {
+  if (!date?.year || !date.month || !date.day) return null
+  return `${date.year}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`
+}
+
+/**
+ * The ranker's view of a franchise's AniList recommendations: up to twenty edges (community vote,
+ * rank) and the facts about each title, with the walk starts that give each its series root.
+ * Pure — the series-root walk (I/O) runs on `starts` afterwards.
+ */
+export function aniListRecommendationTargets(items: AniListMediaEnrichment[], memberIds: Set<number>): {
+  edges: RecommendationEdgeFacts[]
+  targets: RecommendationTargetWrite[]
+  starts: RootWalkStart[]
+} {
+  const ranked = rankedAniListRecommendations(items, memberIds).slice(0, ANILIST_RANKED_RECOMMENDATIONS)
+  const starts = ranked.map(({ media: m, title }): RootWalkStart => {
+    const relations = (m.relations?.edges ?? []).filter((edge) => edge.node.type === 'ANIME')
+    const series = relations.filter((edge) => SERIES_RELATIONS.has(edge.relationType) && edge.node.format !== 'MUSIC')
+    const images = { portrait: m.coverImage.extraLarge ?? m.coverImage.large ?? null, landscape: m.bannerImage ?? null }
+    const target: RecommendationTargetWrite = {
+      source: 'anilist',
+      externalId: m.id,
+      title,
+      year: m.seasonYear ?? null,
+      images,
+      format: m.format ?? null,
+      status: m.status ?? null,
+      episodes: m.episodes ?? null,
+      averageScore: (m.averageScore || m.meanScore) ?? null,
+      voteCount: null,
+      popularity: m.popularity ?? null,
+      genres: m.genres ?? [],
+      isAdult: m.isAdult === true,
+      countryOfOrigin: m.countryOfOrigin ?? null,
+      airing: m.status === 'RELEASING' || series.some((edge) => edge.node.status === 'RELEASING'),
+      announced: series.some((edge) => edge.node.status === 'NOT_YET_RELEASED'),
+      releaseDate: isoDate(m.startDate),
+      // Its own root until the walk says otherwise.
+      rootId: m.id,
+      rootTitle: title,
+      rootYear: m.seasonYear ?? null,
+      rootFormat: m.format ?? null,
+      rootEpisodes: m.episodes ?? null,
+      rootImages: images,
+      memberIds: [...new Set([m.id, ...series.map((edge) => edge.node.id)])],
+      worldIds: [...new Set(relations.filter((edge) => WORLD_RELATIONS.has(edge.relationType)).map((edge) => edge.node.id))],
+    }
+    return {
+      target,
+      ups: series.filter((edge) => UP_RELATIONS.has(edge.relationType)).map((edge) => edge.node.id),
+      season: m.season ?? null,
+    }
+  })
+  return {
+    edges: ranked.map(({ media: m, rating }, rank) => ({ source: 'anilist', externalId: m.id, rank, votes: rating ?? 0 })),
+    targets: starts.map((start) => start.target),
+    starts,
+  }
+}
+
+/**
+ * Series identity for every AniList target: a root checked within the last month is reused from
+ * `recommendation_targets`; the rest are walked (local first, then AniList).
+ */
+async function attachSeriesRoots(starts: RootWalkStart[], options: RootWalkOptions): Promise<void> {
+  const stored = await storedRoots(
+    starts.map((start) => start.target.externalId),
+    new Date(Date.now() - ROOT_REFRESH_MS),
+  )
+  const walk: RootWalkStart[] = []
+  for (const start of starts) {
+    const previous = stored.get(start.target.externalId)
+    if (!previous) {
+      walk.push(start)
+      continue
+    }
+    const target = start.target as RecommendationTargetWrite
+    target.rootId = previous.rootId
+    target.rootTitle = previous.rootTitle
+    target.rootYear = previous.rootYear
+    target.rootFormat = previous.rootFormat
+    target.rootEpisodes = previous.rootEpisodes
+    target.rootImages = previous.rootImages
+    target.memberIds = [...new Set([...target.memberIds, ...previous.memberIds])]
+    target.rootCheckedAt = previous.rootCheckedAt
+  }
+  await resolveSeriesRoots(walk, options)
+}
+
 /** Map AniList's explicit spoiler flags into a conservative source-neutral franchise payload. */
 export function aniListFranchiseEnrichment(
   items: AniListMediaEnrichment[],
@@ -109,22 +248,9 @@ export function aniListFranchiseEnrichment(
   const themes = [...new Set([...safeTags, ...genres])].slice(0, 10)
   const adultValues = items.map((item) => item.isAdult).filter((value): value is boolean => value != null)
 
-  const relatedCandidates = items
-    .flatMap((item) => item.recommendations?.nodes ?? [])
-    .filter(
-      (node) =>
-        node.mediaRecommendation?.type === 'ANIME' && !memberIds.has(node.mediaRecommendation.id),
-    )
-    .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
-  const seenRelated = new Set<number>()
-  const related: RelatedTitle[] = []
-  for (const node of relatedCandidates) {
-    const candidate = node.mediaRecommendation
-    if (!candidate || seenRelated.has(candidate.id)) continue
-    const title = candidate.title.english || candidate.title.romaji
-    if (!title) continue
-    seenRelated.add(candidate.id)
-    related.push({
+  const related: RelatedTitle[] = rankedAniListRecommendations(items, memberIds)
+    .slice(0, ANILIST_RELATED_TITLES)
+    .map(({ media: candidate, rating, title }) => ({
       source: 'anilist',
       externalId: candidate.id,
       franchiseId: null,
@@ -134,10 +260,8 @@ export function aniListFranchiseEnrichment(
         portrait: candidate.coverImage.extraLarge ?? candidate.coverImage.large ?? null,
         landscape: candidate.bannerImage ?? null,
       },
-      score: node.rating ?? null,
-    })
-    if (related.length >= 10) break
-  }
+      score: rating,
+    }))
 
   return {
     level: 'full',
@@ -151,9 +275,9 @@ export function aniListFranchiseEnrichment(
   }
 }
 
-function stillFresh(value: FranchiseEnrichment | null | undefined): boolean {
+function stillFresh(value: { level?: string | null; checkedAt?: string | null } | null | undefined): boolean {
   if (value?.level !== 'full') return false
-  const checked = Date.parse(value.checkedAt)
+  const checked = Date.parse(value.checkedAt ?? '')
   return Number.isFinite(checked) && checked > Date.now() - REFRESH_AFTER_MS
 }
 
@@ -177,6 +301,8 @@ export async function refreshFranchiseEnrichment(
     force?: boolean
     anilistRequest?: AniListRequestOptions
     tmdbRequest?: TmdbRequestOptions
+    /** Awaited before every AniList request (background sweeps space them ~2.1 s apart). */
+    pace?: () => Promise<void>
   } = {},
 ): Promise<boolean> {
   const [row] = await db.select().from(franchise).where(eq(franchise.id, franchiseId)).limit(1)
@@ -192,7 +318,8 @@ export async function refreshFranchiseEnrichment(
       .update(franchise)
       .set({ enrichment: value, artwork, updatedAt: new Date() })
       .where(eq(franchise.id, franchiseId))
-    await syncRecommendationEdges(franchiseId, value.related)
+    const reco = tmdbRecommendationTargets(show)
+    await syncRecommendationEdges(franchiseId, reco.edges, reco.targets)
     return true
   }
 
@@ -217,14 +344,14 @@ export async function refreshFranchiseEnrichment(
     .filter((id): id is number => id != null)
     .filter((id, index, all) => all.indexOf(id) === index)
     .slice(0, 3)
+  await options.pace?.()
   const enriched = await fetchEnrichmentByIds(representativeIds, options.anilistRequest)
   if (enriched.length === 0) return false
 
-  const value = aniListFranchiseEnrichment(
-    enriched,
-    row.genres ?? [],
-    new Set(members.map((item) => item.mediaId)),
-  )
+  const memberIds = new Set(members.map((item) => item.mediaId))
+  const value = aniListFranchiseEnrichment(enriched, row.genres ?? [], memberIds)
+  const reco = aniListRecommendationTargets(enriched, memberIds)
+  await attachSeriesRoots(reco.starts, { request: options.anilistRequest, pace: options.pace })
   // TMDB is metadata-only for anime. Merge fallback fields from the row AT UPDATE TIME rather than
   // the snapshot read above: Search queues both enrichers together, and a read/modify/write here
   // could otherwise erase a trailer that arrived while the AniList request was in flight.
@@ -237,7 +364,7 @@ export async function refreshFranchiseEnrichment(
     )`,
     updatedAt: new Date(),
   }).where(eq(franchise.id, franchiseId))
-  await syncRecommendationEdges(franchiseId, value.related)
+  await syncRecommendationEdges(franchiseId, reco.edges, reco.targets)
   return true
 }
 
@@ -246,6 +373,48 @@ export function enqueueFranchiseEnrichment(franchiseId: string): void {
   queue.enqueue(`franchise:${franchiseId}`, async () => {
     await refreshFranchiseEnrichment(franchiseId)
   })
+}
+
+/** Franchises (of `ids`) that already have a recommendation list in the ranked shape. */
+async function withRankedList(ids: string[]): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  const rows = await db
+    .selectDistinct({ franchiseId: recommendationEdges.franchiseId })
+    .from(recommendationEdges)
+    .where(and(inArray(recommendationEdges.franchiseId, ids), isNotNull(recommendationEdges.rank)))
+  return new Set(rows.map((row) => row.franchiseId))
+}
+
+/**
+ * A newly followed show must vote at once: when it has no ranked recommendation list (never
+ * enriched, or enriched before lists were ranked), refresh it now rather than after the weekly
+ * cadence says its enrichment is stale.
+ */
+export function enqueueRecommendationRefresh(franchiseId: string): void {
+  queue.enqueue(`recommendations:${franchiseId}`, async () => {
+    if ((await withRankedList([franchiseId])).has(franchiseId)) return
+    const [row] = await db
+      .select({ source: franchise.source, level: enrichmentLevel, related: enrichmentRelated })
+      .from(franchise)
+      .where(eq(franchise.id, franchiseId))
+      .limit(1)
+    if (!row || (row.source === 'tmdb' && !tmdbEnabled()) || !needsRankedList(row)) return
+    await refreshFranchiseEnrichment(franchiseId, { force: true })
+  })
+}
+
+const enrichmentLevel = sql<string | null>`${franchise.enrichment}->>'level'`
+const enrichmentCheckedAt = sql<string | null>`${franchise.enrichment}->>'checkedAt'`
+const enrichmentRelated = sql<number>`jsonb_array_length(coalesce(${franchise.enrichment}->'related', '[]'::jsonb))`.mapWith(Number)
+
+/**
+ * For a show with no ranked list: was it never read in the ranked shape? The show page's `related`
+ * is written by the same refresh as the ranked edges, so thin enrichment, or related titles with no
+ * ranked edge behind them, mean an old-shape read. Full enrichment with no related titles means the
+ * catalogue genuinely recommends nothing — not a reason to read it again.
+ */
+function needsRankedList(row: { level: string | null; related: number }): boolean {
+  return row.level !== 'full' || row.related > 0
 }
 
 /**
@@ -258,19 +427,29 @@ export async function refreshSubscribedAniListEnrichment(limit = 25): Promise<{
   refreshed: number
 }> {
   const candidates = await db
-    .selectDistinct({ id: franchise.id, enrichment: franchise.enrichment })
+    .selectDistinct({ id: franchise.id, level: enrichmentLevel, checkedAt: enrichmentCheckedAt, related: enrichmentRelated })
     .from(subscriptions)
     .innerJoin(franchise, eq(franchise.id, subscriptions.franchiseId))
     .where(eq(franchise.source, 'anilist'))
-    .limit(100)
-  const stale = candidates.filter((row) => !stillFresh(row.enrichment)).slice(0, limit)
+  // Stalest first, so a capped night always makes progress on the oldest rows; a show whose list
+  // predates the ranked shape counts as stale (and goes first) whatever its enrichment date says.
+  const ranked = await withRankedList(candidates.map((row) => row.id))
+  const unranked = (row: (typeof candidates)[number]) => !ranked.has(row.id) && needsRankedList(row)
+  const age = (row: (typeof candidates)[number]) => (unranked(row) ? 0 : Date.parse(row.checkedAt ?? '') || 0)
+  const stale = candidates
+    .filter((row) => unranked(row) || !stillFresh(row))
+    .sort((a, b) => age(a) - age(b))
+    .slice(0, limit)
   let checked = 0
   let refreshed = 0
   let consecutiveMisses = 0
+  // Every AniList request — the enrichment fetch and any series-root walk level — is spaced.
+  const pace = createPacer(ANILIST_BACKGROUND_INTERVAL_MS)
   for (const row of stale) {
     checked++
     const didRefresh = await refreshFranchiseEnrichment(row.id, {
       anilistRequest: { maxRetries: 1, timeoutMs: 10_000 },
+      pace,
     })
     if (didRefresh) {
       refreshed++
@@ -279,9 +458,45 @@ export async function refreshSubscribedAniListEnrichment(limit = 25): Promise<{
       consecutiveMisses++
       if (consecutiveMisses >= 3) break
     }
-    await new Promise((resolve) => setTimeout(resolve, ANILIST_BACKGROUND_INTERVAL_MS))
   }
   return { checked, refreshed }
+}
+
+/**
+ * Nightly: re-read the TMDB recommendation list of every followed TV show whose list is older than
+ * a day. The hourly TV refresh rewrites these shows' enrichment (so the 7-day staleness rule never
+ * fires for them) but not their recommendation edges; before this job TV lists only refreshed when
+ * a search or a show page happened to trigger it. One TMDB request per show, four at a time.
+ */
+export async function refreshSubscribedTmdbRecommendations(limit = 200): Promise<{
+  checked: number
+  refreshed: number
+}> {
+  if (!tmdbEnabled()) return { checked: 0, refreshed: 0 }
+  const followed = await db
+    .selectDistinct({ id: franchise.id })
+    .from(subscriptions)
+    .innerJoin(franchise, eq(franchise.id, subscriptions.franchiseId))
+    .where(eq(franchise.source, 'tmdb'))
+  if (followed.length === 0) return { checked: 0, refreshed: 0 }
+  const ids = followed.map((row) => row.id)
+  const listed = await db
+    .select({ franchiseId: recommendationEdges.franchiseId, checkedAt: max(recommendationEdges.checkedAt) })
+    .from(recommendationEdges)
+    .where(inArray(recommendationEdges.franchiseId, ids))
+    .groupBy(recommendationEdges.franchiseId)
+  const freshAfter = Date.now() - TMDB_RECOMMENDATIONS_REFRESH_MS
+  const fresh = new Set(listed.filter((row) => (row.checkedAt?.getTime() ?? 0) > freshAfter).map((row) => row.franchiseId))
+  const due = ids.filter((id) => !fresh.has(id)).slice(0, limit)
+  const results = await mapWithConcurrency(due, 4, async (id) => {
+    try {
+      return await refreshFranchiseEnrichment(id, { force: true, tmdbRequest: { maxRetries: 2, timeoutMs: 10_000 } })
+    } catch (error) {
+      console.warn(`TMDB recommendations refresh failed (${id}):`, error instanceof Error ? error.message : error)
+      return false
+    }
+  })
+  return { checked: due.length, refreshed: results.filter(Boolean).length }
 }
 
 /** Resolve related provider ids to local franchise ids in two batched reads. */

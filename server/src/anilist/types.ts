@@ -71,16 +71,56 @@ export interface AniListCharacterEdge {
   voiceActors: AniListPerson[]
 }
 
+/** A related node as the recommendation ranker needs it: identity, kind and state, no payload. */
+export interface AniListRelatedNode {
+  id: number
+  type: 'ANIME' | 'MANGA'
+  format: MediaFormat | null
+  status?: MediaStatus | null
+  season?: string | null
+  seasonYear?: number | null
+}
+
+export interface AniListRecommendedMedia {
+  id: number
+  type: 'ANIME' | 'MANGA'
+  title: { romaji: string | null; english: string | null }
+  coverImage: { extraLarge: string | null; large: string | null }
+  bannerImage: string | null
+  seasonYear: number | null
+  // The ranker's facts (recommendation_targets). Optional: older payloads/tests omit them.
+  format?: MediaFormat | null
+  status?: MediaStatus | null
+  episodes?: number | null
+  averageScore?: number | null
+  meanScore?: number | null
+  popularity?: number | null
+  genres?: string[] | null
+  isAdult?: boolean | null
+  countryOfOrigin?: string | null
+  season?: string | null
+  startDate?: { year: number | null; month: number | null; day: number | null } | null
+  /** One level: enough to see a season's prequel/parent, its spin-offs and an announced sequel. */
+  relations?: { edges: { relationType: RelationType; node: AniListRelatedNode }[] } | null
+}
+
 export interface AniListRecommendation {
   rating: number | null
-  mediaRecommendation: {
-    id: number
-    type: 'ANIME' | 'MANGA'
-    title: { romaji: string | null; english: string | null }
-    coverImage: { extraLarge: string | null; large: string | null }
-    bannerImage: string | null
-    seasonYear: number | null
-  } | null
+  mediaRecommendation: AniListRecommendedMedia | null
+}
+
+/** The slim node the series-root walk fetches (recommendationRoots.ts). */
+export interface AniListRootNode {
+  id: number
+  format: MediaFormat | null
+  status: MediaStatus | null
+  episodes: number | null
+  season: string | null
+  seasonYear: number | null
+  title: { romaji: string | null; english: string | null }
+  coverImage: { extraLarge: string | null; large: string | null }
+  bannerImage: string | null
+  relations: { edges: { relationType: RelationType; node: AniListRelatedNode }[] } | null
 }
 
 /** Expensive fields fetched only by background/detail enrichment, never provider typeahead. */

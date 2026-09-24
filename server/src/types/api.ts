@@ -409,12 +409,59 @@ export interface UserPreferences {
   updatedAt: string | null
 }
 
-export interface DiscoveryItem {
-  title: RelatedTitle
-  because: { franchiseId: string; title: string }
-  reason: string
+/**
+ * Why a title is recommended, in the user's own terms (see docs/api-contract.md):
+ * - `consensus` — several of the user's shows point at it ("Like A and B", "Like A and 4 more of yours")
+ * - `finished` / `watching` / `watched` — one show, named by what the user did with it
+ * - `planned` — one show that is only on the user's list ("Like A, on your list")
+ * - `world` — a separate work from the same universe as a show the user has ("From the world of A")
+ */
+export type RecommendationReasonKind = 'consensus' | 'finished' | 'watching' | 'watched' | 'planned' | 'world'
+
+export interface RecommendationReason {
+  kind: RecommendationReasonKind
+  /**
+   * The user's shows behind the reason, strongest vote first (display titles — the short form the
+   * app uses, e.g. "Re:ZERO", never "Re:ZERO -Starting Life in Another World-"). One entry for a
+   * single-show reason and for `world`; up to three when `count` >= 2, so the client can choose
+   * which to name by Today's state. A Planned show with no progress never comes first while
+   * another show qualifies.
+   */
+  seeds: { franchiseId: string; title: string }[]
+  /** How many of the user's shows point at this title (>= seeds.length). */
+  count: number
+}
+
+export interface RecommendationItem {
+  /** Stable per target: `${source}:${externalId}` of the canonical target (AniList: the series root). */
+  key: string
+  /** The local franchise when materialised (a tap opens it); null otherwise. */
+  franchiseId: string | null
+  source: MediaSource
+  externalId: number
+  /** The series' display title (English when available, else romaji; never a "Season 4" title). */
+  title: string
+  year: number | null
+  images: ArtworkSet
+  /** The materialised franchise's gallery (logos, titled portraits) when franchiseId != null. */
+  artwork: ArtworkGallery | null
+  /** TV | ONA | … — series only; films/OVA/specials/music/TV_SHORT are never served. */
+  format: string | null
+  episodes: number | null
+  airing: boolean
+  genres: string[]
+  reason: RecommendationReason
   score: number
 }
+
+/** `GET /me/recommendations`. Deterministic for (user, UTC calendar day). */
+export interface RecommendationsResponse {
+  items: RecommendationItem[]
+  /** ms epoch */
+  generatedAt: number
+}
+
+export type RecommendationFeedbackKind = 'dismissed' | 'seen'
 
 export interface AnnouncementObservationView {
   id: string

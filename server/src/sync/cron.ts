@@ -1,9 +1,14 @@
 import cron from 'node-cron'
 import { env } from '../env.js'
 import { refreshSubscribedNews } from '../news/service.js'
-import { refreshSubscribedAniListEnrichment } from '../services/catalogEnrichment.js'
+import {
+  refreshSubscribedAniListEnrichment,
+  refreshSubscribedTmdbRecommendations,
+} from '../services/catalogEnrichment.js'
+import { materialiseTopRecommendations } from '../services/recommendations.js'
 import { refreshAnimeMetadataFallback } from '../services/animeVideoFallback.js'
 import { refreshPreferredAvailability } from '../services/watchAvailability.js'
+import { clampUnairedProgress } from '../services/library.js'
 import { tmdbEnabled } from '../tmdb/client.js'
 import {
   attachNewSeasons,
@@ -21,8 +26,21 @@ export function startCron(): void {
   if (started) return
   started = true
 
+  // The unaired-season progress repair (`clampUnairedProgress`): once at boot, then hourly — a
+  // no-op once the rows are clean.
+  const repairUnaired = async () => {
+    try {
+      const n = await clampUnairedProgress()
+      if (n > 0) console.log(`[cron] clampUnairedProgress: ${n} rows`)
+    } catch (err) {
+      console.error('[cron] clampUnairedProgress failed:', (err as Error).message)
+    }
+  }
+  void repairUnaired()
+
   // Hourly: keep airing schedules + "out now" fresh (both sources).
   cron.schedule('0 * * * *', async () => {
+    await repairUnaired()
     try {
       const n = await refreshAiring()
       console.log(`[cron] refreshAiring: ${n} releasing media`)
@@ -79,13 +97,38 @@ export function startCron(): void {
   })
 
   // Daily 04:15: fill graph-heavy anime metadata for followed titles. This is separately caught
-  // because AniList outages must not suppress the 05:00 announcement researcher.
+  // because AniList outages must not suppress the 05:00 announcement researcher. It also rewrites
+  // each refreshed show's ranked recommendation list (and its series-root walk).
   cron.schedule('15 4 * * *', async () => {
     try {
       const { checked, refreshed } = await refreshSubscribedAniListEnrichment()
       console.log(`[cron] anime enrichment: checked ${checked}, refreshed ${refreshed}`)
     } catch (err) {
       console.error('[cron] anime enrichment failed:', (err as Error).message)
+    }
+  })
+
+  // Daily 04:20: re-read followed TV shows' TMDB recommendation lists (one request per show). The
+  // hourly TV refresh keeps their seasons fresh but never rewrites their recommendation edges.
+  if (tmdbEnabled()) {
+    cron.schedule('20 4 * * *', async () => {
+      try {
+        const { checked, refreshed } = await refreshSubscribedTmdbRecommendations()
+        console.log(`[cron] TV recommendations: checked ${checked}, refreshed ${refreshed}`)
+      } catch (err) {
+        console.error('[cron] TV recommendations failed:', (err as Error).message)
+      }
+    })
+  }
+
+  // Daily 04:40, after both refreshes: build show pages for every user's top 12 recommendations
+  // (today's and tomorrow's lists, capped at 40 titles) so a tap opens a real page instantly.
+  cron.schedule('40 4 * * *', async () => {
+    try {
+      const { users, due, materialised, failed } = await materialiseTopRecommendations({ perUser: 12, cap: 40 })
+      console.log(`[cron] recommendation pages: ${users} users, ${due} due, ${materialised} built, ${failed} failed`)
+    } catch (err) {
+      console.error('[cron] recommendation pages failed:', (err as Error).message)
     }
   })
 
