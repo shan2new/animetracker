@@ -29,8 +29,22 @@ import SwiftUI
 
 // MARK: - Debug
 
-/// The two launch arguments this screen keeps, in the family `-scheduleFilter` already uses.
+/// Capture-only launch arguments, in the family `-scheduleFilter` already uses.
 enum ScheduleDebug {
+    /// Start on an existing day for screenshot QA without tapping or changing account data.
+    /// `-scheduleCaptureDay -1` shows yesterday's aired cards and watched controls.
+    static var captureDay: Int? {
+        #if DEBUG
+        let arguments = CommandLine.arguments
+        guard let flag = arguments.firstIndex(of: "-scheduleCaptureDay"),
+              arguments.indices.contains(flag + 1) else { return nil }
+        // UserDefaults treats negative offsets as another flag, not the requested day.
+        return Int(arguments[flag + 1])
+        #else
+        return nil
+        #endif
+    }
+
     /// `-scheduleDemoStates 1` — the test account has no AIRED-AND-UNWATCHED airing (both past
     /// slots are watched, and Mushoku is `planned`, so its four are correctly off the calendar),
     /// so the ladder cannot be photographed with all three rungs on real data. This draws the most
@@ -75,7 +89,7 @@ enum ScheduleDebug {
 ///
 /// The urgency also stops being inverted: the ring, not the clock, is what the accent buys on an
 /// aired row, and a watched row gives up its picture's brightness rather than a tenth of its alpha.
-enum AiringState {
+enum AiringState: Equatable {
     case upcoming
     case toWatch
     case watched
@@ -131,6 +145,259 @@ struct AiringStateControl: View {
             }
         }
         .frame(width: 44)
+    }
+}
+
+// MARK: - Weekly rail
+
+/// The at-rest calendar: one quiet, borderless week. Release marks are neutral dashes, not
+/// badges; the only filled object is the selected date. The week follows the day being read, so
+/// yesterday naturally reveals the previous week without adding paging chrome.
+struct ScheduleWeekRail: View {
+    let todayNoon: Int64
+    let selected: Int
+    let counts: [Int: Int]
+    /// Days with something still to come or still to watch — their dashes are amber.
+    var live: Set<Int> = []
+    let window: ClosedRange<Int>
+    /// The Later group's days — known, as on the month grid.
+    var extraDays: Set<Int> = []
+    let onPick: (Int) -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var weekStart: Int {
+        let selectedNoon = todayNoon + Int64(selected) * Formatting.D
+        return selected - Formatting.localParts(selectedNoon).wd
+    }
+
+    private var offsets: [Int] { Array(weekStart..<(weekStart + 7)) }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(offsets, id: \.self) { offset in
+                ScheduleWeekDay(
+                    noon: todayNoon + Int64(offset) * Formatting.D,
+                    isSelected: offset == selected,
+                    isToday: offset == 0,
+                    isLive: live.contains(offset),
+                    releaseCount: counts[offset] ?? 0,
+                    isKnown: window.contains(offset) || extraDays.contains(offset),
+                    action: { onPick(offset) }
+                )
+            }
+        }
+        .padding(.horizontal, ThemeSpace.x3)
+        .frame(height: 82)
+        .id(weekStart)
+        .transition(.opacity)
+        .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: weekStart)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Copy.Schedule.ticker)
+    }
+}
+
+private struct ScheduleWeekDay: View {
+    let noon: Int64
+    let isSelected: Bool
+    var isToday: Bool = false
+    var isLive: Bool = false
+    let releaseCount: Int
+    let isKnown: Bool
+    let action: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// At the accessibility sizes a seventh of the screen cannot hold "MON" — the rail printed
+    /// "M…" beside "TUE" (review i3) — so the locale's one-letter form takes over.
+    private var weekday: String {
+        let wd = Formatting.localParts(noon).wd
+        return (typeSize.isAccessibilitySize ? Formatting.weekdayLetter(wd) : Formatting.weekdayShort(wd))
+            .localizedUppercase
+    }
+
+    private var numeral: String { "\(Formatting.localParts(noon).d)" }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: ThemeSpace.x1) {
+                Text(weekday)
+                    .type(ThemeType.caption)
+                    .foregroundStyle(isToday ? ThemeColor.accent : ThemeColor.textSecondary)
+                    .lineLimit(1)
+
+                ZStack {
+                    // The selection is a quiet disc; TODAY is the amber numeral — amber already
+                    // means "today" in this control, so it cannot also mean "selected".
+                    if isSelected {
+                        Circle().fill(ThemeColor.surfaceFloating)
+                    }
+                    Text(numeral)
+                        .type(ThemeType.time)
+                        .foregroundStyle(isToday ? ThemeColor.accent
+                                         : (releaseCount > 0 || isSelected ? ThemeColor.textPrimary : ThemeColor.textSecondary))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                .frame(width: 36, height: 36)
+
+                HStack(spacing: ThemeSpace.x1) {
+                    ForEach(0..<min(2, releaseCount), id: \.self) { _ in
+                        Capsule()
+                            .fill(isLive ? ThemeColor.accent : ThemeColor.textTertiary)
+                            .frame(width: 14, height: 3)
+                    }
+                }
+                .frame(height: 3)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(CalendarCellPressStyle())
+        .disabled(!isKnown)
+        .opacity(isKnown ? 1 : 0.32)
+        .accessibilityLabel(Date(timeIntervalSince1970: Double(noon) / 1000)
+            .formatted(.dateTime.weekday(.wide).day().month(.wide)))
+        .accessibilityValue(releaseCount == 0 ? Copy.Schedule.noEpisodes : Copy.episodes(releaseCount))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+// MARK: - Spacious schedule cards
+
+/// One date heading above its artwork cards. Relative language is reserved for today, tomorrow,
+/// and yesterday; every other group is simply a weekday and numeral.
+struct ScheduleDayHeading: View {
+    let relative: String?
+    let weekday: String
+    let numeral: String
+    /// Half the heading's cap height: the dot sits on the capitals' middle, the way a typeset
+    /// middot does. Centred ON the baseline it read as a full stop — "TOMORROW . FRI 25".
+    @ScaledMetric(relativeTo: .body) private var dotLift: CGFloat = 6
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+            if let relative {
+                Text(relative)
+                    .type(ThemeType.bodyEmphasis)
+                    .foregroundStyle(relative == "TODAY" ? ThemeColor.accent : ThemeColor.textSecondary)
+                Circle()
+                    .fill(relative == "TODAY" ? ThemeColor.accent : ThemeColor.textTertiary)
+                    .frame(width: 4, height: 4)
+                    .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + dotLift }
+            }
+            Text("\(weekday.localizedUppercase) \(numeral)")
+                .type(ThemeType.bodyEmphasis)
+                .foregroundStyle(ThemeColor.textPrimary)
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// Landscape identity and the episode/action group share the card's lower edge.
+struct ScheduleAiringCard<Trailing: View>: View {
+    let title: String
+    let episodeText: String
+    let time: String?
+    /// The time is ahead of us — amber, the app's forward-looking fact; an aired time is quiet.
+    var timeIsLead: Bool = false
+    let art: WideArt
+    let poster: String?
+    let name: BillboardName
+    let hasReminder: Bool
+    let zoomID: String
+    @ViewBuilder var trailing: () -> Trailing
+    let action: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private let radius: CGFloat = ThemeRadius.card
+    private var aspectRatio: CGFloat { typeSize.isAccessibilitySize ? 1.05 : 1.65 }
+
+    /// "E24 · 7:30 PM" as ONE text that wraps between words. As an `HStack` of three runs each
+    /// run was squeezed on its own, and at the accessibility sizes the card printed "7:30 P" over
+    /// "M" (review i3); the clock's own space is bound so it never splits.
+    private var facts: Text {
+        var t = Text(episodeText)
+        if let time {
+            // On ART the aired time stays white (20 Sep) — grey read at ~2:1 over a bright key
+            // visual; ahead of us it is amber.
+            t = t + Text(" \u{00B7} ").foregroundStyle(ThemeColor.textTertiary)
+                + Text(time.replacingOccurrences(of: " ", with: "\u{00A0}")).monospacedDigit()
+                    .foregroundStyle(timeIsLead ? ThemeColor.accent : ThemeColor.textPrimary)
+        }
+        if hasReminder {
+            t = t + Text("\u{00A0}\u{00A0}") + Text(Image(systemName: "bell.fill")).font(.system(size: 10, weight: .semibold))
+        }
+        return t
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        Color.clear
+            .aspectRatio(aspectRatio, contentMode: .fit)
+            .overlay {
+                GeometryReader { geometry in
+                    ZStack(alignment: .bottom) {
+                        Button(action: action) {
+                            ArtworkScene(art: art, poster: poster, name: name, title: title)
+                                .contentShape(shape)
+                        }
+                        .buttonStyle(OverArtPressStyle())
+                        .accessibilityLabel(title)
+                        .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+
+                        // 196: the "Mark as watched" capsule is ~188 pt on one line; at 164 it
+                        // overflowed the column and ran into the card's edge with no inset (review
+                        // i4, N6). The logo gives way instead.
+                        ArtworkSceneCaption(name: name, title: title, contentMinWidth: 196,
+                                            protection: HeroProtection.strength(lightness: PaletteCache.shared.lightness(for: art.url)),
+                                            typedName: !art.portraitSource) {
+                            Button(action: action) {
+                                facts
+                                    .type(ThemeType.cardFact)
+                                    .foregroundStyle(ThemeColor.textPrimary)
+                                    .multilineTextAlignment(typeSize.isAccessibilitySize ? .leading : .center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    // The contact shadow every fact on art carries (review i4, N1).
+                                    .shadow(.art)
+                            }
+                            .buttonStyle(.plain)
+                        } actions: {
+                            trailing()
+                        }
+                        .padding(ThemeSpace.x4)
+                        .padding(.leading, art.portraitSource && !name.hasGraphicLogo ? 140 : 0)
+                        .frame(width: geometry.size.width)
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+            }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
+        .cardShadow(.art, shape: shape)
+        .zoomSource(zoomID)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel([title, episodeText, time].compactMap { $0 }.joined(separator: ", "))
+    }
+}
+
+/// The card's reach-friendly watched toggle. White is the action/state system here; amber stays
+/// out of the content surface and remains available to the app's truly exceptional states.
+struct ScheduleWatchToggle: View {
+    let watched: Bool
+    let title: String
+    let episode: Int
+    let action: () -> Void
+
+    var body: some View {
+        WatchedArtworkButton(watched: watched, action: action)
+        .accessibilityLabel(watched
+            ? "Mark \(Copy.episode(episode)) of \(title) as unwatched"
+            : "Mark \(Copy.episode(episode)) of \(title) as watched")
+        .accessibilityValue(watched ? "Watched" : "Not watched")
     }
 }
 
@@ -414,6 +681,9 @@ struct ScheduleMonthGrid: View {
     let selected: Int
     /// The days the feed can actually answer for.
     let window: ClosedRange<Int>
+    /// Days past the window that the feed's Later group lists — known too, since the feed draws
+    /// them (review i3: October 19 was disabled "nothing known" on the day Later said Bleach).
+    var extraDays: Set<Int> = []
     /// Which month is on screen, as a day offset from today of any day inside it.
     @Binding var monthAnchor: Int
     /// The tallest the panel may be — the feed's viewport, less the room the grid should not eat.
@@ -559,7 +829,6 @@ struct ScheduleMonthGrid: View {
         let reachable = target.map { monthIntersectsWindow($0) } ?? false
         return Button {
             guard let target else { return }
-            FeedbackCoordinator.fire(.selection)
             withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
                 monthAnchor = target
             }
@@ -589,7 +858,9 @@ struct ScheduleMonthGrid: View {
               let firstOffset = cal.dateComponents([.day], from: cal.startOfDay(for: date(0)),
                                                    to: cal.startOfDay(for: first)).day
         else { return false }
-        return firstOffset <= window.upperBound && firstOffset + range.count - 1 >= window.lowerBound
+        let last = firstOffset + range.count - 1
+        return (firstOffset <= window.upperBound && last >= window.lowerBound)
+            || extraDays.contains { $0 >= firstOffset && $0 <= last }
     }
 
     /// One day. Apple Calendar's anatomy, which is the one every reader already knows: the numeral
@@ -601,10 +872,9 @@ struct ScheduleMonthGrid: View {
         let ts = todayNoon + Int64(offset) * Formatting.D
         let isToday = offset == 0
         let isSelected = offset == selected
-        let known = window.contains(offset)
+        let known = window.contains(offset) || extraDays.contains(offset)
         let n = counts[offset] ?? 0
         return Button {
-            FeedbackCoordinator.fire(.selection)
             onPick(offset)
         } label: {
             VStack(spacing: 3) {

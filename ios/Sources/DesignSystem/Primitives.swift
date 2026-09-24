@@ -264,11 +264,15 @@ struct SecondaryButtonStyle2: ButtonStyle {
             .foregroundStyle(ThemeColor.textPrimary)
             .frame(maxWidth: .infinity, minHeight: 44)
             .padding(.horizontal, 18)
-            .background(configuration.isPressed ? ThemeColor.surfacePressed : ThemeColor.surfaceFloating, in: Capsule())
+            // TRANSLUCENT white, not the blue-grey `surfaceFloating` (24 Sep): on a show page in
+            // its own colour the opaque slab was a cold, disabled-looking button — rgb(44,46,54)
+            // on Thrones' umber (critique). White at 0.13 takes whatever ground it sits on; over
+            // the canvas it composites to the same depth the slab had.
+            .background(ThemeColor.textPrimary.opacity(configuration.isPressed ? 0.20 : 0.13), in: Capsule())
             // `strokeBorder`, not `stroke`: a centred 1-pt line straddles the capsule's edge and
             // renders as a soft 2-px smear on the outside of the shape. A CONTROL is allowed a
             // full-perimeter edge (a container is not) — but it has to be a crisp one.
-            .overlay(Capsule().strokeBorder(ThemeColor.stroke, lineWidth: 1))
+            .overlay(Capsule().strokeBorder(ThemeColor.textPrimary.opacity(0.16), lineWidth: 1))
             .pressFeedback(configuration.isPressed, reduceMotion: reduceMotion)
     }
 }
@@ -676,7 +680,8 @@ struct MediaRow<Trailing: View>: View {
                     if let meta {
                         // `metaLead`: a forward fact riding the grey line in accent, one line.
                         (Text(meta).foregroundStyle(ThemeColor.textSecondary)
-                         + (metaLead.map { Text(" \u{00B7} ").foregroundStyle(ThemeColor.textSecondary) + Text($0).foregroundStyle(ThemeColor.accent) } ?? Text("")))
+                         // The separator binds to the fact it introduces (no dangling "Planned ·").
+                         + (metaLead.map { Text(" \u{00B7}\u{00A0}").foregroundStyle(ThemeColor.textSecondary) + Text($0).foregroundStyle(ThemeColor.accent) } ?? Text("")))
                             .type(ThemeType.rowMeta)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -755,13 +760,16 @@ struct ProgressBar: View {
     /// and hidden; a label set on a hidden element from outside was silently dropped, which is
     /// how Today's hero came to say its count to nobody.
     var spoken: String? = nil
+    /// Laid on ARTWORK (a billboard's lockup): white on a white track, the way every streaming
+    /// app draws progress over a picture — amber stays the action's there.
+    var onArt: Bool = false
 
     var body: some View {
         GeometryReader { proxy in
             let ratio = min(1, max(0, value))
             ZStack(alignment: .leading) {
-                Capsule().fill(ThemeColor.strokeStrong)
-                Capsule().fill(ThemeColor.accent)
+                Capsule().fill(onArt ? ThemeColor.textPrimary.opacity(0.22) : ThemeColor.strokeStrong)
+                Capsule().fill(onArt ? ThemeColor.textPrimary.opacity(0.92) : ThemeColor.accent)
                     .frame(width: max(3, proxy.size.width * ratio))
             }
         }
@@ -829,6 +837,11 @@ struct ShelfCard: View {
                         // ellipsizes; a fixed vertical size is what makes the range mean "up to
                         // two" rather than "whatever fits".
                         .fixedSize(horizontal: false, vertical: true)
+                    // In a GRID the row gives every card the tallest card's height; the spacer
+                    // takes the difference, so every caption in the row sits on one line under
+                    // the tallest title — a third title line used to push only its own caption
+                    // 16 pt down (review, 23 Sep).
+                    if reserveTitleLines { Spacer(minLength: 0) }
                     if let caption {
                         HStack(alignment: .firstTextBaseline, spacing: 5) {
                             if airing { LiveDot(fresh: airingFresh) }
@@ -843,14 +856,20 @@ struct ShelfCard: View {
                             .allowsTightening(true)
                             .truncationMode(.tail)
                         }
+                        // Its own height, always: in Search's grid a three-line title's card was
+                        // squeezed and the caption took the squeeze through its scale floor —
+                        // "Anime · 2026" a size smaller than its neighbours' (review, 23 Sep). The
+                        // scale floor is for WIDTH only.
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                // The poster's width — except at accessibility sizes, where a one-column grid
-                // hands the card the whole row and the caption should not wrap "Anime / · 1999"
-                // inside a 112-pt column beside it.
-                .frame(width: typeSize.isAccessibilitySize ? nil : slot.size.width, alignment: .leading)
-                .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
+                // The poster's width, at every size: every ShelfCard now sits in a horizontal
+                // shelf (grids fold to rows at the accessibility sizes), and an unfixed width
+                // spread Today's AX shelf 88 pt apart, each card as wide as its unwrapped title
+                // (review, 23 Sep). The title wraps inside the poster's width instead.
+                .frame(width: slot.size.width, alignment: .leading)
             }
+            .frame(maxHeight: reserveTitleLines ? .infinity : nil, alignment: .top)
             .contentShape(Rectangle())
         }
         .buttonStyle(RowPressStyle(radius: slot.radius))
@@ -1491,6 +1510,15 @@ enum HeroProtection {
 
     /// The ground dim behind a composited cover, at this strength.
     static func groundDim(_ strength: Double) -> Double { 0.28 * strength }
+
+    /// The local scrim under a WHOLE poster's lockup: `scrim` over dark art, rising to
+    /// `scrimStrong` over bright art (review i2: "Season 4 · Episode 16" measured 3.1:1 over
+    /// Emilia's white dress under the fixed 0.56 — every filled billboard already scaled its
+    /// protection with the picture; the poster stage did not).
+    static func posterScrim(_ strength: Double) -> Color {
+        let t = max(0, min(1, (strength - least) / (full - least)))
+        return Color.black.opacity(0.56 + (0.72 - 0.56) * t)
+    }
 }
 
 /// A cinematic, edge-to-edge art header with content laid over its lower third.
@@ -1629,14 +1657,21 @@ struct ArtHeader<Overlay: View>: View {
 /// The billboard's NAME: the show's logo treatment — the catalogue's title image, Netflix's and
 /// Disney+'s billboard grammar — where the gallery has one AND it can be drawn at the headline's
 /// mass, else the name set in type. The art under it is the textless poster where the gallery
-/// has one, so the name is never on the screen twice in the same hand. Accessibility sizes
-/// always set the name in type — a logo cannot grow with the reader's text.
+/// has one, so the name is never on the screen twice in the same hand. Accessibility sizes set
+/// the name in type by default; art-led poster surfaces may keep the logo and provide the full
+/// spoken title through their accessibility label.
 struct HeroTitle: View {
     let text: String
     var name: BillboardName = .type
     var font: TypeToken = ThemeType.displayXL
     var lineLimit: Int? = 2
     var minimumScale: CGFloat = 0.82
+    /// The space this surface gives the name. Billboards keep the shared default; compact cards
+    /// pass their actual copy run so a logo never clips at a card edge.
+    var copyWidth: CGFloat = ThemeMetrics.billboardCopyWidth
+    var logoHeightLimit: CGFloat = HeroTitle.logoMaxHeight
+    var textAlignment: TextAlignment = .center
+    var usesLogoAtAccessibilitySizes = false
 
     /// The logo's box (5 Sep, settled by the placement spike): within 88 % of the copy's run and
     /// 120 pt — EVERY logo, emblems included. The user liked the show's own logotype as the
@@ -1652,24 +1687,29 @@ struct HeroTitle: View {
     static let logoBottomGap: CGFloat = 8
 
     /// The size a logo of `aspect` is drawn at within a copy run of `copyWidth`.
-    static func logoBox(aspect: CGFloat, copyWidth: CGFloat) -> CGSize? {
+    static func logoBox(aspect: CGFloat, copyWidth: CGFloat,
+                        maxHeight: CGFloat = logoMaxHeight) -> CGSize? {
         guard aspect > 0, copyWidth > 0 else { return nil }
-        let w = min(copyWidth * logoMaxWidthFraction, logoMaxHeight * aspect)
+        let w = min(copyWidth * logoMaxWidthFraction, maxHeight * aspect)
         return CGSize(width: w, height: w / aspect)
     }
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var resolvedLogo: (image: ArtworkImage, size: CGSize)? {
-        guard case .logo(let image) = name, !typeSize.isAccessibilitySize,
+        guard case .logo(let image) = name,
+              usesLogoAtAccessibilitySizes || !typeSize.isAccessibilitySize,
               let w = image.width, let h = image.height, w > 0, h > 0,
-              let size = Self.logoBox(aspect: CGFloat(w) / CGFloat(h), copyWidth: ThemeMetrics.billboardCopyWidth)
+              let size = Self.logoBox(aspect: CGFloat(w) / CGFloat(h), copyWidth: copyWidth,
+                                      maxHeight: logoHeightLimit)
         else { return nil }
         return (image, size)
     }
 
     var body: some View {
-        if let resolvedLogo {
+        if name == .embedded {
+            EmptyView()
+        } else if let resolvedLogo {
             RemoteImageView(url: resolvedLogo.image.url, contentMode: .fit, maxPixel: 1000, alignment: .leading,
                             placeholderHidden: true)
                 .frame(width: resolvedLogo.size.width, height: resolvedLogo.size.height, alignment: .leading)
@@ -1688,7 +1728,7 @@ struct HeroTitle: View {
                 .allowsTightening(true)
                 // The billboard's lockup is CENTRED (5 Sep); a caller that sets the name on a
                 // left axis re-aligns it.
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(textAlignment)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -1744,20 +1784,31 @@ struct HeroBadge: View {
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 4, style: .continuous) }
 
+    /// The NEWS family — a new episode, season or series — wears red; every other state amber.
+    private var isNews: Bool { text.lowercased().hasPrefix("new ") }
+    private var fill: Color { isNews ? ThemeColor.news : ThemeColor.accent }
+    private var fillDeep: Color { isNews ? ThemeColor.newsDeep : ThemeColor.accentPressed }
+
     var body: some View {
         Text(text)
             .type(ThemeType.heroBadge)
             .textCase(.uppercase)
-            .foregroundStyle(ThemeColor.onAccent)
-            .lineLimit(1)
+            .foregroundStyle(isNews ? ThemeColor.onNews : ThemeColor.onAccent)
+            // Grows with the type: a fixed 20-pt strip let AX-XL capitals stand out of the tag
+            // above and below it (review, 23 Sep). Two lines at the accessibility sizes, never a
+            // truncated state.
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 7)
-            .frame(height: 20)
+            .padding(.vertical, 3)
+            .frame(minHeight: 20)
             // A CHIP, not a swatch: the fill carries a top-lit gradient and a hairline rim, so
             // the tag reads as a struck object at rest. This is where the prominence lives —
             // motion cannot be the carrier, because motion has to stop (see `AttentionBeat`).
             .background {
                 shape.fill(
-                    LinearGradient(colors: [ThemeColor.accent.opacity(1), ThemeColor.accentPressed],
+                    LinearGradient(colors: [fill, fillDeep],
                                    startPoint: .top, endPoint: .bottom)
                 )
                 .overlay(shape.strokeBorder(.white.opacity(0.28), lineWidth: 0.5))
@@ -1786,14 +1837,14 @@ struct HeroBadge: View {
             // was invisible on film (6 Sep); an expanding stroke has its own contrast.
             .overlay {
                 if attention && !reduceMotion {
-                    shape.strokeBorder(ThemeColor.accent, lineWidth: 2)
+                    shape.strokeBorder(fill, lineWidth: 2)
                         .opacity(ring ? 0 : 0.9)
                         .scaleEffect(ring ? 1.55 : 1)
                         .allowsHitTesting(false)
                 }
             }
             .scaleEffect(lift ? 1 : 0.9)
-            .shadow(color: ThemeColor.accent.opacity(attention ? 0.45 : 0), radius: 12, y: 2)
+            .shadow(color: fill.opacity(attention ? 0.5 : 0), radius: 12, y: 2)
             .task(id: attention) { await choreograph() }
     }
 
@@ -1999,14 +2050,20 @@ struct HeroCopyScrim: View {
         // and the frame still eases onto canvas.
         let s = strength
         func a(_ full: Double, floor: Double) -> Double { max(full * s, floor) }
+        // The last stretch to full canvas is never shorter than `tail`: with the 0.95 mark
+        // clamped to `land` itself, a short copy (≤ 160 pt, any lockup without actions) put two
+        // stops on one point and the frame ended on a hard seam — (21,36,46) → (0,26,44) in
+        // 1.5 pt on 3 Body Problem (review i4, N4). Every earlier mark is a share of what is left.
+        let tail = min(32, land * 0.2)
+        let body = land - tail
         let marks: [(y: CGFloat, alpha: Double)] = [
             (0, 0),
-            (min(lead * 0.35, land * 0.25), a(0.08, floor: 0)),
-            (min(lead * 0.70, land * 0.50), a(0.28, floor: 0)),
-            (min(lead, land * 0.72), a(0.56, floor: 0.20)),
-            (min(lead + 28, land * 0.84), a(0.72, floor: 0.35)),
-            (min(lead + 72, land * 0.95), a(0.86, floor: 0.55)),
-            (min(lead + 128, land), a(0.95, floor: 0.80)),
+            (min(lead * 0.35, body * 0.25), a(0.08, floor: 0)),
+            (min(lead * 0.70, body * 0.50), a(0.28, floor: 0)),
+            (min(lead, body * 0.72), a(0.56, floor: 0.20)),
+            (min(lead + 28, body * 0.84), a(0.72, floor: 0.35)),
+            (min(lead + 72, body * 0.95), a(0.86, floor: 0.55)),
+            (min(lead + 128, body), a(0.95, floor: 0.80)),
             (land, 1), (h, 1),
         ]
         var out: [Gradient.Stop] = []
@@ -2339,6 +2396,12 @@ struct MarkRing: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse: CGFloat = 1
+    /// The ring grows with the text it sits beside (review i2: at AX-XL Schedule's "18" was the
+    /// one control on the screen that did not). The numeral has an 11-pt floor — it was 9, and 7
+    /// for a three-digit episode, below any legible size — and a three-digit episode draws no
+    /// numeral at all: the row names it, and the label speaks it.
+    @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 22
+    @ScaledMetric(relativeTo: .caption2) private var numeralSize: CGFloat = 11
 
     private var disc: Color {
         if committing { return ThemeColor.accent }
@@ -2367,11 +2430,11 @@ struct MarkRing: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                Circle().fill(disc).frame(width: 22, height: 22)
-                Circle().strokeBorder(ring, lineWidth: 1.5).frame(width: 22, height: 22)
-                if let episode, !marked, !committing, episode < 1000 {
+                Circle().fill(disc).frame(width: diameter, height: diameter)
+                Circle().strokeBorder(ring, lineWidth: 1.5).frame(width: diameter, height: diameter)
+                if let episode, !marked, !committing, episode < 100 {
                     Text("\(episode)")
-                        .font(.system(size: episode < 100 ? 9 : 7, weight: .semibold))
+                        .font(.system(size: min(numeralSize, diameter * 0.5), weight: .semibold))
                         .monospacedDigit()
                         .foregroundStyle(lead ? ThemeColor.accent : ThemeColor.textSecondary)
                         .transition(.opacity)
@@ -2379,10 +2442,10 @@ struct MarkRing: View {
                 // Mounted unconditionally: a conditional insert re-creates `DrawnCheck` and hands
                 // SwiftUI an implicit opacity transition ON TOP of the mask, so the app's signature
                 // motion rendered as a smear instead of a stroke. The mask IS the animation.
-                DrawnCheck(on: marked, size: 12, tint: ink)
+                DrawnCheck(on: marked, size: diameter * 12 / 22, tint: ink)
             }
             .scaleEffect(pulse)
-            .frame(width: 44, height: 44)
+            .frame(width: max(44, diameter + 22), height: max(44, diameter + 22))
             .contentShape(Circle())
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: marked)
             // The settle out of the commit beat, and the accent ring arriving on the next row,
@@ -2414,6 +2477,9 @@ struct MarkSplitButton: View {
     let committed: Bool
     let behind: Int
     let title: String
+    /// Episodes the committed write marked: a batch confirms its COUNT ("5 episodes watched"),
+    /// not the last episode's number (review i5, F4).
+    var committedCount: Int = 1
     let onMark: () -> Void
     let onMarkThrough: (Int) -> Void
     let onMarkAll: () -> Void
@@ -2444,7 +2510,7 @@ struct MarkSplitButton: View {
                     // is no longer disambiguating anything. VoiceOver still hears the episode
                     // (see the accessibility label below). The committed form keeps its number:
                     // "Episode 12 watched" is a receipt.
-                    Text(committed ? Copy.Progress.episodeWatched(episode) : Copy.Action.markAsWatched)
+                    Text(committed ? (committedCount > 1 ? Copy.Toast.batchWatched(committedCount) : Copy.Progress.episodeWatched(episode)) : Copy.Action.markAsWatched)
                         .type(ThemeType.button)
                         // One line, scaled before wrapped: "Mark episode 12 watched" broke into a
                         // two-line capsule beside `Details`. A capsule's label compresses a step;
@@ -2467,7 +2533,7 @@ struct MarkSplitButton: View {
             .allowsHitTesting(!committed)
             .accessibilityRemoveTraits(committed ? .isButton : [])
             .accessibilityLabel(committed
-                                ? Copy.Progress.episodeWatched(episode)
+                                ? (committedCount > 1 ? Copy.Toast.batchWatched(committedCount) : Copy.Progress.episodeWatched(episode))
                                 : "\(Copy.Action.markEpisodeWatched(episode)), \(title)")
 
             if showsMenu {
@@ -2489,7 +2555,9 @@ struct MarkSplitButton: View {
                     }
                 } label: {
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
+                        // Scales with the capsule's own words (review, 23 Sep: a fixed 12 pt
+                        // beside AX-XL type).
+                        .font(.system(.footnote, weight: .semibold))
                         .foregroundStyle(ThemeColor.onAccent)
                         .frame(width: 46, height: 48)
                         .contentShape(Rectangle())
@@ -2578,5 +2646,23 @@ struct SkeletonBlock: View {
         RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(ThemeColor.skeleton)
             .frame(width: width, height: height)
+    }
+}
+
+/// "In your library", on a poster: an amber disc with the check in `onAccent` — the committed-mark
+/// colours, so owned reads as the same kind of fact as watched. 20 pt, never a control.
+struct OwnedMark: View {
+    @ScaledMetric(relativeTo: .caption) private var size: CGFloat = 20
+
+    var body: some View {
+        ZStack {
+            Circle().fill(ThemeColor.accent)
+            Image(systemName: "checkmark")
+                .font(.system(size: size * 0.5, weight: .bold))
+                .foregroundStyle(ThemeColor.onAccent)
+        }
+        .frame(width: size, height: size)
+        .shadow(.art)
+        .accessibilityHidden(true)
     }
 }

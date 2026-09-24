@@ -370,6 +370,7 @@ final class SyncCenter {
 /// The write behind a failed change, in a form that survives a relaunch. Everything the app
 /// writes is one of these four; a change that carries one can be retried from any launch.
 enum WriteIntent: Codable, Equatable, Sendable {
+    case franchiseProgress(franchiseId: String, parts: [FranchiseProgressValue], status: WatchStatus?, removeMembership: Bool)
     case progress(franchiseId: String, mediaId: Int, episodes: Int)
     case status(franchiseId: String, status: String)
     case subscribe(franchiseId: String, title: String, status: String)

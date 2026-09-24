@@ -30,6 +30,19 @@ enum TemporalCopy {
         }
     }
 
+    /// `airs` as a sentence with its verb, for a line that stands alone under an episode's name:
+    /// "Airs today at 8:30 PM" · "Airs Friday at 8:30 PM" · "Airs 30 Sep at 6:30 PM" · "Airs in
+    /// 27 min". A bare "30 Sep at 6:30 PM" under "Aired 16 Sep" and "Aired today" read as a
+    /// fragment (review, 23 Sep).
+    static func airsSentence(at ts: Int64, now: Int64, source: MediaSource) -> String {
+        let bare = airs(at: ts, now: now, source: source)
+        if bare.hasPrefix("Airs ") { return bare }
+        for word in ["Today", "Tomorrow"] where bare.hasPrefix(word) {
+            return "Airs " + word.lowercased() + bare.dropFirst(word.count)
+        }
+        return "Airs " + bare
+    }
+
     /// Compact form for narrow captions: "Today" · "Tomorrow" · "Wednesday" · "Aug 28".
     ///
     /// **The compact form drops the CLOCK. It never drops the day word or a preposition.**
@@ -61,7 +74,8 @@ enum TemporalCopy {
         if source == .anilist {
             if elapsed < 5 * Formatting.minuteMs { return "Aired just now" }
             if elapsed < 60 * Formatting.minuteMs { return "Aired \(Int(elapsed / Formatting.minuteMs)) min ago" }
-            if days == 0 { return "Aired \(Int(elapsed / Formatting.H))h ago" }
+            // ROUNDED, never truncated: 1 h 55 min read "Aired 1h ago" (review, 23 Sep).
+            if days == 0 { return "Aired \(max(1, Int((Double(elapsed) / Double(Formatting.H)).rounded())))h ago" }
         } else if days == 0 {
             return "Aired today"
         }
@@ -75,6 +89,9 @@ enum TemporalCopy {
     static let noDateAnnounced = "No date announced"
     /// "Premieres Oct 2" — an announced first air date.
     static func premieres(_ date: String) -> String { "Premieres \(date)" }
+    /// The same announced date for a show you have already been watching — the Library's verb
+    /// ("Returns 3 Oct"), so a shelf and a show page never name one date two ways.
+    static func returnsOn(_ date: String) -> String { "Returns \(date)" }
 
     /// "Returns tomorrow" · "Returns Friday" · "Returns Oct 2" · "Returns in 2027" · "No date announced".
     /// A date that has passed says so ("Returned Jul 5") — the catalogue's note can outlive the

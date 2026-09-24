@@ -5,6 +5,11 @@ import Foundation
 
 extension Copy {
     enum Search {
+        /// The scene card's labelled add control (20 Sep): the command, then the state.
+        static let add = "Add"
+        /// An add that asks where you are first (an airing show — its page raises the question).
+        static let addAsks = "Add\u{2026}"
+        static let added = "Added"
         static let title = "Search"
 
         // MARK: The field's prompt — one sentence per scope
@@ -37,9 +42,8 @@ extension Copy {
 
         static let recent = "Recent"
         static let recentlySearched = "Recently searched"
-        /// The type line under a bare recent term — what the row IS, the way a media row says
-        /// "Anime · 2021".
-        static let termKind = "Search"
+        // A bare recent term has no second line (review, 23 Sep): "Search" under every term said
+        // what its magnifier already said. The hint is what VoiceOver hears in its place.
         static let termHint = "Searches for it again"
         static let trendingNow = "Trending now"
         static let moreTrending = "More trending"
@@ -76,7 +80,9 @@ extension Copy {
         // shared copy, so Search owns its own two forms here. Recorded as a duplicate to fold.
 
         static let airingNow = "Airing now"
-        static func newEpisode(day: String) -> String { "New episode \(day)" }
+        /// "Airs Friday" · "Airs today" — the future verb, never "New episode": "new" is the word
+        /// for a drop that has struck (review, 23 Sep; `Copy.Progress.episodeAirs`).
+        static func airs(day: String) -> String { "Airs \(day)" }
 
         // MARK: The add control
 

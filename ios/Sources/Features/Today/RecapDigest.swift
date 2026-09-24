@@ -38,8 +38,19 @@ struct RecapBeat: Identifiable, Equatable {
 struct RecapDigest: Equatable {
     let since: Int64
     let beats: [RecapBeat]        // ≤ 3 visible
-    let hiddenBeatCount: Int
+    /// The beats past the third row: NAMED on the card's last line and COUNTED in its headline
+    /// (review i2: "11 episodes aired" summed only the rows it drew, over "and 1 more").
+    var hidden: [RecapBeat] = []
     let score: Int
+    var hiddenBeatCount: Int { hidden.count }
+    /// Every beat, drawn or not — what the headline and the strip count.
+    var allBeats: [RecapBeat] { beats + hidden }
+    /// Episodes aired across every beat.
+    var airedCount: Int {
+        allBeats.reduce(0) { acc, b in
+            if case .episodesAired(let n, _) = b.kind { return acc + n } else { return acc }
+        }
+    }
     /// Stable identity for acknowledgement: the beats and the window they describe.
     var digestID: String { "\(since)|" + beats.map(\.id).joined(separator: ",") }
 
@@ -59,9 +70,17 @@ struct RecapDigest: Equatable {
         var newEpisodeTitles = 0
         for f in library where f.effectiveStatus == .watching {
             guard let part = f.releasingPart else { continue }
-            // New episodes since the last visit that are still unwatched.
+            // New episodes since the last visit that are still unwatched — COUNTED since the
+            // visit (review i3: each row counted the whole backlog as "aired since your last
+            // visit"), never more than what is unwatched.
             if let last = part.lastAiredAt, last > since, part.episodesBehind > 0 {
-                let count = min(part.episodesBehind, max(1, part.airedEpisodes - (part.progress)))
+                // The payload's `airings` reach back ~8 days (server franchiseView), so a visit
+                // older than that is counted by what is unwatched, not by the slots it can see
+                // (review i4: "4 episodes aired" over rows missing Re:ZERO 16 and Bleach 3–7).
+                let windowStart = now - 8 * Formatting.D
+                let airedSince = part.airings.filter { $0.at > since && $0.at <= now }.count
+                let count = since < windowStart ? part.episodesBehind
+                    : min(part.episodesBehind, max(1, airedSince))
                 newEpisodeTitles += 1
                 beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
                                        kind: .episodesAired(count: count, latest: part.airedEpisodes),
@@ -78,8 +97,11 @@ struct RecapDigest: Equatable {
         // Announced return dates within 30 days for shows you're not mid-way through.
         for f in library where f.effectiveStatus == .completed {
             if let premiere = f.parts.compactMap(\.premiereAt).filter({ $0 > now }).min(), premiere - now <= announcedWindow {
+                // A return inside a fortnight is news that outranks a third backlog row: it was
+                // the one fact the card hid behind "and 1 more" (iteration 2).
                 beats.append(RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
-                                       kind: .returnDateAnnounced(at: premiere), score: 3))
+                                       kind: .returnDateAnnounced(at: premiere),
+                                       score: premiere - now <= 14 * Formatting.D ? 4 : 3))
             }
         }
         // "Where you stopped" used to be appended here to fill the third slot. It is not a change
@@ -87,10 +109,21 @@ struct RecapDigest: Equatable {
         // prints it verbatim. A recap that pads itself with something that did not happen is not
         // a recap.
         guard !beats.isEmpty else { return nil }
-        let ordered = beats.sorted { $0.score > $1.score }
+        // What AIRED leads — most episodes first — and a return follows it (review i3: a dated
+        // return outscored a six-episode backlog, took the first row and the card's art under a
+        // headline that counts episodes). The beats past the third row are named on the card, so
+        // a return that lands there is still said.
+        func rank(_ b: RecapBeat) -> (Int, Int) {
+            switch b.kind {
+            case .episodesAired(let n, _): return (0, -n)
+            case .returning: return (1, -b.score)
+            case .returnDateAnnounced: return (2, -b.score)
+            }
+        }
+        let ordered = beats.sorted { rank($0) < rank($1) }
         var score = ordered.reduce(0) { $0 + $1.score }
         if newEpisodeTitles >= 2 { score += 4 }
-        return RecapDigest(since: since, beats: Array(ordered.prefix(3)), hiddenBeatCount: max(0, ordered.count - 3), score: score)
+        return RecapDigest(since: since, beats: Array(ordered.prefix(3)), hidden: Array(ordered.dropFirst(3)), score: score)
     }
 
     /// A digest built for `-recapDemo 1` when the account's real data yields none.
@@ -105,13 +138,12 @@ struct RecapDigest: Equatable {
         if let real = build(library: library, since: since, now: now) { return real }
         let candidates = library.filter { $0.effectiveStatus == .watching }
         guard !candidates.isEmpty else { return nil }
-        let beats = candidates.prefix(2).enumerated().map { i, f in
+        let all = candidates.enumerated().map { i, f in
             RecapBeat(franchiseId: f.id, title: f.title, cover: f.portraitArt, source: f.source,
                       kind: .episodesAired(count: 1, latest: f.resumePart.map { $0.progress + 1 } ?? 1),
-                      score: 5 - i)
+                      score: max(1, 5 - i))
         }
-        return RecapDigest(since: since, beats: Array(beats),
-                           hiddenBeatCount: max(0, candidates.count - beats.count),
+        return RecapDigest(since: since, beats: Array(all.prefix(2)), hidden: Array(all.dropFirst(2)),
                            score: 9)
     }
 

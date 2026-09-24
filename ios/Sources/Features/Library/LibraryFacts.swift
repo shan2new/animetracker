@@ -34,6 +34,9 @@ enum LibrarySection: Int, Hashable, Identifiable, CaseIterable {
     case planned
     /// Nothing left to watch and nothing announced.
     case finished
+    /// The user's own "not now" and "not for me" — each named by its status.
+    case paused
+    case dropped
 
     var id: Int { rawValue }
 
@@ -46,6 +49,8 @@ enum LibrarySection: Int, Hashable, Identifiable, CaseIterable {
         case .watching:  return Copy.Status(.watching)
         case .planned:   return Copy.Status(.planned)
         case .finished:  return Copy.Status(.completed)
+        case .paused:    return Copy.Status(.paused)
+        case .dropped:   return Copy.Status(.dropped)
         }
     }
 
@@ -58,8 +63,10 @@ enum LibrarySection: Int, Hashable, Identifiable, CaseIterable {
         case .returning: return 0
         case .watching:  return 1
         case .planned:   return 2
-        case .announced: return 3
-        case .finished:  return 4
+        case .paused:    return 3
+        case .announced: return 4
+        case .finished:  return 5
+        case .dropped:   return 6
         }
     }
 }
@@ -73,6 +80,8 @@ enum LibraryShelving {
         case .planned:  return .planned
         case .watching: return .watching
         case .finished: return .finished
+        case .paused:   return .paused
+        case .dropped:  return .dropped
         case .comingBack:
             return ReturnFact.of(f, appModel: appModel).dated ? .returning : .announced
         }
@@ -98,7 +107,34 @@ enum LibraryShelving {
 /// now also the thing that keeps a show out of a section headed RETURNING.
 @MainActor
 struct ReturnFact {
+    /// The verb a dated fact wears. `returns` is the Library's word for a show that went away and
+    /// is coming back ("Returns 3 Oct"); `premieres` is for a show you have not started, whose next
+    /// installment does not come BACK to you (`premiere(of:appModel:)`).
+    enum Verb {
+        case returns, premieres
+
+        /// The verb over an instant, on the day ladder `TemporalCopy.returns` uses: "Returns
+        /// tomorrow" · "Premieres Friday" · "Premieres 9 Oct".
+        func at(_ ts: Int64, now: Int64, source: MediaSource) -> String {
+            guard self == .premieres else { return TemporalCopy.returns(at: ts, now: now, source: source) }
+            let day = TemporalCopy.airsCompact(at: ts, now: now, source: source)
+            // "today" and "tomorrow" are common nouns mid-sentence; a weekday and a date are not.
+            return TemporalCopy.premieres(day == "Today" || day == "Tomorrow" ? day.lowercased() : day)
+        }
+
+        /// The verb over a window it has no instant for — a month, a year, "late 2027". One prefix
+        /// per verb, so the shelf cannot phrase the same fact two ways.
+        /// SHARED-FILE REQUEST: `TemporalCopy.returns(window:)`, so the verb has exactly one home.
+        func window(_ w: String) -> String {
+            self == .returns ? "Returns \(w)" : TemporalCopy.premieres(w)
+        }
+    }
+
     let text: String
+    /// The fact with its verb, always ("Returns 2027"). `text` drops the verb outside the horizon
+    /// because the Returning shelf's header already says it; a list with no such header — All
+    /// titles — printed "Watched · 2027", a year with no subject (review, 23 Sep).
+    var sentence: String = ""
     let dated: Bool
     /// **The one flag that decides whether this fact is amber**, on the shelf and in the catalogue
     /// alike — the panel's `nextStepIsLead`.
@@ -124,9 +160,13 @@ struct ReturnFact {
         let soon = at.map { $0 - now <= soonHorizon } ?? false
         // Inside the horizon the verb and the amber ("Returns 3 Oct" — a step); outside it the
         // window alone, grey ("Jan 2027"): one verb in two inks read as a rule the reader had
-        // to guess (review i5). The section header already says Returning.
+        // to guess (review i5). The section header already says Returning — and only "Returns"
+        // drops: no header says Premiering, so "Premieres 2027" keeps its verb.
         let shown = soon ? text : Self.capitalisedFirst(text.replacingOccurrences(of: "^Returns ", with: "", options: .regularExpression))
-        return ReturnFact(text: shown, dated: true, soon: soon)
+        // One fact, one line: at the accessibility sizes All titles broke "Returns / 3 Oct" across
+        // two lines (review, 23 Sep). A short fact binds like `Copy.plural`'s number and noun.
+        func bound(_ s: String) -> String { s.count <= 24 ? s.replacingOccurrences(of: " ", with: "\u{00A0}") : s }
+        return ReturnFact(text: bound(shown), sentence: bound(text), dated: true, soon: soon)
     }
 
     private static func capitalisedFirst(_ s: String) -> String {
@@ -134,21 +174,72 @@ struct ReturnFact {
         return first.uppercased() + s.dropFirst()
     }
 
-    /// `TemporalCopy.returns`'s verb over a window it has no instant for — a month, a year, "late
-    /// 2027". One prefix, so the shelf cannot phrase the same fact two ways.
-    /// SHARED-FILE REQUEST: `TemporalCopy.returns(window:)`, so the verb has exactly one home.
-    private static func returns(window: String) -> String { "Returns \(window)" }
+    /// A next installment really lies AHEAD: a dated premiere among the parts, or a curated one
+    /// whose day has not already come — `AppModel.libShelf`'s own test for "coming back". `of`
+    /// reads a stale curated day as "Returned 5 Jul", which is history, not a caption.
+    static func isAhead(_ f: Franchise, appModel: AppModel) -> Bool {
+        if appModel.nextPremiere(of: f) != nil { return true }
+        guard let upcoming = f.upcoming else { return false }
+        return upcoming.isFutureInstallment && !upcoming.hasArrived(now: appModel.nowMinute)
+    }
+
+    /// A Planned show's next dated installment, with ITS verb: "Premieres 9 Oct" (the series' own
+    /// first episode) or "Season 3 premieres 20 Nov" (a later season of a show that has aired —
+    /// "Premieres 20 Nov" alone told the reader Percy Jackson had never been on). The shelf and All
+    /// titles said only "TV · 2026" / "Planned" about a show premiering in sixteen days (review,
+    /// 23 Sep). "Returns" stays with the shows that went away: one you have not started does not
+    /// come BACK to you. The verb always rides — no "Premiering" header lends it — and `soon`
+    /// decides the amber exactly as it does for a return. Nil when nothing ahead is dated (no
+    /// premiere, a rumour, a window already reached), so the caller keeps what it said before.
+    static func premiere(of f: Franchise, appModel: AppModel) -> ReturnFact? {
+        guard let parts = premiereParts(of: f, appModel: appModel) else { return nil }
+        // No shelf header lends a Planned row its verb, so the fact always carries one.
+        let sentence = parts.fact.sentence.isEmpty ? parts.fact.text : parts.fact.sentence
+        guard let name = parts.installment else {
+            return ReturnFact(text: sentence, sentence: sentence, dated: true, soon: parts.fact.soon)
+        }
+        let text = Copy.Library.premieres(installment: name, fact: sentence)
+        return ReturnFact(text: text, sentence: text, dated: true, soon: parts.fact.soon)
+    }
+
+    /// The same fact in two pieces — the installment it names ("Season 3"; nil for the series'
+    /// own first episode) and the dated fact with its verb — for a caption that stacks them
+    /// (Today's Planned posters: "Premieres 20 Nov" under Percy Jackson hid that two seasons are
+    /// already out, review i3).
+    ///
+    /// The verb follows PROGRESS, on every surface (review i3): a show you have watched any of
+    /// RETURNS ("Season 2 returns late 2026" — 3 Body Problem, Season 1 watched, read "Premieres
+    /// late 2026" on Today and "Returns" on its own page); one you have not PREMIERES.
+    static func premiereParts(of f: Franchise, appModel: AppModel) -> (installment: String?, fact: ReturnFact)? {
+        guard isAhead(f, appModel: appModel) else { return nil }
+        let verb: Verb = f.parts.contains(where: { $0.progress > 0 }) ? .returns : .premieres
+        let fact = of(f, appModel: appModel, verb: verb)
+        guard fact.dated else { return nil }
+        // The series' own premiere needs no name. A later installment is named when the name is
+        // one a badge could hold (`Copy.Release.announcement`'s rule: 16 characters, no "(Movie)"
+        // kind) — "Infinity Castle Part 2 (movie) premieres…" is a paragraph, not a caption.
+        let name: String? = {
+            if let at = appModel.nextPremiere(of: f) {
+                return f.parts.first { $0.premiereAt == at }?.canonicalLabel
+            }
+            return f.upcoming?.next?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+        guard f.parts.contains(where: { !$0.isUpcoming }), let name, !name.isEmpty,
+              name.count <= 16, !name.contains("(") else { return (nil, fact) }
+        return (name, fact)
+    }
 
     /// Minute precision is all a return date needs; reading `nowMinute` keeps the Library from
-    /// re-deriving every caption on the 20-second tick.
-    static func of(_ f: Franchise, appModel: AppModel) -> ReturnFact {
+    /// re-deriving every caption on the 20-second tick. `verb` is `.returns` everywhere but a
+    /// Planned show's premiere (`premiere(of:appModel:)`).
+    static func of(_ f: Franchise, appModel: AppModel, verb: Verb = .returns) -> ReturnFact {
         let now = appModel.nowMinute
         func unknown() -> ReturnFact {
             ReturnFact(text: TemporalCopy.returns(at: nil, now: now, source: f.source),
                        dated: false, soon: false)
         }
         if let at = appModel.nextPremiere(of: f) {
-            return known(TemporalCopy.returns(at: at, now: now, source: f.source), at: at, now: now)
+            return known(verb.at(at, now: now, source: f.source), at: at, now: now)
         }
         // An unconfirmed report is not a schedule (docs/api-contract.md): the server resolves its
         // window to `unknown`, and the caption says what it is — "Season 3 rumored" — rather than
@@ -163,7 +254,7 @@ struct ReturnFact {
         if window.precision == .day, parts.year == Formatting.localParts(now, anchor: .utcDate).y,
            let date = utcDay(y: parts.year, month: parts.month, day: parts.day) {
             let at = ms(date)
-            return known(TemporalCopy.returns(at: at, now: now, source: .tmdb), at: at, now: now)
+            return known(verb.at(at, now: now, source: .tmdb), at: at, now: now)
         }
         // Every other announced DATE settles at month-and-year: "Returns Oct 2026" fits, "Oct 2,
         // 2027" does not, and a day nine months out is not a fact anybody acts on. A curated
@@ -171,7 +262,7 @@ struct ReturnFact {
         if window.precision == .day || window.precision == .month,
            let date = utcDay(y: parts.year, month: parts.month, day: 1) {
             let at = ms(date)
-            return known(returns(window: LibraryDates.monthYear(at, anchor: .utcDate)), at: at, now: now)
+            return known(verb.window(LibraryDates.monthYear(at, anchor: .utcDate)), at: at, now: now)
         }
         // A quarter or a year is a WINDOW, and only the server's prose states it honestly: the
         // month inside `releaseWindow.date` is an ordering device ("Summer 2027" sorts as July),
@@ -181,13 +272,13 @@ struct ReturnFact {
         // rule has nothing to measure.
         let prose = upcoming.displayRelease.trimmingCharacters(in: .whitespacesAndNewlines)
         if prose.count == 4, Int(prose) != nil {
-            return known(returns(window: prose), at: nil, now: now)
+            return known(verb.window(prose), at: nil, now: now)
         }
         if !prose.isEmpty, prose.count <= 20 {
-            return known(returns(window: ReturnFact.lowerFirst(prose)), at: nil, now: now)
+            return known(verb.window(ReturnFact.lowerFirst(prose)), at: nil, now: now)
         }
         // A window too long to state whole is reduced to its year rather than ellipsed.
-        return known(returns(window: String(parts.year)), at: nil, now: now)
+        return known(verb.window(String(parts.year)), at: nil, now: now)
     }
 
     /// `String.lowercasedFirst()` lives `private` in `Copy.swift` and `fileprivate` again in
@@ -255,25 +346,44 @@ struct LibraryRowFacts {
             // Never amber: the ABSENCE of a next step is not a next step.
             return LibraryRowFacts(lead: nil, meta: ReturnFact.of(f, appModel: appModel).text)
         case .watching:
-            // ONE grammar, in one order: the step you owe → the date it comes back → caught up.
+            // ONE grammar, in one order: the step you owe → the day the next episode airs → the
+            // date it comes back (else the announcement) → caught up. Since 23 Sep this shelf
+            // holds only the Watching shows Next up does not (nothing to resume), so every branch
+            // below the step is one it actually draws.
             // The shipped rows fell through to "TV · 2024" whenever a Watching show's current part
             // had not aired yet, so four consecutive Watching rows read "Caught up", "TV · 2024",
             // "Anime · 2019" and "Season 7 · Episode 5 next" with no visible reason for the change.
             //
             // A rewatch in flight is the one lead this shelf keeps: it is a step the user chose.
             if let re = rewatch(f) { return LibraryRowFacts(lead: re, meta: nil) }
+            let now = appModel.nowMinute
             // The step itself rides the GREY line. Behind-counts and amber belong to Today — the
             // urgency pact — so the Library says where you stand and never how far behind you are.
-            if let step = nextStep(f, now: appModel.nowMinute) {
+            if let step = nextStep(f, now: now) {
                 return LibraryRowFacts(lead: nil, meta: step)
+            }
+            // Caught up on a season still on air: the day the next episode lands ("Airs Friday",
+            // Search's words for the same fact). A future air time is what amber MEANS; it is not
+            // a count of what you owe.
+            if let at = f.nextAiring(now: now) {
+                let day = TemporalCopy.airsCompact(at: at, now: now, source: f.source)
+                return LibraryRowFacts(lead: Copy.Progress.episodeAirs(nil, when: day), meta: nil)
             }
             // The return date only replaces "Caught up" when there is genuinely nothing airing:
             // a show you are mid-season on says where you stand, not when its next season lands.
-            if f.currentPart.map(\.isUpcoming) ?? true {
+            if f.currentPart.map(\.isUpcoming) ?? true, ReturnFact.isAhead(f, appModel: appModel) {
                 let fact = ReturnFact.of(f, appModel: appModel)
                 if fact.dated {
+                    // WITH its verb: `text` drops "Returns" for the Returning shelf, whose header
+                    // lends it. Under WATCHING, ONE PIECE's caption read "2027" — a release year.
                     return fact.soon ? LibraryRowFacts(lead: fact.text, meta: nil)
-                                     : LibraryRowFacts(lead: nil, meta: fact.text)
+                                     : LibraryRowFacts(lead: nil, meta: fact.sentence.isEmpty ? fact.text : fact.sentence)
+                }
+                // Announced, undated: the announcement is the fact — "Season 3 announced", the
+                // show page's line under CAUGHT UP. "No date announced" alone says nothing under a
+                // WATCHING header, and a rumour is not news enough to replace "Caught up".
+                if f.upcoming?.isRumored != true, let news = f.releaseNews(now: now) {
+                    return LibraryRowFacts(lead: nil, meta: news.headline)
                 }
             }
             // `identity()` is NOT reachable from here. On the shelf you open to answer "what do I
@@ -282,9 +392,33 @@ struct LibraryRowFacts {
             // A Watching show with nothing left in flight IS caught up; that is the whole meaning
             // of the word, and it is the only honest thing this row can say.
             return LibraryRowFacts(lead: nil, meta: standing(f) ?? Copy.Progress.caughtUp)
+        case .paused:
+            // Where you stopped, so picking it back up is one glance ("Season 2 · Episode 5 next").
+            if let step = nextStep(f, now: appModel.nowMinute) { return LibraryRowFacts(lead: nil, meta: step) }
+            return LibraryRowFacts(lead: nil, meta: settled(f, now: appModel.nowMinute) ?? identity(f))
+        case .dropped:
+            return LibraryRowFacts(lead: nil, meta: identity(f))
         case .planned, .finished:
             // A rewatch in flight outranks every settled word: it is forward-looking, so it leads.
             if let re = rewatch(f) { return LibraryRowFacts(lead: re, meta: nil) }
+            // A Planned show you are part-way into says WHERE — "Season 5 · Episode 9 next" —
+            // before anything else: "Anime · 2021" under 56 watched episodes told the reader the
+            // app had forgotten them (iteration 2).
+            if section == .planned, f.parts.contains(where: { $0.progress > 0 }),
+               let step = nextStep(f, now: appModel.nowMinute) {
+                return LibraryRowFacts(lead: nil, meta: step)
+            }
+            // A Planned show's premiere is the one date this shelf has to give ("Premieres 9 Oct"),
+            // coloured by the same horizon as a return.
+            if section == .planned, let fact = ReturnFact.premiere(of: f, appModel: appModel) {
+                return fact.soon ? LibraryRowFacts(lead: fact.text, meta: nil)
+                                 : LibraryRowFacts(lead: nil, meta: fact.text)
+            }
+            // A rumoured sequel rides a finished show's row ("Sequel series rumoured") — it is no
+            // longer filed under Announced (`AppModel.libShelf`).
+            if section == .finished, let up = f.upcoming, up.isRumored, !up.hasArrived(now: appModel.nowMinute) {
+                return LibraryRowFacts(lead: nil, meta: Copy.Library.rumored(next: up.next))
+            }
             return LibraryRowFacts(lead: nil, meta: settled(f, now: appModel.nowMinute) ?? identity(f))
         }
     }
@@ -311,13 +445,24 @@ struct LibraryRowFacts {
         let state: String? = stateIsGiven ? nil : listState(f)
         func joined(_ extra: String) -> String {
             guard let state else { return extra }
-            return compact ? state : "\(state) \u{00B7} \(extra)"
+            // The separator travels WITH the fact it introduces: "Planned ·" never ends a line
+            // with the fact on the next (iteration 2).
+            return compact ? state : "\(state) \u{00B7}\u{00A0}\(extra)"
         }
         func lead(_ full: String) -> String {
             compact ? (shortStep(f, now: appModel.nowMinute) ?? full) : full
         }
         if let step = progress(f, now: appModel.nowMinute) {
+            if !progressIsLead(f, now: appModel.nowMinute) {
+                return LibraryRowFacts(lead: nil, meta: compact ? step : joined(step))
+            }
             return LibraryRowFacts(lead: lead(step), meta: compact ? nil : state)
+        }
+        // A Planned show you are part-way into says where (iteration 2: "Planned" alone over 56
+        // watched episodes of Mushoku).
+        if f.effectiveStatus == .planned, f.parts.contains(where: { $0.progress > 0 }),
+           let step = nextStep(f, now: appModel.nowMinute) {
+            return LibraryRowFacts(lead: nil, meta: compact ? step : joined(step))
         }
         // A rewatch of a WATCHED show never reached `progress()` (it guards on `.watching`), so the
         // catalogue said "Watched" about a show the user is actively re-watching and nothing on any
@@ -341,7 +486,17 @@ struct LibraryRowFacts {
                 if compact || state == nil { return LibraryRowFacts(lead: fact.text, meta: nil) }
                 return LibraryRowFacts(lead: nil, meta: state, metaLead: fact.text)
             }
-            return LibraryRowFacts(lead: nil, meta: joined(fact.text))
+            return LibraryRowFacts(lead: nil, meta: joined(fact.sentence.isEmpty ? fact.text : fact.sentence))
+        }
+        // ...and a Planned show's next installment PREMIERES, in the same two inks: "Planned ·
+        // Premieres 9 Oct" with the date in accent inside the horizon, grey beyond it (review,
+        // 23 Sep: the row said "Planned" and nothing else about a show sixteen days out).
+        if f.effectiveStatus == .planned, let premiere = ReturnFact.premiere(of: f, appModel: appModel) {
+            if premiere.soon {
+                if compact || state == nil { return LibraryRowFacts(lead: premiere.text, meta: nil) }
+                return LibraryRowFacts(lead: nil, meta: state, metaLead: premiere.text)
+            }
+            return LibraryRowFacts(lead: nil, meta: joined(premiere.text))
         }
         if let settled = settled(f, now: appModel.nowMinute) {
             return LibraryRowFacts(lead: nil, meta: joined(settled))
@@ -387,8 +542,22 @@ struct LibraryRowFacts {
     static func progress(_ f: Franchise, now: Int64) -> String? {
         guard f.effectiveStatus == .watching, let p = f.currentPart, !p.isUpcoming else { return nil }
         if let re = rewatch(f) { return re }
-        if p.isReleasing { return p.episodesBehind > 0 ? Copy.Progress.behind(p.episodesBehind) : nil }
+        // The AIRINGS-derived count, the one Today and the show page print — the catalogue's
+        // hourly `episodesBehind` lagged a drop by up to an hour (iteration 2).
+        if p.isReleasing {
+            let behind = p.behind(now: now, anchor: f.timeAnchor)
+            return behind > 0 ? Copy.Progress.behind(behind) : nil
+        }
         return nextStep(f, now: now)
+    }
+
+    /// Amber is for a drop that is FRESH (inside the Now Bar's live window), grey for an older
+    /// backlog — the rule Today and Profile already follow for the same count (iteration 2:
+    /// All titles alone printed Bleach's 11-day-old "6 episodes behind" in amber).
+    static func progressIsLead(_ f: Franchise, now: Int64) -> Bool {
+        guard f.effectiveStatus == .watching, let p = f.currentPart, p.isReleasing,
+              let last = p.lastAired(now: now, anchor: f.timeAnchor) else { return true }
+        return now - last <= AppModel.nowBarLiveWindow
     }
 
     /// "Season 7 · Episode 5 next" / "Episode 5 next" — the next episode that exists and has aired,
@@ -423,5 +592,23 @@ struct LibraryRowFacts {
     static func identity(_ f: Franchise) -> String {
         guard let y = f.year else { return f.kindWord }
         return "\(f.kindWord) \u{00B7} \(y)"
+    }
+}
+
+// MARK: - Copy staged here
+
+// Library strings added while `Copy+Library.swift` was out of this pass's hands. They belong in
+// `Copy.Library` proper; they live here only until that file is next open.
+extension Copy.Library {
+    /// "Season 3 premieres 20 Nov" — a LATER installment's premiere, named, so a show that has
+    /// already aired never reads as brand new. `fact` is the premiere sentence itself ("Premieres
+    /// 20 Nov", `TemporalCopy.premieres`); the installment's words bind like its date does, so the
+    /// line can only break between the two.
+    ///
+    /// TWO facts now — "Season 2 · Returns late 2026" — joined so a line may only break AFTER the
+    /// dot: as one sentence it broke "Season 2" / "returns late 2026", a lower-case line start
+    /// flagged in three review rounds (UX-N15).
+    static func premieres(installment: String, fact: String) -> String {
+        "\(installment.replacingOccurrences(of: " ", with: "\u{00A0}"))\u{00A0}\u{00B7} \(fact)"
     }
 }

@@ -37,23 +37,34 @@ struct DiscoverView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
+    /// "Recommended for you ›" — the longer list, on this tab's stack.
+    var onOpenRecommendations: (() -> Void)? = nil
 
     /// The wire marker for a catalogue that failed (`docs/api-contract.md`, `sources`). Not copy.
     private static let failedMarker = "failed"
 
     /// The scroll view's own height, for centring a state that owns the whole surface.
     @State private var contentH: CGFloat = 0
+
     /// Content has scrolled under the bar — the soft top veil hardens (same probe as Library's).
     @State private var raisedTop = false
     /// `.searchable(isPresented:)`. Raised by `AppModel.searchFieldRequested` — an "Add a show"
     /// CTA on another tab asked for the field itself, not just this tab.
     @State private var fieldPresented = false
+    /// The owned add control's "Mark all N episodes as watched…", awaiting its confirmation
+    /// (`markAllConfirmation` — the long press's and the show page's).
+    @State private var markAll: MarkAllRequest?
+    /// A term the field SUBMITTED, waiting on its answer before it is remembered
+    /// (`settleRecentTerm`).
+    @State private var submittedTerm: String?
 
     // MARK: Notification primer (see `notificationPrimer`)
 
     /// An add that stuck armed the primer. Persisted, because the ask is deferred well past the
     /// undo window and the user may leave the tab in the meantime — a `@State` flag would drop it.
     @AppStorage("previously.notifPrimerPending") private var primerPending = false
+    /// An airing show whose Add was taken to its page (`add`): the primer is armed on return.
+    @State private var primerCandidate: FranchiseSummary?
     /// The user has answered the primer once. iOS only ever shows its own alert once per install,
     /// so the primer is one-shot too: it is the thing that earns that one alert.
     @AppStorage("previously.notifPrimerAnswered") private var primerAnswered = false
@@ -206,16 +217,34 @@ struct DiscoverView: View {
             }
         }
         // The field always carried a `.search` return key and then threw the submission away, so
-        // RECENT could only ever hold terms left over from an older build.
-        .onSubmit(of: .search) { appModel.recordRecentSearch() }
+        // RECENT could only ever hold terms left over from an older build. A submission is the
+        // only thing that writes a TERM — and only once its answer says it was not a slip
+        // (`settleRecentTerm`).
+        .onSubmit(of: .search) {
+            submittedTerm = query
+            settleRecentTerm()
+        }
         .onAppear {
             appModel.loadTrendingIfNeeded()
             consumeFieldRequest()
+            if let item = primerCandidate {
+                primerCandidate = nil
+                if appModel.isInLibrary(item.id) { armNotificationPrimer(item) }
+            }
             #if DEBUG
             // `-openSearchField 1` (DEBUG, like `-recapDemo`): open with the field focused. A
             // beat after appearance, or the searchable binding's first sync overwrites it.
             if UserDefaults.standard.bool(forKey: "openSearchField") {
                 Task { try? await Task.sleep(for: .milliseconds(700)); fieldPresented = true }
+            }
+            // `-searchQuery <text>`: the results for a query, for captures — the field is focused
+            // and the text entered as if typed (no write; recents are recorded only on submit).
+            if let q = UserDefaults.standard.string(forKey: "searchQuery"), !q.isEmpty {
+                Task {
+                    try? await Task.sleep(for: .milliseconds(900))
+                    fieldPresented = true
+                    appModel.searchQuery = q
+                }
             }
             #endif
         }
@@ -226,12 +255,15 @@ struct DiscoverView: View {
         .onChange(of: fieldPresented) { _, presented in
             PerfProbe.mark(presented ? "search-presented" : "search-dismissed")
         }
+        .markAllConfirmation($markAll, appModel: appModel)
         .task(id: appModel.library.count) { await refreshNotificationEligibility() }
         .task { await refreshNotificationEligibility() }
         // WCAG 4.1.3. A VoiceOver user typed a query and results arrived, or didn't, or failed,
         // and nothing was spoken.
         .onChange(of: appModel.searchBusy) { _, busy in
-            guard !busy, !query.isEmpty else { return }
+            guard !busy else { return }
+            settleRecentTerm()
+            guard !query.isEmpty else { return }
             announceOutcome()
         }
         .onChange(of: appModel.mediaFilter) { _, _ in
@@ -470,9 +502,20 @@ struct DiscoverView: View {
                     .allowsHitTesting(fieldPresented)
                     .accessibilityHidden(!fieldPresented)
             }
+            // DISCOVERY FROM YOUR OWN SHOWS above the chart — the tab people open to find
+            // something (review i5, N5: Search had only an anime-only "Trending now", and the
+            // owner's "discovery is extremely important" had one surface). The same shelf as
+            // Today's, in the scope the field is filtering.
+            let recs = scopedRecommendations
+            if !recs.isEmpty {
+                ForYouShelf(items: recs, reason: { appModel.spokenReason($0) },
+                            onOpen: { openRecommendation($0) },
+                            onSeeAll: onOpenRecommendations)
+                    .padding(.top, fieldPresented && !recentsEmpty ? ThemeMetrics.sectionGap : ThemeSpace.x2)
+            }
             if !trending.isEmpty {
                 trendingGrid(trending)
-                    .padding(.top, fieldPresented && !recentsEmpty ? ThemeMetrics.sectionGap : ThemeSpace.x2)
+                    .padding(.top, !recs.isEmpty || (fieldPresented && !recentsEmpty) ? ThemeMetrics.sectionGap : ThemeSpace.x2)
             } else if !SyncCenter.shared.isOnline {
                 // No grid and no connection: say so. "Find your next show" over a grid that will
                 // never load is a promise, and the path monitor knows it is an empty one.
@@ -502,6 +545,24 @@ struct DiscoverView: View {
         // The keyboard's own timing (`ThemeMotion.keyboard`): the recents unfolding and the grid
         // making room are the keyboard's motion, not a second one.
         .animation(ThemeMotion.pick(ThemeMotion.keyboard, reduceMotion: reduceMotion), value: fieldPresented)
+    }
+
+    /// Today's recommendations in the field's scope (Anime / TV), up to twelve.
+    private var scopedRecommendations: [RecommendationItem] {
+        let all = appModel.visibleRecommendations
+        let scoped: [RecommendationItem]
+        switch appModel.mediaFilter {
+        case .all: scoped = all
+        case .anime: scoped = all.filter { $0.source == .anilist }
+        case .tv: scoped = all.filter { $0.source == .tmdb }
+        }
+        return Array(scoped.prefix(12))
+    }
+
+    private func openRecommendation(_ r: RecommendationItem) {
+        Task {
+            if let id = await appModel.franchiseId(for: r) { onOpenDetail(id, "foryou/\(r.key)") }
+        }
     }
 
     /// The active scope as a removable token, on the resting launchpad — where the scope bar
@@ -553,9 +614,13 @@ struct DiscoverView: View {
                 // them on Cancel — the cost the fold exists to avoid.
                 Grid(alignment: .topLeading, horizontalSpacing: ThemeMetrics.shelfGap, verticalSpacing: ThemeMetrics.shelfGap) {
                     ForEach(Array(stride(from: 0, to: trending.count, by: 3)), id: \.self) { start in
+                        let row = Array(trending[start..<min(start + 3, trending.count)])
+                        let owned = row.filter { appModel.isInLibrary($0.id) }
                         GridRow(alignment: .top) {
-                            ForEach(trending[start..<min(start + 3, trending.count)]) { item in gridCard(item) }
+                            ForEach(row) { item in gridCard(item) }
                         }
+                        // One corner for the row's owned checks (review i5, U-N16).
+                        .environment(\.cornerRow, owned.isEmpty ? nil : CornerRow(urls: owned.compactMap(\.tilePoster.url)))
                     }
                 }
                 .padding(.horizontal, ThemeMetrics.gutter)
@@ -566,45 +631,48 @@ struct DiscoverView: View {
     /// A chart card, equatable on what it shows (`SearchRow`): the launchpad's body re-runs
     /// when the field takes focus, and fifteen cards were rebuilt under that animation.
     private func gridCard(_ item: FranchiseSummary) -> some View {
+        let caption = gridCaption(item)
         let key = SearchRowKey(id: item.id, title: item.title,
-                               meta: [item.source.kindWord, item.year.map(String.init)].compactMap { $0 }.joined(separator: FactLine.separator),
-                               lead: nil, poster: item.portraitArt,
+                               meta: caption.text, lead: caption.lead ? caption.text : nil,
+                               poster: item.portraitArt,
                                owned: appModel.isInLibrary(item.id),
                                status: appModel.franchise(id: item.id)?.status?.rawValue ?? "",
                                separator: false)
-        return SearchRow(key: key) { AnyView(gridCardBody(item)) }.equatable()
+        return SearchRow(key: key) { AnyView(gridCardBody(item, caption: caption)) }.equatable()
     }
 
-    private func gridCardBody(_ item: FranchiseSummary) -> some View {
-        let zoom = "trend/\(item.id)"
-        // Two facts, kind and year: a 112-pt caption cannot hold a third, and the owned disc in
-        // the art's corner already says the show is in the library ("Watched · Anime / · 2021"
-        // wrapped with a middot opening the second line).
-        let caption = [item.source.kindWord, item.year.map(String.init)].compactMap { $0 }
-            .joined(separator: FactLine.separator)
-        return ShelfCard(title: item.title,
-                         reserveTitleLines: true,
-                         caption: caption,
-                         poster: item.portraitArt,
-                         slot: .shelfMedium,
-                         zoomID: zoom) {
-            open(item, zoom: zoom)
+    /// The card's ONE caption. A show whose next episode airs THIS WEEK says so — the row's own
+    /// `when` ("Airs Sunday", amber), so the grid and the accessibility row stop disagreeing about
+    /// one show ("One Piece · Anime · 1999" in the grid, "Airs Sunday" in the row, review 23 Sep).
+    /// Everything else says what it is: kind and year. A 112-pt caption holds one fact, never a
+    /// third, and the owned disc on the art already says the show is in the library.
+    private func gridCaption(_ item: FranchiseSummary) -> (text: String, lead: Bool) {
+        // The LIST's rule (`when`), whatever the layout: the grid dropped a show's next airing
+        // past six days, so the #1 trending show read "Anime · 2016" in the grid and "Airs 30
+        // Sep" as a row at the accessibility sizes (iteration 2).
+        if let airs = when(item) {
+            return (airs, true)
         }
+        return ([item.source.kindWord, item.year.map(String.init)].compactMap { $0 }
+                    .joined(separator: FactLine.separator), false)
+    }
+
+    /// The chart as a wall of POSTERS (20 Sep): each tile is the show's own titled key art, whole,
+    /// on a soft wash of itself — the poster names the show, so no caption repeats it and no
+    /// control sits on its lettering. Adding happens on the show's result card and its page.
+    private func gridCardBody(_ item: FranchiseSummary, caption: (text: String, lead: Bool)) -> some View {
+        let zoom = "trend/\(item.id)"
+        // Owned is STATE, in amber: a small check disc in the corner, clear of the lettering the
+        // poster prints (`cornerMark` reads where — review i3: the wall could not say which
+        // trending shows were already yours; i4: pinned top-trailing it sat on Re:ZERO's "O").
+        return ArtworkPoster(url: item.tilePoster.url, name: item.tilePoster.name, title: item.title,
+                             showsDetails: false,
+                             cornerMark: appModel.isInLibrary(item.id)
+                                ? AnyView(OwnedMark().padding(ThemeSpace.x2).allowsHitTesting(false)) : nil,
+                             onOpen: { open(item, zoom: zoom) }) { EmptyView() }
+        .zoomSource(zoom)
         .accessibilityLabel(spoken(item, ambiguous: []))
         .accessibilityHint(Copy.Accessibility.opensTheShowHint)
-        // The badge lives OUTSIDE the card's own button: a Button nested inside another Button's
-        // label is a coin-toss for which one gets the tap. The inset puts the visible disc 8 pt
-        // inside the artwork's corner rather than straddling it.
-        // Bottom-trailing (review i3): faces live in the upper part of a crop — the app's own
-        // pill rule — and the disc sat on them; a poster's foot is its credits.
-        // On the ART's bottom-trailing corner (review i4): the card's corner put the disc on the
-        // caption. Anchored at the top and offset by the poster's height, so it lands where a
-        // poster keeps its credits — and stays OUTSIDE the card's own button.
-        .overlay(alignment: .topTrailing) {
-            addControl(item, placement: .overArt)
-                .padding(.trailing, Metrics.overArtControlInset)
-                .padding(.top, PosterSize.shelfMedium.size.height - Metrics.overArtTarget + (Metrics.overArtTarget - Metrics.overArtDisc) / 2 - Metrics.overArtControlInset)
-        }
         .franchiseQuickActions(appModel.franchise(id: item.id), appModel: appModel)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -635,9 +703,8 @@ struct DiscoverView: View {
                     SearchRow(key: SearchRowKey(id: item.id, title: item.title, meta: meta, lead: nil,
                                                 poster: item.portraitArt, owned: false, status: "",
                                                 separator: separator)) {
-                        // `.queue` (44×66): Apple Music's recents density, and the same 44-pt left
-                        // edge the bare-term rows' glyph tile sits on, so every title in the list
-                        // starts at one x.
+                        // The bare-term rows below hold their magnifier in this poster's column,
+                        // so every title and term in the list starts at one x.
                         AnyView(MediaRow(title: item.title,
                                          meta: meta,
                                          poster: item.portraitArt,
@@ -661,40 +728,40 @@ struct DiscoverView: View {
                     .equatable()
                 }
                 ForEach(Array(terms.enumerated()), id: \.element) { i, term in
-                    termRow(term, separator: i < terms.count - 1)
+                    termRow(term, separator: i < terms.count - 1, aligned: !items.isEmpty)
                 }
             }
             .padding(.horizontal, ThemeMetrics.gutter)
         }
     }
 
-    /// A bare term. Three decisions, each against what the row was:
-    ///  * the tile is a CIRCLE in the field's own colours (accent glyph on `accentSoft`) — it is a
-    ///    search, not a poster, and a grey square beside art tiles read as a poster that failed;
-    ///  * a second line, `Copy.Search.termKind`, so the row has the same two-line anatomy as the
-    ///    media rows around it instead of one bold word floating in a 60-pt band;
+    /// A bare term: ONE line at the minimum target — the magnifier, the words, the fill-the-field
+    /// arrow. It was a 60-pt disc over a second line reading "Search" under every term (review,
+    /// 23 Sep): a typed word as tall as a poster row, and a subtitle saying what the glyph said.
+    ///  * the glyph stands in the poster column, so a term starts on the x every show title in
+    ///    this list starts on, and the rule beneath it on theirs;
+    ///  * neutral, not amber — a recent QUERY is neither a next step nor a state;
+    ///  * the words are `body`, not a title's weight: a query is not a show;
     ///  * the trailing glyph is the fill-the-field arrow, not a chevron. A chevron promises a push;
     ///    this row puts the words back in the field (Safari's and YouTube's convention).
-    private func termRow(_ term: String, separator: Bool) -> some View {
-        let tile = PosterSize.row.size.width
+    private func termRow(_ term: String, separator: Bool, aligned: Bool = true) -> some View {
+        // The glyph holds the poster column only when there ARE show rows to align with; alone,
+        // the terms sat at x≈70 under a column that was not there (review i3) — then the glyph
+        // hugs the gutter like any list's.
+        let column = aligned ? PosterSize.row.size.width : 24
         return Button { appModel.searchQuery = term } label: {
             HStack(spacing: ThemeMetrics.artGap) {
-                // Neutral, not amber: a recent QUERY is neither a next step nor a state — the
-                // amber disc made a search term the warmest object in a list of real shows.
                 Image(systemName: "magnifyingglass")
-                    .font(.system(.body, weight: .semibold))
+                    .font(.system(.body, weight: .regular))
                     .foregroundStyle(ThemeColor.textSecondary)
-                    .frame(width: tile, height: tile)
-                    .background(ThemeColor.surfaceFlat, in: Circle())
-                VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
-                    Text(term)
-                        .type(ThemeType.rowTitle)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(1)
-                    Text(Copy.Search.termKind)
-                        .type(ThemeType.rowMeta)
-                        .foregroundStyle(ThemeColor.textSecondary)
-                }
+                    .frame(width: column)
+                    .accessibilityHidden(true)
+                Text(term)
+                    .type(ThemeType.body)
+                    .foregroundStyle(ThemeColor.textPrimary)
+                    // One line; at the accessibility sizes a long term may take a second rather
+                    // than lose its tail.
+                    .lineLimit(isAX ? 2 : 1)
                 Spacer(minLength: ThemeSpace.x3)
                 Image(systemName: "arrow.up.backward")
                     .font(.system(size: Metrics.chevronSize, weight: .semibold))
@@ -702,19 +769,20 @@ struct DiscoverView: View {
                     .frame(width: Metrics.chevronColumn, alignment: .trailing)
                     .accessibilityHidden(true)
             }
+            // Inside the 44 at the default size; air around the words once they outgrow it.
             .padding(.vertical, ThemeSpace.x2)
             .frame(minHeight: Metrics.termRowHeight)
             .contentShape(Rectangle())
             .overlay(alignment: .bottom) {
                 if separator {
                     Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
-                        .padding(.leading, tile + ThemeMetrics.artGap)
+                        .padding(.leading, column + ThemeMetrics.artGap)
                 }
             }
         }
         .buttonStyle(RowPressStyle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(term), \(Copy.Search.termKind)")
+        .accessibilityLabel(term)
         .accessibilityHint(Copy.Search.termHint)
         .contextMenu {
             Button(role: .destructive) {
@@ -736,18 +804,22 @@ struct DiscoverView: View {
     /// the row's combined label, and the add control in the trailing slot.
     private func mediaRow(_ item: FranchiseSummary, zoom: String,
                           ambiguous: Set<String>, separator: Bool) -> some View {
-        MediaRow(title: disambiguated(item, ambiguous: ambiguous),
-                 meta: rowFacts(item, ambiguous: ambiguous).joined(separator: FactLine.separator),
-                 lead: when(item),
-                 poster: item.portraitArt,
-                 slot: .row,
-                 chevron: false,
-                 separator: separator,
-                 hint: Copy.Accessibility.opensTheShowHint,
-                 zoomID: zoom,
-                 trailing: { addControl(item) }) {
-            open(item, zoom: zoom)
+        // The result as a SCENE (20 Sep): the show's landscape art with its logo, the airing fact
+        // and the facts in the art's lower band, and the add control labelled beside them.
+        ArtworkSceneCard(art: item.wideArt, poster: item.portraitArt,
+                         name: item.sceneName, title: disambiguated(item, ambiguous: ambiguous),
+                         fact: when(item),
+                         detail: rowFacts(item, ambiguous: ambiguous).joined(separator: FactLine.separator),
+                         aspect: isAX ? 1 : 1.65,
+                         contentMinWidth: 150,
+                         onOpen: { open(item, zoom: zoom) }) {
+            addControl(item, placement: .artwork)
         }
+        .zoomSource(zoom)
+        // No horizontal padding here: both containers already hold the gutter, and a second one
+        // put the cards on a 32-pt inset while the field and every other screen's cards sat on
+        // 16 (review i4, N7).
+        .padding(.bottom, ThemeSpace.x4)
         .franchiseQuickActions(appModel.franchise(id: item.id), appModel: appModel)
     }
 
@@ -918,10 +990,53 @@ struct DiscoverView: View {
     // MARK: - Actions
 
     private func open(_ item: FranchiseSummary, zoom: String) {
-        // The SHOW the user acted on is what "Recently searched" remembers — the term only when
-        // it came from the field.
-        if !query.isEmpty { appModel.recordRecentItem(item) }
+        rememberFromQuery(item)
         onOpenDetail(item.id, zoom)
+    }
+
+    // MARK: - What "Recently searched" keeps
+
+    /// The SHOW the user acted on from a query is what "Recently searched" remembers — and the
+    /// show stands in for the words that found it. A bare term typed on the way there ("slim" on
+    /// the way to That Time I Got Reincarnated as a Slime) goes once the show is remembered: one
+    /// search, one row, and never a fragment beside the thing it found.
+    private func rememberFromQuery(_ item: FranchiseSummary) {
+        guard !query.isEmpty else { return }
+        appModel.recordRecentItem(item)
+        let typed = Self.folded(query), title = Self.folded(item.title)
+        if let pending = submittedTerm.map(Self.folded), title.contains(pending) { submittedTerm = nil }
+        forgetRecentTerms { typed.hasPrefix($0) && title.contains($0) }
+    }
+
+    /// Remembers the submitted term once its ANSWER is in — and not at all when the answer says
+    /// the term was a slip: it found nothing, or the catalogue answered a corrected spelling
+    /// ("Showing results for …"). It used to be written the instant Return was pressed, so a
+    /// half-typed or misspelled word sat under "Recently searched" for good (review, 23 Sep). A
+    /// FAILED request keeps the term: the failure is the network's, not the word's. The term's own
+    /// partials go with it — "blea" on the way to "bleach" is one search, not two.
+    private func settleRecentTerm() {
+        guard let term = submittedTerm else { return }
+        // The field moved on (typed further, cleared): the submission is not what is on screen.
+        guard !term.isEmpty, term == query else { submittedTerm = nil; return }
+        guard !appModel.searchBusy else { return }  // its answer is still in flight
+        submittedTerm = nil
+        if !appModel.searchError, appModel.searchResults.isEmpty || appModel.searchCorrection != nil { return }
+        appModel.recordRecentSearch()
+        let typed = Self.folded(term)
+        forgetRecentTerms { $0 != typed && typed.hasPrefix($0) }
+    }
+
+    /// Drops the stored bare terms `drop` picks, each compared folded (`folded`).
+    private func forgetRecentTerms(where drop: (String) -> Bool) {
+        for term in appModel.recentSearches where drop(Self.folded(term)) {
+            appModel.removeRecentSearch(term)
+        }
+    }
+
+    /// Case and accents do not make a different search.
+    private static func folded(_ s: String) -> String {
+        s.trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
 
     /// The add control, with the menu an OWNED tap opens: the same status options and the same
@@ -933,9 +1048,12 @@ struct DiscoverView: View {
         AddControl(title: item.title,
                    owned: appModel.isInLibrary(item.id),
                    placement: placement,
+                   asks: item.isReleasing,
                    add: { add(item) }) {
             if let f = appModel.franchise(id: item.id) {
-                FranchiseContextMenu(f: f, appModel: appModel)
+                FranchiseContextMenu(f: f, appModel: appModel) { part, target in
+                    markAll = MarkAllRequest(franchise: f, from: part.progress, to: target)
+                }
             } else {
                 Button(role: .destructive) {
                     // The one remove in the app with no way back: a show added seconds ago and
@@ -955,8 +1073,20 @@ struct DiscoverView: View {
     }
 
     private func add(_ item: FranchiseSummary) {
+        // An airing show asks WHERE YOU ARE before it is added (the show page's question, which
+        // knows the episode counts this card does not): added straight to Watching at zero it
+        // arrived on Today as a wall of "behind". A finished run lands on Planned — no backlog.
+        if item.isReleasing {
+            appModel.pendingAddPrompt = item.id
+            // The alerts primer follows the add back here: it is armed when this screen returns
+            // with the show in the library (review i4 — routing the add to the page left the
+            // primer unreachable, and Profile the only way to turn alerts on).
+            primerCandidate = item
+            open(item, zoom: "search/\(item.id)")
+            return
+        }
         appModel.addToLibrary(franchiseId: item.id, title: item.title, isReleasing: item.isReleasing)
-        if !query.isEmpty { appModel.recordRecentItem(item) }
+        rememberFromQuery(item)
         // NOT a permission prompt — see `notificationPrimer`. Nothing at all happens for the whole
         // undo window; the ask is a card the user chooses to answer, later, on their own screen.
         armNotificationPrimer(item)
@@ -996,7 +1126,7 @@ struct DiscoverView: View {
         let word = TemporalCopy.airsCompact(at: at, now: now, source: item.source)
         // "today" and "tomorrow" are common nouns mid-sentence; a weekday and a month are not.
         let cased = (word == "Today" || word == "Tomorrow") ? word.lowercased() : word
-        return Copy.Search.newEpisode(day: cased)
+        return Copy.Search.airs(day: cased)
     }
 
     /// The grey facts, in priority order. The amber `when` is passed separately and never dropped.
@@ -1179,8 +1309,8 @@ private struct ResultSet {
 private enum Metrics {
     /// The 44-pt minimum target (HIG).
     static let hitTarget: CGFloat = 44
-    /// A bare-term row: a 44-pt tile plus the row padding, denser than a media row.
-    static let termRowHeight: CGFloat = 60
+    /// A bare-term row: one line at the minimum target. A word is not a poster.
+    static let termRowHeight: CGFloat = 44
     /// `MediaRow`'s disclosure chevron, verbatim, so the term rows share the media rows' x.
     static let chevronSize: CGFloat = 13
     static let chevronColumn: CGFloat = 11
@@ -1192,12 +1322,14 @@ private enum Metrics {
     /// `InlineLinkButtonStyle` pads 12 pt leading to hold its target; pulled back by the same
     /// amount so the word starts on the gutter.
     static let inlineLinkInset: CGFloat = 12
-    /// The over-art add control's inset from the card's corner: -1 puts the visible 26-pt disc
-    /// 8 pt inside the artwork rather than straddling its edge.
-    static let overArtControlInset: CGFloat = 8
-    /// The disc and its tap target — the frame the overlay offsets by.
+    /// The disc and its tap target: the 26-pt disc sits centred in the 44-pt target.
     static let overArtDisc: CGFloat = 26
     static let overArtTarget: CGFloat = 44
+    /// How far inside the art's corner the VISIBLE disc sits.
+    static let overArtDiscInset: CGFloat = 8
+    /// The target's own inset that puts the disc there: the disc is 9 pt inside its target, so
+    /// the target reaches 1 pt past the art's edge and the disc lands 8 pt inside it.
+    static let overArtControlInset: CGFloat = overArtDiscInset - (overArtTarget - overArtDisc) / 2
     /// The app's group-dim (`MediaRow.dimmed`): 0.72 lands `textSecondary` at ≈5.4:1 and still
     /// reads as content that has stepped back.
     static let groupDim: Double = 0.72

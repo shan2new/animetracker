@@ -37,6 +37,8 @@ enum AddControlPlacement {
     case overArt
     /// The trailing column of a row or card, on a surface rather than on art.
     case row
+    /// Labeled action grouped with the facts on a scene card, never laid over poster lettering.
+    case artwork
 }
 
 /// The one add control.
@@ -60,6 +62,10 @@ struct AddControl<OwnedMenu: View>: View {
     let title: String
     let owned: Bool
     var placement: AddControlPlacement = .row
+    /// The add ASKS first ("Where are you in X?", on the show page) — labelled "Add…", the
+    /// ellipsis the platform uses for a command that needs more input (review i4: one "+ Add"
+    /// label for an instant add and for one that opens a page and a question).
+    var asks: Bool = false
     let add: () -> Void
     /// The menu behind an OWNED control: `FranchiseContextMenu` once the franchise is loaded, or
     /// the single Remove while the add is still pending.
@@ -82,6 +88,8 @@ struct AddControl<OwnedMenu: View>: View {
     private var styled: some View {
         if placement == .overArt {
             control.menuStyle(.button).buttonStyle(MarkPressStyle())
+        } else if placement == .artwork {
+            control.menuStyle(.button).buttonStyle(ArtworkActionStyle(filled: false))
         } else {
             control.menuStyle(.button).buttonStyle(CompactSquareStyle(owned: owned))
         }
@@ -95,7 +103,7 @@ struct AddControl<OwnedMenu: View>: View {
     /// crossfades the control; the tap-to-add and the long-press-for-status are unchanged.
     @ViewBuilder
     private var control: some View {
-        let glyph = AddGlyph(owned: owned, placement: placement)
+        let glyph = AddGlyph(owned: owned, placement: placement, asks: asks)
         if owned {
             Menu(content: { AddMenuContent(owned: owned, add: add, ownedMenu: ownedMenu) }, label: { glyph })
         } else {
@@ -128,10 +136,21 @@ private struct AddMenuContent<OwnedMenu: View>: View {
 private struct AddGlyph: View {
     let owned: Bool
     let placement: AddControlPlacement
+    var asks: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        if placement == .artwork {
+            // Labelled on the art (20 Sep); an owned show's check is amber — ownership is STATE.
+            Label {
+                Text(owned ? Copy.Search.added : (asks ? Copy.Search.addAsks : Copy.Search.add))
+            } icon: {
+                Image(systemName: owned ? "checkmark" : "plus")
+                    .foregroundStyle(owned ? ThemeColor.accent : ThemeColor.textPrimary)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        } else {
         Image(systemName: owned ? "checkmark" : "plus")
             // Text styles, not point sizes: caption (12) in the disc, subheadline (15) in the
             // square, so the glyph tracks Dynamic Type with the row it sits in.
@@ -140,6 +159,7 @@ private struct AddGlyph: View {
             .contentTransition(.symbolEffect(.replace.downUp))
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: owned)
             .modifier(AddControlShape(placement: placement, owned: owned))
+        }
     }
 }
 
@@ -170,6 +190,8 @@ private struct AddControlShape: ViewModifier {
             content
                 .frame(width: Metrics.hitTarget, height: Metrics.hitTarget)
                 .contentShape(Rectangle())
+        case .artwork:
+            content
         }
     }
 }

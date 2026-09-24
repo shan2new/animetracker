@@ -12,6 +12,9 @@ struct DetailShelf<Content: View>: View {
     let title: String
     var count: Int? = nil
     var action: (() -> Void)? = nil
+    /// Where the first card starts. The gutter, except for a shelf whose cards centre their art in
+    /// a wider column (the people's discs), which pulls back so the ART sits on the gutter.
+    var leading: CGFloat = ThemeMetrics.gutter
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -22,7 +25,7 @@ struct DetailShelf<Content: View>: View {
             // stall on the simulator for cards three screens off to the right.
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: ThemeMetrics.shelfGap) { content() }
-                    .padding(.leading, ThemeMetrics.gutter)
+                    .padding(.leading, leading)
             }
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
@@ -42,49 +45,61 @@ struct TrailerCard: View {
     let video: FranchiseVideo
     /// The show, so the card's name can drop it ("Game of Thrones | Official Series Trailer").
     var showTitle: String? = nil
+    /// The shelf's card is 200 pt; the FEATURED first trailer runs the content width.
+    var width: CGFloat = TrailerCard.width
+    var featured: Bool = false
     let action: () -> Void
 
     static let width: CGFloat = 200
 
-    private var name: String { video.title(cleanedFor: showTitle) ?? video.displayTitle }
+    /// The video's own name; one that is only its KIND ("Trailer" under a header that says
+    /// Trailers, twice down a shelf) is named by the part it belongs to — "Season 4" (critique,
+    /// 24 Sep).
+    private var name: String {
+        if let cleaned = video.title(cleanedFor: showTitle) { return cleaned }
+        return video.partLabel ?? video.displayTitle
+    }
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous)
+        let disc: CGFloat = featured ? 56 : 40
         Button(action: action) {
             VStack(alignment: .leading, spacing: ThemeSpace.x2) {
                 ZStack {
                     shape.fill(ThemeColor.surfaceRaised)
-                    RemoteImageView(url: video.thumbnailURL, contentMode: .fill, maxPixel: 640,
+                    RemoteImageView(url: video.thumbnailURL, contentMode: .fill, maxPixel: featured ? 1280 : 640,
                                     placeholderHidden: true)
                     // The play disc in the scrim's glass, the way the over-art pills are drawn.
                     Image(systemName: "play.fill")
-                        .font(.system(size: 15, weight: .bold))
+                        .font(.system(size: featured ? 21 : 15, weight: .bold))
                         .foregroundStyle(ThemeColor.textPrimary)
-                        .padding(.leading, 2)
-                        .frame(width: 40, height: 40)
+                        .padding(.leading, featured ? 3 : 2)
+                        .frame(width: disc, height: disc)
                         .background(ThemeColor.scrimStrong, in: Circle())
                         .overlay(Circle().strokeBorder(ThemeColor.hairline, lineWidth: 1))
                 }
-                .frame(width: Self.width, height: (Self.width * 9 / 16).rounded())
+                .frame(width: width, height: (width * 9 / 16).rounded())
                 .clipShape(shape)
                 .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-                .shadow(.art)
+                .cardShadow(.art, shape: shape)
                 VStack(alignment: .leading, spacing: 2) {
-                    // The grid's rule on a shelf whose names are sentences (review i3): two
-                    // reserved lines, so every meta line shares a baseline.
+                    // A SHELF keeps its meta line directly under the name, one line or two (the
+                    // owner's rule for shelves): two reserved lines put "Trailer", a 20-pt hole,
+                    // then "Season 4" under every card whose name is one word (24 Sep).
                     Text(name)
-                        .type(ThemeType.shelfTitle)
+                        .type(featured ? ThemeType.rowTitle : ThemeType.shelfTitle)
                         .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(2, reservesSpace: true)
+                        .lineLimit(1...2)
                         .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                     // ALWAYS a meta line (review i2): one caption anatomy per shelf — neighbouring
                     // cards were two and three rows tall.
                     Text(Self.meta(video, name: name))
-                        .type(ThemeType.shelfCaption)
+                        .type(featured ? ThemeType.rowMeta : ThemeType.shelfCaption)
                         .foregroundStyle(ThemeColor.textSecondary)
                         .lineLimit(1)
                 }
-                .frame(width: Self.width, alignment: .leading)
+                .frame(width: width, alignment: .leading)
             }
             .contentShape(Rectangle())
         }
@@ -94,15 +109,14 @@ struct TrailerCard: View {
         .accessibilityHint(Copy.Accessibility.playsTrailerHint)
     }
 
-    /// "Trailer · Season 6": what it is, then the part it belongs to. The kind is dropped when the
-    /// title already says it, and the whole line when there is nothing left to add.
+    /// "Trailer · Season 6": what it is, then the part it belongs to — ONE anatomy down the shelf,
+    /// never the provider ("YouTube" beside "Trailer · Season 1", critique 24 Sep). The part is
+    /// dropped when the name already is the part; the kind always stays, so every card has the
+    /// same second line.
     static func meta(_ video: FranchiseVideo, name: String?) -> String {
         let kind = Copy.Video.kind(video.kind)
-        // "Official Series Trailer" over "Trailer" said it twice (review i4).
-        let saysKind = name?.localizedCaseInsensitiveContains(kind) == true
-        let bits = [saysKind ? nil : kind, video.partLabel].compactMap { $0 }
-        if !bits.isEmpty { return bits.joined(separator: " \u{00B7} ") }
-        return FranchiseVideo.providerName(video.site) ?? kind
+        let part = video.partLabel.flatMap { label in name == label ? nil : label }
+        return [kind, part].compactMap { $0 }.joined(separator: " \u{00B7} ")
     }
 }
 
@@ -113,8 +127,27 @@ struct TrailerCard: View {
 struct PersonCard: View {
     let person: CatalogPerson
 
-    static let disc: CGFloat = 72
-    static let width: CGFloat = 108
+    /// Supporting information, a step smaller than the art shelves (24 Sep): 64-pt discs in
+    /// 96-pt columns show three and a half people, which says "scrolls" without a sliver.
+    static let disc: CGFloat = 64
+    static let width: CGFloat = 96
+    /// How far the shelf pulls back so the first DISC, not its column, sits on the gutter.
+    static let columnInset: CGFloat = (width - disc) / 2
+
+    /// The name as a CREDIT — two lines, broken at the space that balances them ("Yuusuke" over
+    /// "Kobayashi") — so every name is two lines tall and every role lands on one baseline. A
+    /// wrapped name used to push only its own role down a line (critique, 24 Sep).
+    static func creditName(_ name: String) -> String {
+        let words = name.split(separator: " ")
+        guard words.count >= 2 else { return name }
+        var split = 1, longest = Int.max
+        for i in 1..<words.count {
+            let head = words[..<i].joined(separator: " ").count
+            let tail = words[i...].joined(separator: " ").count
+            if max(head, tail) < longest { longest = max(head, tail); split = i }
+        }
+        return words[..<split].joined(separator: " ") + "\n" + words[split...].joined(separator: " ")
+    }
 
     var body: some View {
         VStack(spacing: ThemeSpace.x2) {
@@ -137,10 +170,10 @@ struct PersonCard: View {
                 // four of five names a 24-pt hole; a name compresses a step before it ellipsizes.
                 // One size for every name on the row (review i5: a long name at 0.85 lifted its
                 // own role 7 px off the row); a long name wraps and moves only its role.
-                Text(person.name)
+                Text(Self.creditName(person.name))
                     .type(ThemeType.shelfTitle)
                     .foregroundStyle(ThemeColor.textPrimary)
-                    .lineLimit(2)
+                    .lineLimit(2, reservesSpace: true)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -148,9 +181,10 @@ struct PersonCard: View {
                     Text(role)
                         .type(ThemeType.shelfCaption)
                         .foregroundStyle(ThemeColor.textSecondary)
-                        // One line, a step of scale before the ellipsis.
+                        // One line at ONE size across the row — truncated, never scaled: a
+                        // scaled "Wednesday Addams" sat 0.92× beside its neighbours with its
+                        // baseline 1.3 pt high (review i4, N11).
                         .lineLimit(1)
-                        .minimumScaleFactor(0.85)
                         .truncationMode(.tail)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -166,21 +200,84 @@ struct PersonCard: View {
 // MARK: - Where to watch
 
 /// The providers' marks in a row under a header that opens the options, and the attribution the
-/// provider data requires as a footnote. The marks are not controls: the data carries one link
-/// for the whole title and none per provider, so a mark that looked pressable would lie.
+/// provider data requires as a footnote. The data carries one link for the whole title and none
+/// per provider, so every mark opens THAT page — the options, where each service is one tap on —
+/// rather than sitting there looking pressable and doing nothing (review, 23 Sep). Each mark is
+/// named, and a service's store channels ("Crunchyroll Amazon Channel") fold into the service.
 struct WatchProvidersRow: View {
     let availability: WatchAvailability
     let open: () -> Void
 
+    /// One mark per service: a "<Service> Amazon Channel"-style or "<Service> with Ads" listing
+    /// is the same service sold another way.
+    static func distinct(_ providers: [WatchProvider]) -> [WatchProvider] {
+        let names = providers.map { $0.name.lowercased() }
+        // A paid add-on channel sold inside Prime Video is redundant when Prime Video itself
+        // carries the title: "Anime Times" beside "Amazon Prime Video" offered a second
+        // subscription for what the first already plays (review i4, P23).
+        let primeCarries = names.contains { $0.hasPrefix("amazon prime video") }
+        return providers.filter { p in
+            let name = p.name.lowercased()
+            if primeCarries, name.hasSuffix(" amazon channel") { return false }
+            return !names.contains { other in
+                other != name && name.hasPrefix(other + " ")
+                    && (name.contains("channel") || name.contains("with ads") || name.contains("amazon"))
+            }
+        }
+    }
+
+    /// The SERVICE's name: a store channel is named by what it is, not the shop it is sold in —
+    /// "Anime Times Amazon Channel" printed "Anime Times Amazon Cha…" (review i3).
+    static func displayName(_ provider: WatchProvider) -> String {
+        var name = provider.name
+        for suffix in [" Amazon Channel", " Apple TV Channel", " Roku Premium Channel"] {
+            if name.lowercased().hasSuffix(suffix.lowercased()), name.count > suffix.count {
+                name = String(name.dropLast(suffix.count))
+                break
+            }
+        }
+        // The BRAND as its mark says it (24 Sep): "Amazon / Prime Video" wrapped under the
+        // "prime video" logo and "Amazon MX Play…" was cut at the screen's edge (critique).
+        let brands: [String: String] = [
+            "amazon prime video": "Prime Video", "amazon mx player": "MX Player",
+            "disney plus": "Disney+", "paramount plus": "Paramount+", "apple tv plus": "Apple TV+",
+        ]
+        return brands[name.lowercased()] ?? name
+    }
+
     var body: some View {
+        let linked = availability.linkURL != nil
         VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-            SectionHeaderRow(Copy.Heading.whereToWatch, action: availability.linkURL == nil ? nil : open)
-                .accessibilityHint(availability.linkURL == nil ? "" : Copy.Accessibility.opensStreamingOptionsHint)
+            SectionHeaderRow(Copy.Heading.whereToWatch, action: linked ? open : nil)
+                .accessibilityHint(linked ? Copy.Accessibility.opensStreamingOptionsHint : "")
             ScrollView(.horizontal) {
-                HStack(spacing: ThemeMetrics.shelfGap) {
-                    ForEach(availability.providers) { ProviderMark(provider: $0) }
+                HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
+                    ForEach(Self.distinct(availability.providers)) { provider in
+                        Button(action: open) {
+                            VStack(spacing: ThemeSpace.x1) {
+                                ProviderMark(provider: provider)
+                                // Two lines, centred, never an ellipsis: "Amazon Prim…" and
+                                // "Anime Times…" named nothing (iteration 2).
+                                // ONE line under every mark, so the row is one height.
+                                Text(Self.displayName(provider))
+                                    .type(ThemeType.caption)
+                                    .foregroundStyle(ThemeColor.textSecondary)
+                                    .multilineTextAlignment(.center)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                    .allowsTightening(true)
+                                    .frame(width: ProviderMark.size + 16, alignment: .top)
+                            }
+                        }
+                        .buttonStyle(RowPressStyle())
+                        .disabled(!linked)
+                        .accessibilityLabel("\(Self.displayName(provider)), \(Copy.Watch.access(provider.access))")
+                        .accessibilityHint(linked ? Copy.Accessibility.opensStreamingOptionsHint : "")
+                    }
                 }
-                .padding(.leading, ThemeMetrics.gutter)
+                // Each mark is centred in a name column 16 pt wider than it: pulled back 8 pt so the
+                // first MARK — not its column — sits on the gutter (iteration 2).
+                .padding(.leading, ThemeMetrics.gutter - 8)
 
             }
             .scrollIndicators(.hidden)
@@ -198,7 +295,7 @@ struct WatchProvidersRow: View {
 struct ProviderMark: View {
     let provider: WatchProvider
 
-    static let size: CGFloat = 52
+    static let size: CGFloat = 56
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: ThemeRadius.compactControl, style: .continuous)
@@ -373,9 +470,20 @@ struct VideoSheet: View {
             if let line = subline {
                 Text(line)
                     .type(ThemeType.heroMeta)
-                    .foregroundStyle(ThemeColor.textSecondary)
+                    .foregroundStyle(ThemeColor.textPrimary.opacity(0.86))
                     .lineLimit(2)
             }
+        }
+        // Type laid on a lit, breathing field needs its own protection: over Re:ZERO's lifted
+        // pink the name measured 2.2:1 and "Season 4" 1.07:1 (review i5, F21). A soft pool of
+        // shade under the words (a gradient, no blur pass) and the art's contact shadow — the
+        // room stays lit around them.
+        .shadow(.art)
+        .background {
+            RadialGradient(colors: [.black.opacity(0.55), .black.opacity(0.0)],
+                           center: .leading, startRadius: 0, endRadius: 320)
+                .padding(-48)
+                .allowsHitTesting(false)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(copyLit ? 1 : 0)

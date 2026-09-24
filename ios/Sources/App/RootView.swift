@@ -186,8 +186,10 @@ struct MainTabView: View {
                                   // The same route Library's own "See all" takes — a filtered
                                   // All titles — not a bare tab switch to the root, which left
                                   // "See all" meaning three things across two screens.
+                                  // Sorted as the queue, like Library's own "Next up ›" —
+                                  // the same header opened Watching A–Z from Today (review i2).
                                   onSeeAllWatching: {
-                                      libraryRequest = .init(status: .watching)
+                                      libraryRequest = .init(status: .watching, sort: .progress)
                                       selectedTab = .library
                                   },
                                   // No status: Today's "N updates" counts `outNow`, which is any
@@ -201,7 +203,13 @@ struct MainTabView: View {
                                       libraryRequest = .init(status: status)
                                       selectedTab = .library
                                   },
-                                  onAddShow: { appModel.searchFieldRequested = true; selectedTab = .discover })
+                                  onAddShow: {
+                                      appModel.searchFieldRequested = true
+                                      selectedTab = .discover
+                                  },
+                                  onOpenRecommendations: {
+                                      push(.today, FranchiseDetailView.DetailPush.recommendations)
+                                  })
                             .detailDestinations(push: { push(.today, $0) })
                             .perfScreen("Today")
                     }
@@ -237,7 +245,10 @@ struct MainTabView: View {
                 // reference, 24 Aug), which the search role's tab-bar morph did not allow.
                 Tab(AppTab.discover.titleKey, systemImage: "magnifyingglass", value: AppTab.discover) {
                     NavigationStack(path: path(.discover)) {
-                        DiscoverView(onOpenDetail: openDetail)
+                        DiscoverView(onOpenDetail: openDetail,
+                                     onOpenRecommendations: {
+                                         push(.discover, FranchiseDetailView.DetailPush.recommendations)
+                                     })
                             .detailDestinations(push: { push(.discover, $0) })
                             .perfScreen("Search")
                     }
@@ -288,6 +299,26 @@ struct MainTabView: View {
                 SyncCenter.shared.startMonitoring()
                 #if DEBUG
                 ToastDemo.arm(appModel)
+                if UserDefaults.standard.bool(forKey: "verifyArtworkIdentity") {
+                    ArtworkIdentityRegression.run()
+                }
+                if UserDefaults.standard.bool(forKey: "verifyAnnouncements") {
+                    AnnouncementRegression.run()
+                }
+                // `-verifyCopy 1`: the copy table's own audit (the ellipsis rule and friends),
+                // which otherwise only a preview renders.
+                if UserDefaults.standard.bool(forKey: "verifyCopy") {
+                    let problems = Copy.auditProblems
+                    print(problems.isEmpty ? "COPY_AUDIT_PASS" : "COPY_AUDIT_FAIL \(problems)")
+                }
+                if UserDefaults.standard.bool(forKey: "verifyDetailProgress") {
+                    await DetailProgressRegression.run()
+                }
+                // Read-only capture route; never changes library status or progress.
+                if let id = UserDefaults.standard.string(forKey: "openFranchise"), !id.isEmpty {
+                    selectedTab = .today
+                    paths[.today] = NavigationPath([DetailRoute(id: id, zoomID: "capture/\(id)")])
+                }
                 #endif
             }
 
@@ -379,6 +410,9 @@ private extension View {
                         // A related title, opened from a show page: the same page, one deeper.
                         FranchiseDetailView(franchiseId: franchiseId, push: push)
                             .perfScreen("Detail")
+                    case .recommendations:
+                        RecommendationsView { id in push(.detail(franchiseId: id)) }
+                            .perfScreen("ForYou")
                     }
                 }
                 // A pushed screen is still inside the TabView, so the floating pill is still over

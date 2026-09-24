@@ -22,6 +22,11 @@ struct WatchSession: Codable, Identifiable, Equatable, Sendable {
     var cancelledAtEpisode: Int?
     /// Episodes the session covers (for history copy); 0 when unknown.
     var episodes: Int
+    /// Where the show stood BEFORE the rewatch zeroed it (mediaId → episodes) and its status, so
+    /// stopping the rewatch puts it back — without them a finished show stopped at Episode 1 read
+    /// "35 EPISODES LEFT" on Today (review i5, F3). Absent on sessions from older builds.
+    var restoreProgress: [String: Int]? = nil
+    var restoreStatus: String? = nil
 
     var isActive: Bool { completedAt == nil && cancelledAt == nil }
     var isCompleted: Bool { completedAt != nil }
@@ -73,7 +78,8 @@ final class RewatchStore {
     /// Starts a rewatch. The first watch is recorded implicitly (dates unknown) when no session
     /// exists yet, so the new one is the second watch. Returns the new active session.
     @discardableResult
-    func startRewatch(franchiseId: String, scope: WatchSession.Scope, startedAt: Int64, episodes: Int) -> WatchSession {
+    func startRewatch(franchiseId: String, scope: WatchSession.Scope, startedAt: Int64, episodes: Int,
+                      restoreProgress: [Int: Int]? = nil, restoreStatus: String? = nil) -> WatchSession {
         var mine = sessions.filter { $0.franchiseId == franchiseId }
         if mine.isEmpty {
             let first = WatchSession(id: UUID(), franchiseId: franchiseId, scope: .franchise, ordinal: 1,
@@ -83,7 +89,9 @@ final class RewatchStore {
         }
         let ordinal = (mine.map(\.ordinal).max() ?? 0) + 1
         let session = WatchSession(id: UUID(), franchiseId: franchiseId, scope: scope, ordinal: ordinal,
-                                   startedAt: startedAt, completedAt: nil, cancelledAt: nil, cancelledAtEpisode: nil, episodes: episodes)
+                                   startedAt: startedAt, completedAt: nil, cancelledAt: nil, cancelledAtEpisode: nil, episodes: episodes,
+                                   restoreProgress: restoreProgress.map { Dictionary(uniqueKeysWithValues: $0.map { (String($0.key), $0.value) }) },
+                                   restoreStatus: restoreStatus)
         sessions.append(session)
         persist()
         return session

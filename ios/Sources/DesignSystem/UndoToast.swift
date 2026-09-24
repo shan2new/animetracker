@@ -23,6 +23,10 @@ struct UndoState: Identifiable {
     /// Where the receipt is drawn (`Receipts.swift`): in place under a host that stays on
     /// screen, else the tab bar's lane. Default: the lane.
     var placement: ReceiptPlacement = .lane
+    /// A second fact for the lane's second line, in place of the show's name (the poster beside
+    /// it names the show): "Moved to Watching" under "Episode 9 watched". Two facts joined on the
+    /// one-line fact were cut to "Episode 9 watched · Moved to…" (iteration 2).
+    var subtitle: String? = nil
 
     /// The same state, placed under a host.
     func placed(at host: String) -> UndoState {
@@ -35,14 +39,21 @@ struct UndoState: Identifiable {
     /// already is (the receipt spike, 5 Sep).
     var receipt: String {
         if let customMessage { return customMessage }
+        return receiptBase
+    }
+
+    private var receiptBase: String {
         // The lane's fact, with the show on the line beneath; the full sentence stays in
         // `message` for VoiceOver.
         if removed { return Copy.Toast.removedShort }
-        if added { return Copy.Toast.added(title: title, status: statusLabel ?? "Library") }
+        // The lane's poster (or the line beneath) names the show; the fact is where it went —
+        // "Added MASHLE: MAGIC AND…" cut the one fact that mattered (review i5, F16).
+        if added { return Copy.Toast.addedTo(statusLabel ?? "Library") }
         return count > 1 ? Copy.Toast.batchWatched(count) : Copy.Progress.episodeWatched(episode)
     }
 
     var message: String {
+        if let subtitle { return "\(customMessage ?? receiptBase). \(subtitle)" }
         if let customMessage { return customMessage }
         if removed { return Copy.Toast.removed }
         if added { return Copy.Toast.added(title: title, status: statusLabel ?? "Library") }

@@ -13,7 +13,9 @@ struct StartRewatchSheet: View {
     @State private var scope: WatchSession.Scope = .franchise
     @State private var startDate = Date()
 
-    private var parts: [FranchisePart] { franchise.episodicPartsInOrder }
+    /// Only what has aired can be rewatched — an announced season with no count was offered as a
+    /// scope (review i5, F19).
+    private var parts: [FranchisePart] { franchise.episodicPartsInOrder.filter { !$0.isUpcoming } }
 
     /// The scope that covers the whole work, with a count like every other row.
     ///
@@ -284,7 +286,7 @@ struct WatchHistoryView: View {
             // The sheet sizes itself to its own content (see `SessionDetailView`).
             SessionDetailView(session: session)
         }
-        .confirmationDialog(Copy.Confirm.deleteHistoryTitle, isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+        .alert(Copy.Confirm.deleteHistoryTitle, isPresented: $confirmDeleteAll) {
             Button(Copy.Confirm.deleteHistoryConfirm, role: .destructive) {
                 FeedbackCoordinator.fire(.destructive)
                 withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) { store.deleteAll(for: franchiseId) }
@@ -593,7 +595,7 @@ struct SessionDetailView: View {
                 }
                 .chromeSharedBackgroundHidden()
             }
-            .confirmationDialog(Copy.Confirm.deleteSessionTitle, isPresented: $confirmDelete, titleVisibility: .visible) {
+            .alert(Copy.Confirm.deleteSessionTitle, isPresented: $confirmDelete) {
                 Button(Copy.Confirm.deleteSessionConfirm, role: .destructive) {
                     FeedbackCoordinator.fire(.destructive)
                     store.delete(session.id)
@@ -605,7 +607,7 @@ struct SessionDetailView: View {
             }
             // Stopping keeps the record and states where it stopped; it is not a deletion, so it
             // does not use the destructive verb's copy.
-            .confirmationDialog("Stop this rewatch?", isPresented: $confirmStop, titleVisibility: .visible) {
+            .alert("Stop this rewatch?", isPresented: $confirmStop) {
                 Button("Stop rewatch", role: .destructive) {
                     // Stopping keeps the record: a commit, not a deletion (review i2).
                     FeedbackCoordinator.fire(.commitLight)

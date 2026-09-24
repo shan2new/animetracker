@@ -49,6 +49,13 @@ struct ArtworkImage: Codable, Hashable, Sendable {
     let language: String?
     let score: Double?
 
+    /// Only a measured TMDB image has meaningful language metadata. Legacy URL-only
+    /// fallbacks also have a nil language; that does not make their lettering disappear.
+    var isTextlessKeyArt: Bool {
+        source == "tmdb" && (width ?? 0) > 0 && (height ?? 0) > 0
+            && ArtworkSet.nonEmpty(language) == nil
+    }
+
     enum CodingKeys: String, CodingKey { case url, source, width, height, language, score }
 
     init(url: String, source: String? = nil, width: Int? = nil, height: Int? = nil,
@@ -109,17 +116,33 @@ struct ArtworkGallery: Codable, Hashable, Sendable {
         logos = list(.logos)
     }
 
-    /// The first ranked portrait with no language tag, trusted ONLY when the gallery is tagged at
-    /// all — at least one portrait carries a language. A missing tag means "textless" on a ranked
-    /// gallery and means nothing on the older shape the server still sends for some rows (no
-    /// scores, no sizes, no languages): Bleach's first titled poster passed as textless there and
-    /// the text title landed on top of a 100-pt BLEACH logotype (5 Sep).
+    /// Filter the provider's ranking for positively described textless key art. A gallery
+    /// containing only textless images is valid; an unmeasured legacy poster is not evidence.
     var textlessPortrait: String? {
-        guard portraits.contains(where: { ArtworkSet.nonEmpty($0.language) != nil }) else { return nil }
-        return portraits.first { ArtworkSet.nonEmpty($0.language) == nil }?.url
+        portraits.first(where: \.isTextlessKeyArt)?.url
+    }
+
+    func portraitAspect(for url: String?) -> Double? {
+        guard let image = portraits.first(where: { $0.url == url }),
+              let width = image.width, let height = image.height, width > 0, height > width else { return nil }
+        return Double(width) / Double(height)
     }
 
     var isEmpty: Bool { portraits.isEmpty && landscapes.isEmpty && logos.isEmpty }
+
+    /// Catalogue tiles prefer a positively titled poster; a missing language tag is not
+    /// sufficient evidence to add a second logo to artwork that may already contain one.
+    var titledPortrait: String? {
+        portraits.first { $0.language == "en" }?.url
+            ?? portraits.first { ArtworkSet.nonEmpty($0.language) != nil }?.url
+    }
+
+    /// The app's display language is English. Pixel count must not promote an untagged or
+    /// foreign-language wordmark over an available English one (Beginning After the End).
+    var preferredLogo: ArtworkImage? {
+        logos.first { $0.language?.lowercased() == "en" }
+            ?? logos.first { ArtworkSet.nonEmpty($0.language) == nil }
+    }
 }
 
 /// The one decision a wide frame makes: a landscape asset fills it; a portrait one is composited
@@ -214,9 +237,25 @@ extension Franchise {
     /// selected poster, where the logotype identifies the show. See `ArtworkGallery.textlessPortrait`
     /// for the one condition on trusting a missing tag.
     var textlessPortrait: String? { artwork?.textlessPortrait }
-    /// The show's logo treatment — the server's first-ranked logo — for the billboard's name
-    /// (Netflix's, Disney+'s billboard grammar). `nil` reads as "set the name in type".
-    var billboardLogo: ArtworkImage? { artwork?.logos.first }
+    /// English identity first; quality-ranked unknown-language artwork is a fallback only.
+    /// The same choice is shared by full heroes, landscape cards and poster shelves.
+    var billboardLogo: ArtworkImage? { artwork?.preferredLogo }
+    /// Landscape key art has no poster lettering to duplicate: the logo, else the name in type.
+    var sceneName: BillboardName { billboardLogo.map(BillboardName.logo) ?? .type }
+    /// A poster tile's identity: a textless poster wears the logo; a titled one carries itself.
+    var posterName: BillboardName {
+        textlessPortrait != nil && sceneName.hasGraphicLogo ? sceneName : (portraitArt != nil ? .embedded : .type)
+    }
+    var identifiedPoster: String? { posterName.hasGraphicLogo ? textlessPortrait : portraitArt }
+    var cataloguePoster: String? { artwork?.titledPortrait ?? portraitArt }
+    /// ONE poster for every tile (review i3: Today's shelves and Search's wall drew different key
+    /// art for the same show): the authored, titled poster when the gallery has one; else the
+    /// textless poster under the show's logo; else the selected poster.
+    var tilePoster: (url: String?, name: BillboardName) {
+        if let titled = artwork?.titledPortrait { return (titled, .type) }
+        return (identifiedPoster, posterName)
+    }
+
     /// What the billboard draws for the name — see `BillboardName`.
     var billboardName: BillboardName {
         BillboardName.resolve(portrait: portraitArt, textless: textlessPortrait, gallery: artwork, logo: billboardLogo)
@@ -225,28 +264,28 @@ extension Franchise {
 
 /// What a billboard draws for the show's NAME, decided by what the art under it already says.
 ///
-/// There is deliberately no "the art carries the name" case any more (5 Sep). It assumed the
-/// poster's logotype sits where the copy does; Re:ZERO's sits in the top band — under the back
-/// button, the status capsule and the top veil — so the page drew no name and hid the one on the
-/// poster, and on Today the wordmark band covers the same zone: a hero with no visible name at
-/// all. A name is ALWAYS drawn. Where the selected poster is titled and the gallery has no
-/// textless one it is drawn in TYPE, never as a logo — a logo would set the poster's own
-/// logotype twice in the same hand, while type beside titled key art is Crunchyroll's and Prime
-/// Video's ordinary caption. The real fix for those shows is a textless poster from the server's
-/// enrichment; the client's job is to never leave the name off.
+/// A separate logo belongs only on positively textless artwork. An authored poster keeps
+/// its own identity; an incomplete gallery is never permission to stamp another title on it.
+/// Surfaces must preserve that poster's lettering and expose the title to VoiceOver.
 enum BillboardName: Hashable, Sendable {
     /// The show's logo treatment. `HeroTitle` draws it only at the headline's mass
     /// (`HeroTitle.logoBox`) and sets the name in type otherwise.
     case logo(ArtworkImage)
+    /// The selected poster already supplies the visual identity. No second logo OR text title.
+    case embedded
     /// The name set in type.
     case type
 
+    var hasGraphicLogo: Bool {
+        guard case .logo(let image) = self,
+              let width = image.width, let height = image.height else { return false }
+        return width > 0 && height > 0
+    }
+
     static func resolve(portrait: String?, textless: String?, gallery: ArtworkGallery?, logo: ArtworkImage?) -> BillboardName {
-        if textless == nil, let portrait,
-           let selected = gallery?.portraits.first(where: { $0.url == portrait }),
-           ArtworkSet.nonEmpty(selected.language) != nil {
-            return .type
-        }
+        // `images.portrait` can be absent from the six-entry gallery (Percy Jackson).
+        // Do not interpret that missing metadata as proof that the selected poster is clean.
+        if textless == nil, portrait != nil { return .embedded }
         if let logo { return .logo(logo) }
         return .type
     }
@@ -295,7 +334,21 @@ extension FranchiseSummary {
         WideArt.billboard(portrait: textlessPortrait ?? portraitArt, landscape: landscapeArt)
     }
     var textlessPortrait: String? { artwork?.textlessPortrait }
-    var billboardLogo: ArtworkImage? { artwork?.logos.first }
+    var billboardLogo: ArtworkImage? { artwork?.preferredLogo }
+    /// Landscape key art has no poster lettering to duplicate: the logo, else the name in type.
+    var sceneName: BillboardName { billboardLogo.map(BillboardName.logo) ?? .type }
+    /// A poster tile's identity: a textless poster wears the logo; a titled one carries itself.
+    var posterName: BillboardName {
+        textlessPortrait != nil && sceneName.hasGraphicLogo ? sceneName : (portraitArt != nil ? .embedded : .type)
+    }
+    var identifiedPoster: String? { posterName.hasGraphicLogo ? textlessPortrait : portraitArt }
+    var cataloguePoster: String? { artwork?.titledPortrait ?? portraitArt }
+    /// See `Franchise.tilePoster`.
+    var tilePoster: (url: String?, name: BillboardName) {
+        if let titled = artwork?.titledPortrait { return (titled, .type) }
+        return (identifiedPoster, posterName)
+    }
+
     var billboardName: BillboardName {
         BillboardName.resolve(portrait: portraitArt, textless: textlessPortrait, gallery: artwork, logo: billboardLogo)
     }
@@ -751,8 +804,8 @@ extension Franchise {
     /// its billboard — the library payload and the catalogue read select different posters).
     func keepingArt(of other: Franchise) -> Franchise {
         Franchise(copying: self, parts: parts,
-                  images: other.images ?? images,
-                  artwork: other.artwork ?? artwork,
+                  images: other.images,
+                  artwork: other.artwork,
                   themes: themes, featuredVideo: featuredVideo, videos: videos,
                   audience: audience, people: people, related: related,
                   continueWatching: continueWatching)
@@ -760,27 +813,26 @@ extension Franchise {
 
     func grafting(_ fetched: Franchise) -> Franchise {
         guard fetched.id == id else { return self }
-        let byMedia = Dictionary(fetched.parts.map { ($0.mediaId, $0) }, uniquingKeysWith: { a, _ in a })
-        let mergedParts = parts.map { p -> FranchisePart in
-            guard let d = byMedia[p.mediaId] else { return p }
-            let eps = p.episodes.isEmpty ? d.episodes : p.episodes
-            let vids = p.videos.isEmpty ? d.videos : p.videos
-            let imgs = p.images ?? d.images
-            let gallery = p.artwork ?? d.artwork
-            if eps.count == p.episodes.count, vids.count == p.videos.count, imgs == p.images,
-               gallery == p.artwork { return p }
-            return p.with(episodes: eps, images: imgs, artwork: gallery, videos: vids)
+        // Catalogue facts come from the newer detail read; only viewer state comes from the
+        // live library. Otherwise a newly announced/added season stayed hidden until reload.
+        let live = Dictionary(parts.map { ($0.mediaId, $0) }, uniquingKeysWith: { a, _ in a })
+        let mergedParts = (fetched.parts.isEmpty ? parts : fetched.parts).map { d -> FranchisePart in
+            guard let p = live[d.mediaId] else { return d }
+            return d.withProgress(p.progress).with(episodes: d.episodes.isEmpty ? p.episodes : d.episodes,
+                                                   images: d.images ?? p.images, artwork: d.artwork ?? p.artwork,
+                                                   videos: d.videos.isEmpty ? p.videos : d.videos)
         }
-        return Franchise(copying: self, parts: mergedParts,
-                         images: images ?? fetched.images,
-                         artwork: artwork ?? fetched.artwork,
+        return Franchise(copying: fetched, parts: mergedParts,
+                         subscription: .some(subscription), status: .some(status),
+                         images: images,
+                         artwork: artwork,
                          themes: themes.isEmpty ? fetched.themes : themes,
-                         featuredVideo: featuredVideo ?? fetched.featuredVideo,
+                         featuredVideo: featuredVideo,
                          videos: videos.isEmpty ? fetched.videos : videos,
-                         audience: fetched.audience ?? audience,
+                         audience: fetched.audience,
                          people: (people?.isEmpty ?? true) ? fetched.people : people,
                          related: related.isEmpty ? fetched.related : related,
-                         continueWatching: fetched.continueWatching ?? continueWatching)
+                         continueWatching: fetched.continueWatching)
     }
 }
 

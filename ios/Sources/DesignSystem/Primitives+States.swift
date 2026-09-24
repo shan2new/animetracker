@@ -374,7 +374,7 @@ struct SyncBanner: View {
                 }
             }
         }
-        .confirmationDialog(Copy.Account.discardChangesTitle(count), isPresented: $confirmDiscard, titleVisibility: .visible) {
+        .alert(Copy.Account.discardChangesTitle(count), isPresented: $confirmDiscard) {
             Button(Copy.Account.discardChangesConfirm(count), role: .destructive) {
                 FeedbackCoordinator.fire(.destructive)
                 SyncCenter.shared.discardAll()
@@ -632,7 +632,10 @@ struct SectionHeaderRow: View {
                         // The one chevron size the app draws (`MediaRow`), a step heavier in ink
                         // than a row's because it sits beside a 20-pt title rather than 13-pt meta.
                         Image(systemName: "chevron.forward")
-                            .font(.system(size: 14, weight: .semibold))
+                            // Relative to the title it trails: a fixed 14 pt sat on the baseline
+                            // of a ~40-pt AX title like a stray mark (review, 23 Sep).
+                            .font(.system(.body, weight: .semibold))
+                            .imageScale(.small)
                             .foregroundStyle(ThemeColor.textTertiary)
                             .accessibilityHidden(true)
                     }
@@ -654,6 +657,9 @@ struct SectionHeaderRow: View {
                     // `ThemeColor.interactive` — it must not out-weigh the title it belongs to.
                     .buttonStyle(InlineLinkButtonStyle())
                     .padding(.vertical, -12)
+                    // Its last glyph on the gutter: the style's 12-pt target padding ended
+                    // "Clear" 28 pt from the edge (review, 23 Sep).
+                    .padding(.trailing, -12)
             }
         }
         // The negative padding leaves the button DRAWING and HIT-TESTING above and below the

@@ -63,6 +63,9 @@ struct ProfileView: View {
     /// The one failure this screen has to report itself: the account deletion that did not happen.
     @State private var deleteFailure: String?
     @State private var signOutFailed = false
+    /// Alerts are OFF in Settings: the app asks in-app before it sends anyone there (CLAUDE.md's
+    /// 5 Sep rule; review i5, F12 — the row jumped straight to the Settings app).
+    @State private var askOpenSettings = false
     /// `nil` until asked, and while the system has never been asked (nothing to report yet).
     @State private var notificationsOn: Bool?
     /// Resolved here rather than read off `PaletteCache` synchronously: nothing else on this screen
@@ -196,6 +199,12 @@ struct ProfileView: View {
             Button(Copy.Action.done, role: .cancel) { signOutFailed = false }
         } message: {
             Text(Copy.Account.signOutFailedMessage)
+        }
+        .alert(Copy.Notice.alertsOffTitle, isPresented: $askOpenSettings) {
+            Button(Copy.Notice.openSettings) { open(URL(string: UIApplication.openSettingsURLString)) }
+            Button(Copy.Confirm.notNow, role: .cancel) {}
+        } message: {
+            Text(Copy.Notice.alertsOffMessage)
         }
         // Discard permanently throws away a write the user made. It names the change it is about to
         // destroy — "Discard" alone beside a show name is genuinely ambiguous about its object.
@@ -361,10 +370,16 @@ struct ProfileView: View {
 
     // MARK: - Library counts
 
-    /// Every episode the account has marked, across every part of every show.
+    /// Every EPISODE the account has marked — the story's episodes (`isMainStory`), capped at
+    /// what has aired. 81 House of the Dragon featurettes and 13 marks on an unaired season sat
+    /// inside "1,319 episodes" (review, 23 Sep).
     private var episodesWatched: Int? {
         if !appModel.library.isEmpty {
-            return appModel.library.reduce(0) { $0 + $1.parts.reduce(0) { $0 + $1.progress } }
+            let now = appModel.now
+            return appModel.library.reduce(0) { total, f in
+                total + f.parts.filter { $0.isMainStory && $0.kind != .movie }
+                    .reduce(0) { $0 + min($1.progress, max($1.markTarget(now: now), 0)) }
+            }
         }
         return sync.lastSyncedAt == nil ? nil : 0
     }
@@ -399,9 +414,11 @@ struct ProfileView: View {
     /// then what is mid-season, then the rest. This is the one thing a profile in a TV app should
     /// show that a settings screen cannot — the screen used to go straight from three numbers to
     /// a sync row. Netflix's own profile tab opens on the person's list for the same reason.
+    ///
+    /// EVERY Watching show, the live ones first: the shelf is headed "Watching" under a line that
+    /// says "6 watching", and it stopped at the three with a live claim (review, 23 Sep).
     private var shelfItems: [Franchise] {
         let live = appModel.watchingShelf
-        if live.count >= 3 { return Array(live.prefix(12)) }
         var seen = Set(live.map(\.id))
         var wider = live
         for f in appModel.library where f.effectiveStatus == .watching && seen.insert(f.id).inserted {
@@ -422,13 +439,27 @@ struct ProfileView: View {
                     HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
                         ForEach(items) { f in
                             let caption = shelfCaption(f)
-                            ShelfCard(title: f.title,
-                                      caption: caption?.text,
-                                      captionIsLead: caption?.lead ?? false,
-                                      poster: f.portraitArt,
-                                      slot: .todayShelf) {
-                                if let onOpenDetail { dismiss(); onOpenDetail(f.id) }
+                            // Library's Watching shelf, the same anatomy (review i3: one name,
+                            // two shelves) — the show's own poster naming it, the fact in the band.
+                            ArtworkPoster(url: f.tilePoster.url, name: f.tilePoster.name, title: f.displayTitle,
+                                          detailInset: ThemeSpace.x2,
+                                          detailsInBand: true,
+                                          fixedAspect: 2.0 / 3.0,
+                                          onOpen: { if let onOpenDetail { dismiss(); onOpenDetail(f.id) } }) {
+                                if PosterCaption.style == .band {
+                                    Text(caption?.text ?? "")
+                                        .type(ThemeType.caption)
+                                        .foregroundStyle(caption?.lead == true ? ThemeColor.accent : ThemeColor.textPrimary)
+                                        .multilineTextAlignment(.center)
+                                        .lineLimit(2, reservesSpace: true)
+                                        .minimumScaleFactor(0.85)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } else {
+                                    PosterCaptionText(title: f.displayTitle, fact: caption?.text, lead: caption?.lead ?? false)
+                                }
                             }
+                            .frame(width: PosterSize.todayShelf.size.width)
+                            .accessibilityLabel([f.displayTitle, caption?.text].compactMap { $0 }.joined(separator: ", "))
                             .accessibilityHint(onOpenDetail == nil ? "" : Copy.Accessibility.opensTheShowHint)
                         }
                     }
@@ -465,7 +496,16 @@ struct ProfileView: View {
             return behind > 1 ? (Copy.Progress.behind(behind), struck) : (Copy.Label.newEpisode, true)
         case .backlog:
             guard let p = f.resumePart else { return nil }
-            return (Copy.Progress.episodeNext(p.progress + 1), false)
+            // The show page's and All titles' words for the same show: a count of what you are
+            // behind while it airs, "Episode N next" once its run is over (review, 23 Sep: Bleach
+            // was "Episode 3 next" here and "6 episodes behind" everywhere else).
+            if p.isReleasing { return (Copy.Progress.behind(f.continueBacklog), false) }
+            // A film is named, never "Episode 1 next" (iteration 2: Demon Slayer's film).
+            if p.kind == .movie { return (p.canonicalLabel, false) }
+            // Once the run is over, what is LEFT of the story — Today's badge and the show page
+            // say "63 episodes left" for the same show (review i4, P21: "Episode 3 next" here).
+            let left = max(p.markTarget(now: now) - p.progress, f.seriesLeft(now: now))
+            return (left > 1 ? Copy.Progress.left(left) : Copy.Progress.lastEpisodeOfTheSeason, false)
         case .airingWait:
             if let at = f.nextAiring(now: now) {
                 return (TemporalCopy.airsCompact(at: at, now: now, source: f.source), true)
@@ -722,14 +762,18 @@ struct ProfileView: View {
                     Text(notificationsOn.map { $0 ? Copy.State.on : Copy.State.off } ?? Copy.State.ask)
                         .type(ThemeType.metadata)
                         .foregroundStyle(ThemeColor.textTertiary)
-                    // This row leaves the app. An external arrow says so; a chevron would not —
-                    // and an arrow glyph contributes nothing to VoiceOver, which announced this
-                    // identically to the in-app Export row (m1).
-                    trailingGlyph("arrow.up.forward", tint: ThemeColor.textTertiary)
+                    // This row leaves the app — once the system has been asked. Before that the
+                    // tap asks IN the app, so the external arrow and its hint would promise a
+                    // trip to Settings that does not happen (review, 23 Sep).
+                    if notificationsOn != nil {
+                        trailingGlyph("arrow.up.forward", tint: ThemeColor.textTertiary)
+                    } else {
+                        trailingGlyph("chevron.forward", tint: ThemeColor.textTertiary)
+                    }
                 }
             }
-            .accessibilityValue(notificationsOn.map { $0 ? Copy.State.on : Copy.State.off } ?? "")
-            .accessibilityHint("Opens Settings")
+            .accessibilityValue(notificationsOn.map { $0 ? Copy.State.on : Copy.State.off } ?? Copy.State.ask)
+            .accessibilityHint(notificationsOn == nil ? "" : "Opens Settings")
             .task { await refreshNotificationsOn() }
             // Back from Settings: the sheet is still up, so the row re-reads the answer.
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
@@ -914,6 +958,8 @@ struct ProfileView: View {
                 _ = await EpisodeNotifications.shared.requestPermissionIfNeeded()
                 await refreshNotificationsOn()
             }
+        } else if notificationsOn == false {
+            askOpenSettings = true
         } else {
             open(URL(string: UIApplication.openSettingsURLString))
         }

@@ -23,6 +23,36 @@ final class PaletteCache {
     /// bar came out the ember's warm grey on every show (measured (31,29,27) three times, 4 Sep).
     private var inFlight: [String: Task<Color?, Never>] = [:]
 
+    /// Resolved colours are REMEMBERED across launches (24 Sep): a show page painted its ground
+    /// umber on one visit, maroon on the next and olive on a third (the critique measured all
+    /// three on Game of Thrones) — the analysis ran on whichever decode happened to be cached and
+    /// broke ties in `Dictionary` order, which Swift seeds per launch. A show opens in ITS colour,
+    /// on the first frame, every time.
+    private struct Stored: Codable { let r: Double; let g: Double; let b: Double; let l: Double }
+    private static let fileURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("palette.json")
+
+    private var stored: [String: Stored] = [:]
+
+    private init() {
+        stored = (try? Data(contentsOf: Self.fileURL))
+            .flatMap { try? JSONDecoder().decode([String: Stored].self, from: $0) } ?? [:]
+        for (url, v) in stored {
+            cache[url] = Color(.sRGB, red: v.r, green: v.g, blue: v.b, opacity: 1)
+            lightness[url] = v.l
+        }
+    }
+
+    private func remember(_ url: String, tint: Color, lightness l: Double) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard UIColor(tint).getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
+        if stored.count >= 600 { stored.removeAll(keepingCapacity: true) }
+        stored[url] = Stored(r: Double(r), g: Double(g), b: Double(b), l: l)
+        guard let data = try? JSONEncoder().encode(stored) else { return }
+        let fileURL = Self.fileURL
+        Task.detached(priority: .utility) { try? data.write(to: fileURL, options: .atomic) }
+    }
+
     nonisolated static let fallback = Color(hex: 0x1C1A17)   // neutral warm surface
 
     func tint(for url: String?) -> Color? {
@@ -60,6 +90,7 @@ final class PaletteCache {
             let analysed = await Task.detached(priority: .utility) { PaletteCache.analyse(image) }.value
             self.cache[url] = analysed.tint
             self.lightness[url] = analysed.lightness
+            self.remember(url, tint: analysed.tint, lightness: analysed.lightness)
             return analysed.tint
         }
         inFlight[url] = task
@@ -79,7 +110,8 @@ final class PaletteCache {
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(data: &pixels, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
                                   space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return (fallback, 0.5) }
-        ctx.interpolationQuality = .medium
+        // `.high`: a 32×32 mean of the picture that barely depends on which decode was cached.
+        ctx.interpolationQuality = .high
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
 
         // Bucket candidate colours in OKLab, weighted by population; skip near-black, near-white,
@@ -102,7 +134,21 @@ final class PaletteCache {
             buckets[key] = e
         }
         let meanLightness = lightCount > 0 ? lightSum / Double(lightCount) : 0.5
-        guard let best = buckets.values.max(by: { $0.n < $1.n }), best.n > 0 else { return (fallback, meanLightness) }
+        // The winner by population, ties broken the same way every time — by the bucket's chroma,
+        // then its key. `buckets.values.max` answered a tie in the dictionary's order, which Swift
+        // seeds per launch, so a dark poster (a few dozen qualifying samples, ties likely) opened
+        // in a different hue from one launch to the next.
+        func chroma(_ e: (l: Double, a: Double, b: Double, n: Int)) -> Double {
+            let a = e.a / Double(max(e.n, 1)), b = e.b / Double(max(e.n, 1))
+            return (a * a + b * b).squareRoot()
+        }
+        let ranked = buckets.sorted { x, y in
+            if x.value.n != y.value.n { return x.value.n > y.value.n }
+            let cx = chroma(x.value), cy = chroma(y.value)
+            if abs(cx - cy) > 1e-9 { return cx > cy }
+            return x.key < y.key
+        }
+        guard let best = ranked.first?.value, best.n > 0 else { return (fallback, meanLightness) }
         var l = best.l / Double(best.n), a = best.a / Double(best.n), bb = best.b / Double(best.n)
         // Clamp lightness and chroma, and lean the hue toward the brand's warmth so the app's
         // atmosphere never swings olive or steel from tab to tab.

@@ -116,12 +116,14 @@ struct ReceiptLine: View {
                         .foregroundStyle(ThemeColor.textTertiary)
                     // `interactive`, never amber: the mark this line confirms was committed by
                     // an amber control.
+                    // Inline, the line is exactly the caption it stands in for — the Undo keeps
+                    // its 44-pt target as a hit shape past the line instead of growing the row.
                     Button(Copy.Action.undo) { appModel.undoTapped(undo) }
                         .buttonStyle(.plain)
                         .type(ThemeType.metadataEmphasis)
                         .foregroundStyle(ThemeColor.interactive)
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
+                        .frame(minHeight: inline ? nil : 44)
+                        .contentShape(Rectangle().inset(by: inline ? -14 : 0))
                 }
                 .frame(maxWidth: .infinity, alignment: compact ? .leading : .center)
                 // 24 pt of drawn line; the Undo's 44-pt target overflows it on purpose.
@@ -227,6 +229,7 @@ struct ReceiptLane: View {
     /// as every row and shelf names it ("That Time I Got Reincarnated as a Sli…" was the full
     /// title truncated mid-word, review 5 Sep).
     private var title: String? {
+        if case .undo(let u) = item, let subtitle = u.subtitle { return subtitle }
         guard case .undo(let u) = item, !u.title.isEmpty, !u.added else { return nil }
         if let id = u.franchiseId, let f = appModel.franchise(id: id) ?? u.removedFranchise { return f.title.shelfShortened(fitting: 30) }
         return u.title.shelfShortened(fitting: 30)
@@ -258,9 +261,10 @@ struct LaneFallback: View {
 }
 
 #if DEBUG
-/// `-toastDemo mark|lane|notice`: a receipt that writes nothing, once the library has loaded —
-/// the only way to photograph one without moving the test account's progress. `mark` and `lane`
-/// use the bottom lane; `notice` is "Episode alerts on".
+/// `-toastDemo mark|lane|notice|upnext`: a receipt that writes nothing, once the library has
+/// loaded — the only way to photograph one without moving the test account's progress. `mark` and
+/// `lane` use the bottom lane; `notice` is "Episode alerts on"; `upnext` is the in-place receipt
+/// on Today's Up next card for `-toastDemoFranchise` (it takes the card's caption line).
 @MainActor
 enum ToastDemo {
     static func arm(_ appModel: AppModel) {
@@ -279,6 +283,11 @@ enum ToastDemo {
                                                episode: 0, removed: true, removedFranchise: f, undoAction: {}))
             case "notice":
                 appModel.showNotice(Copy.Toast.alertsOn)
+            case "upnext":
+                let episode = (f.resumePart?.progress ?? 0) + 1
+                appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: episode - 1,
+                                               title: f.title, episode: episode, undoAction: {})
+                    .placed(at: ReceiptHost.todayQueue(f.id)))
             default:
                 appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 18,
                                                title: f.title, episode: 19, undoAction: {}))

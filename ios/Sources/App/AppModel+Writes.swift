@@ -5,6 +5,84 @@ import SwiftUI
 // canonical mechanism instead of three near-copies.
 extension AppModel {
 
+    /// "Mark series as watched…", after its confirmation — INSTANT, like every other batch mark
+    /// (review, 23 Sep: the 20 Sep version froze the page on a spinner until the server answered,
+    /// while the same season from the "…" menu wrote on the spot, signed differently and undid
+    /// differently). Every released episode of every chosen season is marked at once, the status
+    /// follows (`WatchedBatch.status`: Watched when nothing is left airing, else Watching), ONE
+    /// `.success` signs it, and ONE lane Undo restores every part — and the membership, for a show
+    /// that was not in the library.
+    ///
+    /// A show in the library writes through the per-part lanes (`setProgress`), so the server ends
+    /// on the user's last word as it does for any other mark, and a failure stays on screen with a
+    /// Retry (a mark never rolls back). A show NOT in the library takes the one-call endpoint —
+    /// membership, progress and status in one transaction — and a failure rolls the membership
+    /// back, as every membership write does.
+    func markWatched(_ f: Franchise, batch: WatchedBatch) {
+        guard !batch.parts.isEmpty else { return }
+        let fact = Copy.Toast.batchWatched(batch.episodeCount, films: batch.filmCount)
+        if isInLibrary(f.id) {
+            let previousStatus = f.effectiveStatus
+            for value in batch.parts {
+                setProgress(franchiseId: f.id, mediaId: value.mediaId, episodes: value.episodes, haptic: false)
+            }
+            let moves = batch.status != previousStatus
+            if moves { setStatus(franchiseId: f.id, status: batch.status, haptic: false, present: false) }
+            FeedbackCoordinator.fire(.success)
+            // A status the batch changed is told on the same receipt, never silently — on its
+            // second line, so neither fact is cut.
+            var receipt = UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 0, title: f.title,
+                                    episode: 0, count: batch.episodeCount, customMessage: fact) { [weak self] in
+                for value in batch.previous {
+                    self?.setProgress(franchiseId: f.id, mediaId: value.mediaId, episodes: value.episodes, haptic: false)
+                }
+                if moves { self?.setStatus(franchiseId: f.id, status: previousStatus, haptic: false, present: false) }
+            }
+            if moves { receipt.subtitle = Copy.Toast.movedTo(batch.status.displayName) }
+            presentUndo(receipt)
+            return
+        }
+        // Not in the library: drawn now, made canonical by the one-call write. The mark and its
+        // Undo are queued on the show's chain, so an Undo tapped before the mark has landed is
+        // sent after it — and not at all if the mark failed and was already rolled back.
+        guard !savingProgressFor.contains(f.id) else { return }
+        final class Outcome { var failed = false }
+        let outcome = Outcome()
+        var local = f
+        for value in batch.parts { local = local.withUpdatedProgress(mediaId: value.mediaId, episodes: value.episodes) }
+        insertPending(local.withStatus(batch.status))
+        FeedbackCoordinator.fire(.success)
+        var receipt = UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 0, title: f.title,
+                                episode: 0, count: batch.episodeCount, customMessage: fact) { [weak self] in
+            guard let self else { return }
+            self.withdrawPending(f.id)
+            self.enqueueBatch(f.id) { [weak self] in
+                guard let self, !outcome.failed else { return }
+                do {
+                    try await self.saveProgressBatch(f, parts: batch.previous, status: nil, removeMembership: true)
+                } catch {
+                    self.recordBatchFailure(franchiseId: f.id, title: f.title, parts: batch.previous,
+                                            status: nil, removeMembership: true, error: error)
+                }
+            }
+        }
+        receipt.subtitle = Copy.Toast.addedTo(batch.status.displayName)
+        presentUndo(receipt)
+        enqueueBatch(f.id) { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.saveProgressBatch(f, parts: batch.parts, status: batch.status)
+            } catch {
+                guard !error.isCancellation else { return }
+                outcome.failed = true
+                self.withdrawPending(f.id)
+                if let cur = self.undo, cur.franchiseId == f.id { self.undo = nil }
+                self.recordBatchFailure(franchiseId: f.id, title: f.title, parts: batch.parts,
+                                        status: batch.status, error: error)
+            }
+        }
+    }
+
     // MARK: - Remove from Library
 
     /// Remove a show, with Undo. No confirmation dialog: remove is reversible for 6 s (10 s under
@@ -44,12 +122,13 @@ extension AppModel {
         let prev = part.progress
         let target = min(max(0, episode), part.progressCeiling)
         guard target != prev else { return nil }
+        let shelvedAs = target > prev ? resumableStatus(f, part: part) : nil
 
         setProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: target)
 
         // The restoring action is captured here, from the value read BEFORE the write, so undo
         // cannot be re-derived (wrongly) from state the write has already changed.
-        let state = UndoState(
+        var state = UndoState(
             mediaId: mediaId, franchiseId: franchiseId, prevProgress: prev,
             title: f.title, episode: target,
             count: max(1, abs(target - prev)),
@@ -57,6 +136,7 @@ extension AppModel {
                 self?.setProgress(franchiseId: franchiseId, mediaId: mediaId,
                                   episodes: prev, haptic: false)
             })
+        resume(shelvedAs, franchiseId: franchiseId, mediaId: mediaId, prevProgress: prev, receipt: &state)
         if present { presentUndo(state) }
         return state
     }
@@ -66,7 +146,13 @@ extension AppModel {
     /// The single entry point for the toast's Undo button. Takes the state BY VALUE so a toast
     /// that is still on screen stays actionable even if `self.undo` has already moved on.
     func undoTapped(_ state: UndoState) {
-        if let action = state.undoAction { undo = nil; FeedbackCoordinator.fire(.selection); return action() }
+        if let action = state.undoAction {
+            undo = nil
+            // Undoing a mark is a progress write and signs like the unmark a ring makes.
+            let progressUndo = state.mediaId != nil && !state.added && !state.removed
+            FeedbackCoordinator.fire(progressUndo ? .commitLight : .selection)
+            return action()
+        }
         if state.removed { return restoreRemoved(state) }
         performUndo()
     }
@@ -92,7 +178,7 @@ extension AppModel {
                 withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) {
                     library.removeAll { $0.id == f.id }
                 }
-                SyncCenter.shared.record(command: Copy.Action.add, title: f.title,
+                fileFailure(command: Copy.Action.add, title: f.title,
                                          reason: Copy.Notice.reason(error)) {
                     self.undoTapped(state)
                 }

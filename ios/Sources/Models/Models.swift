@@ -227,7 +227,11 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         lastAiredAt = try? c.decodeIfPresent(Int64.self, forKey: .lastAiredAt)
         synopsis = try? c.decodeIfPresent(String.self, forKey: .synopsis)
         genres = (try? c.decode([String].self, forKey: .genres)) ?? []
-        progress = (try? c.decode(Int.self, forKey: .progress)) ?? 0
+        let rawProgress = (try? c.decode(Int.self, forKey: .progress)) ?? 0
+        // A season that has not premiered cannot have been watched: read it as what has aired of
+        // it. Marks written before the server's clamp put 13 on Avatar: Seven Havens a fortnight
+        // before its premiere — it would never read behind, NEW or on Today (iteration 2).
+        progress = status == "NOT_YET_RELEASED" ? min(rawProgress, airedEpisodes) : rawProgress
         year = try? c.decodeIfPresent(Int.self, forKey: .year)
         studios = (try? c.decode([String].self, forKey: .studios)) ?? []
         nextAiringCount = (try? c.decode(Int.self, forKey: .nextAiringCount)) ?? 0
@@ -287,8 +291,12 @@ struct FranchisePart: Codable, Identifiable, Sendable {
             out.append(Airing(episode: airedEpisodes, at: last))
         }
         if let next = nextAiringAt, next > 0 {
-            let ep = nextEpisodeNumber ?? airedEpisodes + 1
-            if !out.contains(where: { $0.episode == ep }) { out.append(Airing(episode: ep, at: next)) }
+            // A dated season announcement is not automatically Episode 1. The fallback is
+            // valid only within an already-running episodic sequence.
+            let ep = nextEpisodeNumber ?? (isReleasing && airedEpisodes > 0 ? airedEpisodes + 1 : 0)
+            if ep > 0, !out.contains(where: { $0.episode == ep }) {
+                out.append(Airing(episode: ep, at: next))
+            }
         }
         return out.sorted { $0.at < $1.at }
     }
@@ -332,6 +340,38 @@ struct FranchisePart: Codable, Identifiable, Sendable {
     func behind(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int {
         isReleasing ? max(0, airedByNow(now: now, anchor: anchor) - progress) : 0
     }
+
+    /// Where you are in this part — ONE denominator for every bar that draws it (review i4: the
+    /// hero said 83 % and the Episodes header 79 % for the same season): what is OUT while it
+    /// airs (aired by now), the available run once it has finished.
+    func progressDenominator(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int {
+        isReleasing ? airedByNow(now: now, anchor: anchor) : availableEpisodes()
+    }
+
+    /// What is out and unwatched: `behind` for an airing part, the released run for a finished one
+    /// (a season dropped whole — `Franchise.freshPart`).
+    func unwatchedOut(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int {
+        isReleasing ? behind(now: now, anchor: anchor) : max(0, airedEpisodes - progress)
+    }
+
+    /// A drop is NEWS only for someone who was already here: the part is started, or what is
+    /// unwatched is no more than what aired in the out-now window. A show added at zero with
+    /// twelve episodes out — or 1,100 — is a backlog to start, not a new episode (review i3: it
+    /// took Today's deck as "12 EPISODES BEHIND" / "1,1XX EPISODES BEHIND · Episode 1").
+    ///
+    /// "Started" alone is not "here": One Piece at Episode 2 of 1,179 took the deck as "1,178
+    /// EPISODES BEHIND" (local account, 24 Sep). A started part is news while what it is behind is
+    /// within a cour (`followingSlack`) — someone a few weeks behind a weekly show is still
+    /// following it; someone a thousand behind is starting a backlog.
+    func isNews(now: Int64, anchor: Formatting.TimeAnchor = .local, window: Int64) -> Bool {
+        let recent = passedAirings(now: now, anchor: anchor).filter { now - $0.at <= window }.count
+        let behind = behind(now: now, anchor: anchor)
+        if progress > 0 { return behind <= max(Self.followingSlack, recent) }
+        return behind <= max(2, recent)
+    }
+
+    /// How far behind a started part may be and still be FOLLOWED (a cour of a weekly show).
+    static let followingSlack = 12
 
     /// When the latest episode came out — `lastAiredAt`, advanced by any slot that has passed since.
     func lastAired(now: Int64, anchor: Formatting.TimeAnchor = .local) -> Int64? {
@@ -830,7 +870,29 @@ struct OKResponse: Codable, Sendable {
     let ok: Bool
 }
 
+struct FranchiseProgressResponse: Codable, Sendable {
+    let ok: Bool
+    let franchiseId: String
+    let status: WatchStatus?
+    let progress: [FranchiseProgressValue]
+}
+
+struct FranchiseProgressBody: Encodable, Sendable {
+    let parts: [FranchiseProgressValue]
+    let status: WatchStatus?
+}
+
 // MARK: - Request bodies
+
+struct RecommendationFeedbackBody: Encodable, Sendable {
+    let key: String
+    let kind: String?
+}
+
+struct ResolveBody: Encodable, Sendable {
+    let source: String
+    let externalId: Int
+}
 
 struct SubscribeBody: Encodable, Sendable {
     let franchiseId: String
@@ -880,6 +942,18 @@ extension Franchise {
     /// The currently-RELEASING part that Home / Schedule / Library logic operates on.
     /// Mirrors the api-contract "Client-side derivation": pick the releasing part, preferring
     /// the one with the soonest next airing, else the most recently aired.
+    /// The part a FRESH drop is on — Today's deck, "out now", the move back to Watching: the
+    /// airing part, else a main-story season RELEASED WHOLE inside `window` (a streaming drop:
+    /// every episode out on one day, the part FINISHED within a day of it, so it was never
+    /// "releasing" long enough to be seen — Wednesday, The Witcher, review i4).
+    func freshPart(now: Int64, window: Int64) -> FranchisePart? {
+        if let p = releasingPart { return p }
+        return mainStoryEpisodicParts.first { p in
+            !p.isReleasing && !p.isUpcoming && p.airedEpisodes > p.progress
+                && (p.lastAiredAt.map { $0 <= now && now - $0 <= window } ?? false)
+        }
+    }
+
     var releasingPart: FranchisePart? {
         let releasing = parts.filter { $0.isReleasing }
         if releasing.isEmpty { return nil }
@@ -908,12 +982,9 @@ extension Franchise {
         releasingPart?.lastAired(now: now, anchor: timeAnchor)
     }
 
-    /// Episodic parts (a movie is binary, handled elsewhere) in watch order.
-    private var episodicParts: [FranchisePart] {
-        parts
-            .filter { $0.kind == .season || $0.kind == .ona || $0.kind == .ova }
-            .sorted { $0.sequence < $1.sequence }
-    }
+    /// The episodic spine (a movie is binary, handled below) in watch order — side stories,
+    /// spin-offs and recaps are extras, never the part to resume (`FranchisePart.isMainStory`).
+    private var episodicParts: [FranchisePart] { mainStoryEpisodicParts }
 
     /// Already-available episodes of a part — see `FranchisePart.availableEpisodes()`.
     private static func availableEpisodes(_ p: FranchisePart) -> Int { p.availableEpisodes() }
@@ -931,11 +1002,21 @@ extension Franchise {
 
         if let mid = eps.first(where: { $0.progress > 0 && $0.progress < available($0) }) { return mid }
         // `last` over the ascending list = highest-sequence part watched to completion.
-        if let doneSeq = eps.last(where: { available($0) > 0 && $0.progress >= available($0) })?.sequence,
-           let next = eps.first(where: { $0.sequence > doneSeq && available($0) - $0.progress > 0 }) {
-            return next
+        if let doneSeq = eps.last(where: { available($0) > 0 && $0.progress >= available($0) })?.sequence {
+            if let next = eps.first(where: { $0.sequence > doneSeq && available($0) - $0.progress > 0 }) {
+                return next
+            }
+            // Everything from the furthest finished part on is watched: earlier unmarked parts are
+            // gaps the viewer skipped or saw elsewhere, never "next" — finishing Season 3 sent
+            // Grand Blue's billboard back to "24 EPISODES LEFT · Season 1 · Episode 1" (review
+            // i5, F18). The story's films still follow.
+            return mainStoryMovies.first { !$0.isUpcoming && available($0) > $0.progress }
         }
-        return eps.first(where: { available($0) - $0.progress > 0 })
+        if let first = eps.first(where: { available($0) - $0.progress > 0 }) { return first }
+        // Every episode of the spine is watched: the first released film of the story that is
+        // not — Demon Slayer's Infinity Castle, the server's own `continueWatching`, sat in no
+        // queue anywhere (review, 23 Sep).
+        return mainStoryMovies.first { !$0.isUpcoming && available($0) > $0.progress }
     }
 
     /// Unwatched, already-available episodes of the part you'd resume — the "Keep watching" count.
@@ -961,7 +1042,11 @@ extension Franchise {
     /// Every other status keeps its airings, deliberately: a `completed` show that starts a new
     /// season is news, and a `paused` one still has a calendar. `EpisodeNotifications` and
     /// `AiringLiveActivityManager` gate harder still (`watching` only) — they interrupt you.
-    var tracksAirings: Bool { effectiveStatus != .planned }
+    ///
+    /// A DROPPED show is off it too (review, 23 Sep): you walked away, and it kept arriving on
+    /// Today's release deck and on Schedule with mark rings — "4 EPISODES BEHIND" on a show you
+    /// had said you were done with.
+    var tracksAirings: Bool { effectiveStatus != .planned && effectiveStatus != .dropped }
 
     /// Parts grouped into ordered sections for the detail screen. Seasons are listed newest-first
     /// (reverse sequence) so the latest season is at the top; other kinds stay chronological.

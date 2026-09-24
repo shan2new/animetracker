@@ -308,6 +308,34 @@ final class APIClient: @unchecked Sendable {
         try await request("/me/library", idempotent: true)
     }
 
+    /// "Recommended for you" — server-ranked, second-degree (docs/api-contract.md). An older
+    /// server answers 404; the caller hides the shelf.
+    func recommendations(limit: Int = 12) async throws -> RecommendationsResponse {
+        try await request("/me/recommendations?limit=\(limit)", idempotent: true)
+    }
+
+    /// "Not interested" / "Already seen" on a recommendation (a server-side upsert).
+    func recommendationFeedback(key: String, kind: String) async throws {
+        let _: NoContent = try await request("/me/recommendations/feedback", method: "POST",
+                                             body: RecommendationFeedbackBody(key: key, kind: kind),
+                                             idempotent: true)
+    }
+
+    /// Takes a "Not interested" / "Already seen" back (the receipt's Undo).
+    func removeRecommendationFeedback(key: String) async throws {
+        let _: NoContent = try await request("/me/recommendations/feedback", method: "DELETE",
+                                             body: RecommendationFeedbackBody(key: key, kind: nil),
+                                             idempotent: true)
+    }
+
+    /// A catalogue title with no local franchise yet, materialised (or found) by the server —
+    /// the franchise a recommendation's tap opens.
+    func resolveFranchise(source: MediaSource, externalId: Int) async throws -> FranchiseSummary {
+        try await request("/franchises/resolve", method: "POST",
+                          body: ResolveBody(source: source.rawValue, externalId: externalId),
+                          idempotent: true)
+    }
+
     @discardableResult
     func subscribe(franchiseId: String, status: WatchStatus? = nil) async throws -> OKResponse {
         // A server-side upsert: replaying it lands on the same row with the same status.
@@ -334,6 +362,13 @@ final class APIClient: @unchecked Sendable {
         // Absolute value, not a delta — replaying it is a no-op.
         try await request("/me/progress", method: "PUT",
                           body: ProgressBody(mediaId: mediaId, episodes: episodes), idempotent: true)
+    }
+
+    func setFranchiseProgress(franchiseId: String, parts: [FranchiseProgressValue],
+                              status: WatchStatus?) async throws -> FranchiseProgressResponse {
+        let encoded = franchiseId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? franchiseId
+        return try await request("/me/franchises/\(encoded)/progress", method: "PUT",
+                                 body: FranchiseProgressBody(parts: parts, status: status), idempotent: true)
     }
 
     @discardableResult
@@ -540,6 +575,8 @@ final class APIClient: @unchecked Sendable {
                 throw e
             }
 
+            // A 204 (or any empty success) for a caller that expects no body.
+            if data.isEmpty, let empty = NoContent() as? Response { return empty }
             do {
                 #if DEBUG
                 let data = DemoLibrary.rewriteIfNeeded(path: path, data: data)

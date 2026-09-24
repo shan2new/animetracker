@@ -152,12 +152,34 @@ struct EpisodeStill: View {
     /// kept every anime season a wall of bare text rows. A real still is never labelled; the
     /// row's text is 8 pt away.
     var number: Int? = nil
+    /// The list's NEXT episode — under `EpisodeTileStyle.focus` the one fallback tile that keeps
+    /// the sharp picture.
+    var featured: Bool = false
+    /// A watched episode: its fallback chip sits a shade deeper.
+    var dimmed: Bool = false
 
     @State private var stillTint: Color?
 
     private var hasStill: Bool { !(url ?? "").isEmpty }
     private var hasLandscape: Bool { !(landscape ?? "").isEmpty }
     private var hasPoster: Bool { !(poster ?? "").isEmpty }
+    /// A tile with no still of its own, drawn as the season's colour field under a large numeral.
+    private var frosted: Bool {
+        guard !hasStill, number != nil, hasLandscape || hasPoster else { return false }
+        switch EpisodeTileStyle.current {
+        case .art: return false
+        case .frosted: return true
+        case .focus: return !featured
+        }
+    }
+
+    /// Where episode `n`'s chip looks into its field: five columns across, three rows down.
+    static func window(_ n: Int) -> UnitPoint {
+        let columns: [CGFloat] = [0, 0.25, 0.5, 0.75, 1]
+        let rows: [CGFloat] = [0.3, 0.7, 0.5]
+        let i = max(0, n - 1)
+        return UnitPoint(x: columns[i % 5], y: rows[(i / 5) % 3])
+    }
 
     var body: some View {
         ZStack {
@@ -166,6 +188,26 @@ struct EpisodeStill: View {
             if hasStill {
                 RemoteImageView(url: url, contentMode: .fill, maxPixel: (width ?? 400) * 3,
                                 placeholderHidden: true)
+            } else if frosted {
+                // The season's picture as a FIELD of its colours (blurred once, off-main, cached
+                // per URL — `BlurredArt`), not as a picture: one sharp image eighteen times down a
+                // season read as a placeholder farm (24 Sep, "visuals"). The numeral is the tile.
+                let tone = EpisodeTileStyle.frostTone
+                // Each chip a different WINDOW of the field (critique, 24 Sep: ten identical blurred
+                // chips are still one picture ten times, only softer). A zoom about an anchor that
+                // walks the image — a transform on a cached bitmap, nothing per frame.
+                BlurredArt(url: landscape ?? poster, sourceMaxPixel: 360, fraction: 0.18,
+                           saturation: tone.saturation, brightness: tone.brightness)
+                    .scaleEffect(2.4, anchor: Self.window(number ?? 0))
+                LinearGradient(colors: [.black.opacity(tone.top), .black.opacity(tone.foot)],
+                               startPoint: .top, endPoint: .bottom)
+                // One soft light from the top-left corner, so the field has a surface.
+                RadialGradient(colors: [.white.opacity(0.10), .clear], center: .topLeading,
+                               startRadius: 0, endRadius: 96)
+                    .blendMode(.plusLighter)
+                // History steps back: a watched episode's chip sits a shade deeper than the ones
+                // still to come, so the column reads as a timeline and not as a keypad.
+                if dimmed { Color.black.opacity(0.24) }
             } else if hasLandscape {
                 // A banner fills the tile the way a still does; the numeral still says which
                 // episode, because one banner eighteen times is not eighteen episodes.
@@ -187,12 +229,28 @@ struct EpisodeStill: View {
                                startPoint: .top, endPoint: .bottom)
             }
             if let number, !hasStill {
-                Text("\(number)")
-                    .font(.system(size: 17, weight: .bold).monospacedDigit())
-                    .foregroundStyle(ThemeColor.textPrimary)
-                    .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                    .padding(7)
+                if frosted {
+                    // Display type at a FIXED size: the tile is 120×68 at every text size (the
+                    // row says the episode in words beside it, and grows).
+                    // 22 pt: at 28 the chip's numeral outweighed the 17-pt row title beside it and
+                    // the column read as a keypad (critique, 24 Sep).
+                    Text("\(number)")
+                        .font(.custom("Outfit-Medium", fixedSize: number >= 1000 ? 18 : 22))
+                        .monospacedDigit()
+                        .tracking(-0.3)
+                        .foregroundStyle(ThemeColor.textPrimary.opacity(dimmed ? 0.62 : 0.92))
+                        .shadow(color: .black.opacity(0.30), radius: 6, y: 1)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                } else {
+                    Text("\(number)")
+                        .font(.system(size: 17, weight: .bold).monospacedDigit())
+                        .foregroundStyle(ThemeColor.textPrimary)
+                        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(7)
+                }
             }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -205,6 +263,51 @@ struct EpisodeStill: View {
             stillTint = DetailTint.quiet(await PaletteCache.shared.resolve(url: url ?? landscape ?? poster, maxPixel: 288))
         }
         .accessibilityHidden(true)
+    }
+}
+
+/// How an episode tile with no still of its own is drawn.
+///  • `art` — the season's sharp picture under a small numeral (2 Sep): honest, but on a season
+///    the catalogue did not illustrate (every airing anime) it is one picture down the whole list.
+///  • `frosted` — the season's picture as a blurred field of its colours under a large numeral:
+///    a designed episode chip rather than a repeated photograph.
+///  • `focus` — frosted, except the NEXT episode, which keeps the sharp picture: the one row the
+///    eye should land on is the one that is lit.
+/// `-episodeTile art|frosted|focus` (DEBUG) photographs the three side by side.
+enum EpisodeTileStyle {
+    case art, frosted, focus
+
+    static var current: EpisodeTileStyle {
+        #if DEBUG
+        switch UserDefaults.standard.string(forKey: "episodeTile") {
+        case "art": return .art
+        case "focus": return .focus
+        case "frosted": return .frosted
+        default: return .focus
+        }
+        #else
+        return .focus
+        #endif
+    }
+
+    /// The frosted field's exposure: baked into the blurred bitmap (`BlurredArt`), then a veil.
+    struct FrostTone {
+        let saturation: Double
+        let brightness: Double
+        let top: Double
+        let foot: Double
+
+        static let deep = FrostTone(saturation: 1.4, brightness: -0.20, top: 0.22, foot: 0.55)
+        static let mid = FrostTone(saturation: 1.3, brightness: -0.10, top: 0.16, foot: 0.46)
+    }
+
+    /// `-episodeFrost deep|mid` (DEBUG).
+    static var frostTone: FrostTone {
+        #if DEBUG
+        return UserDefaults.standard.string(forKey: "episodeFrost") == "mid" ? .mid : .deep
+        #else
+        return .deep
+        #endif
     }
 }
 
@@ -265,16 +368,21 @@ enum DetailTint {
     /// little more chroma than a tile so the colour survives the material. Painted at
     /// `chromeBarOpacity` over the blur it is the show's own glass; the flat canvas veil read as a
     /// black slab over the picture ("too blackish anyway, should be glassish", user, 4 Sep).
+    ///
+    /// A breath ABOVE the page's own ground (24 Sep): at 0.26–0.32 over a ground toned down to
+    /// 0.17 the bar was a lighter lid across the top of every scrolled frame — a grey-violet or
+    /// brown header slab (the critique measured L 0.31 over 0.17). Glass in the show's colour, a
+    /// shade lifted, is what the owner asked for ("glassish").
     static func chrome(_ color: Color?) -> Color? {
         guard let color, let (r, g, b) = components(color) else { return color }
-        var (l, ca, cb) = PaletteCache.oklab(r: r, g: g, b: b)
+        var (_, ca, cb) = PaletteCache.oklab(r: r, g: g, b: b)
         let chroma = (ca * ca + cb * cb).squareRoot()
-        let maxChroma = 0.085
+        let maxChroma = GroundSpec.current.barChroma
         if chroma > maxChroma, chroma > 0 {
             ca *= maxChroma / chroma
             cb *= maxChroma / chroma
         }
-        l = min(max(l, 0.26), 0.32)
+        let l = GroundSpec.current.top + 0.05
         let (qr, qg, qb) = PaletteCache.srgb(l: l, a: ca, b: cb)
         return Color(.sRGB, red: qr, green: qg, blue: qb, opacity: 1)
     }
@@ -290,14 +398,44 @@ enum DetailTint {
     /// depth; `groundFootLightness` at the foot, a breath above canvas (≈ 0.14) so the bottom
     /// chrome's canvas veil lands on it without a step — and chroma ≤ 0.06: a deep navy for a blue
     /// show, a deep umber for a warm one, never a coloured slab. Nil (art still loading) is canvas.
-    static let groundTopLightness = 0.19
-    static let groundFootLightness = 0.155
+    ///
+    /// TONED DOWN (24 Sep, owner: "a bit too shouting… tone it down so the rest of the content is
+    /// properly visible without losing the immersive nature"): the hue stays, the voice drops —
+    /// less chroma, a ground nearer the canvas, a fainter pool of light. `-detailGround strong |
+    /// medium | subtle` (DEBUG) photographs the three strengths side by side; `medium` ships.
+    struct GroundSpec {
+        let maxChroma: Double
+        let top: Double
+        let foot: Double
+        let pool: Double
+        let barChroma: Double
+
+        static let strong = GroundSpec(maxChroma: 0.06, top: 0.19, foot: 0.155, pool: 0.14, barChroma: 0.06)
+        static let medium = GroundSpec(maxChroma: 0.038, top: 0.172, foot: 0.148, pool: 0.07, barChroma: 0.04)
+        static let subtle = GroundSpec(maxChroma: 0.026, top: 0.162, foot: 0.144, pool: 0.04, barChroma: 0.03)
+
+        static var current: GroundSpec {
+            #if DEBUG
+            switch UserDefaults.standard.string(forKey: "detailGround") {
+            case "strong": return .strong
+            case "subtle": return .subtle
+            default: return .medium
+            }
+            #else
+            return .medium
+            #endif
+        }
+    }
+
+    static var groundTopLightness: Double { GroundSpec.current.top }
+    static var groundFootLightness: Double { GroundSpec.current.foot }
+    static var groundPool: Double { GroundSpec.current.pool }
 
     static func ground(_ color: Color?, lightness: Double) -> Color {
         guard let color, let (r, g, b) = components(color) else { return ThemeColor.canvas }
         var (_, ca, cb) = PaletteCache.oklab(r: r, g: g, b: b)
         let chroma = (ca * ca + cb * cb).squareRoot()
-        let maxChroma = 0.06
+        let maxChroma = GroundSpec.current.maxChroma
         if chroma > maxChroma, chroma > 0 {
             ca *= maxChroma / chroma
             cb *= maxChroma / chroma
@@ -391,6 +529,7 @@ struct WithheldStillTile: View {
 struct EpisodeList: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     let franchise: Franchise
     let part: FranchisePart
     /// The whole-list spoiler switch (the season screen's overflow owns it).
@@ -429,10 +568,11 @@ struct EpisodeList: View {
     /// How many rows a season has: what the catalogue lists, what has aired, or what the user has
     /// marked — whichever is largest.
     static func count(_ part: FranchisePart, now: Int64) -> Int {
-        max(part.renderableEpisodeCount(now: now), part.progress, part.episodes.map(\.number).max() ?? 0)
+        if part.isUpcoming { return part.announcedEpisodeNumbers.last ?? 0 }
+        return max(part.renderableEpisodeCount(now: now), part.progress, part.episodes.map(\.number).max() ?? 0)
     }
 
-    private var total: Int { max(1, Self.count(part, now: now)) }
+    private var total: Int { Self.count(part, now: now) }
 
     /// The episode the list is ABOUT: the one a route asked for, else the next to watch, else —
     /// on a season with nothing left — its beginning (a finished season is a browse, not a queue).
@@ -454,14 +594,18 @@ struct EpisodeList: View {
         return aired
     }
 
-    /// How long a drop stays news: a fortnight, so a weekly show's newest episode carries the tag
-    /// until the one after it lands, and a show that stopped mid-cour does not wear NEW for months.
-    static let freshWindow: Int64 = 14 * 24 * 60 * 60 * 1000
+    /// How long a drop stays news: the deck's window (`AppModel.outNowWindow`, a week) — ONE
+    /// freshness everywhere (review i4: the list tagged NEW for 14 days, the deck held a drop for 7
+    /// and the hero named it for one calendar day). A weekly show's newest episode wears it until
+    /// the next lands; a show that stopped mid-cour does not wear it for months.
+    static let freshWindow: Int64 = AppModel.outNowWindow
 
     /// The rows to draw: the whole season when it is short, else the window around the anchor —
     /// grown by whatever the reader has opened.
-    private var range: ClosedRange<Int> {
+    private var range: ClosedRange<Int>? {
         let total = total
+        guard total > 0 else { return nil }
+        if part.isUpcoming { return 1...total }
         if let shown { return Self.clamp(shown, total: total) }
         if total <= Self.wholeBelow { return 1...total }
         return Self.initialWindow(anchor: anchorEpisode, total: total)
@@ -478,23 +622,31 @@ struct EpisodeList: View {
     }
 
     var body: some View {
-        let range = range
         // A plain stack: the window keeps a long run to a dozen rows, and an eager stack is what
         // lets `scrollTo("ep-n")` land on a row that has not been on screen yet (a Schedule card).
         VStack(spacing: 0) {
-            if range.lowerBound > 1 {
-                expander(Copy.Action.showEarlierEpisodes, glyph: "chevron.up") { grow(earlier: true) }
-            }
-            ForEach(range, id: \.self) { n in
-                row(franchise, part: part, n: n, isLast: n == range.upperBound)
-                    .id("ep-\(n)")
-            }
-            if range.upperBound < total {
-                expander(Copy.Action.showMoreEpisodes, glyph: "chevron.down") { grow(earlier: false) }
+            if let range {
+                if range.lowerBound > 1 {
+                    expander(Copy.Action.showEarlierEpisodes, glyph: "chevron.up") { grow(earlier: true) }
+                }
+                ForEach(part.isUpcoming ? part.announcedEpisodeNumbers : Array(range), id: \.self) { n in
+                    row(franchise, part: part, n: n, isLast: n == range.upperBound)
+                        .id("ep-\(n)")
+                }
+                if range.upperBound < total {
+                    expander(Copy.Action.showMoreEpisodes, glyph: "chevron.down") { grow(earlier: false) }
+                }
+            } else {
+                Text(part.isUpcoming ? Copy.Release.episodesNotAnnounced : Copy.Release.episodesUnavailable)
+                    .type(ThemeType.metadata)
+                    .foregroundStyle(ThemeColor.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, ThemeSpace.x4)
             }
         }
-        .confirmationDialog(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
-                            titleVisibility: .visible, presenting: prompt) { p in
+        // An alert with Cancel, as every write confirmation (review i4).
+        .alert(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }),
+               presenting: prompt) { p in
             Button(p.confirm, role: p.destructive ? .destructive : nil) { p.perform() }
             Button(Copy.Confirm.cancel, role: .cancel) {}
         } message: { p in
@@ -509,13 +661,14 @@ struct EpisodeList: View {
     /// The newest aired episode's tag: amber, the app's one colour for state, at the eyebrow's
     /// size. A tag rather than a coloured title — the row's ink means watched / not watched.
     private var newTag: some View {
+        // NEWS red, like the hero's NEW EPISODE (24 Sep).
         Text(Copy.Label.newTag)
             .type(ThemeType.sectionLabel)
             .fixedSize()
-            .foregroundStyle(ThemeColor.onAccent)
+            .foregroundStyle(ThemeColor.onNews)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .background(ThemeColor.accent, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
+            .background(ThemeColor.news, in: RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 
     /// A long run's in-place door: a quiet centred link in `interactive` ink, like "Read more".
@@ -527,11 +680,14 @@ struct EpisodeList: View {
             }
         }
         .buttonStyle(InlineLinkButtonStyle())
-        .frame(maxWidth: .infinity)
+        // On the gutter, like "Mark all N episodes as watched…" directly above it and every other
+        // inline link on the page: centred, the two adjacent links sat on two axes (review i2).
+        .padding(.leading, -12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func grow(earlier: Bool) {
-        let current = range
+        guard let current = range else { return }
         let next = earlier ? (current.lowerBound - Self.growBy)...current.upperBound
                            : current.lowerBound...(current.upperBound + Self.growBy)
         withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
@@ -548,7 +704,8 @@ struct EpisodeList: View {
         // A batch plays its discs one after another; a row the cascade has not reached is still
         // drawn unmarked (the model has already moved).
         let drawnWatched = watched && (cascadeThrough.map { n <= $0 } ?? true)
-        let aired = !part.isReleasing || n <= part.provenAiredCount(now: now) || n <= part.airedEpisodes
+        let aired = !part.isUpcoming
+            && (!part.isReleasing || n <= part.provenAiredCount(now: now) || n <= part.airedEpisodes)
         let isNext = n == progress + 1 && aired
         let spoilerSafe = watched || isNext || revealAll || revealed.contains(n)
         let interactive = appModel.isInLibrary(f.id) && aired
@@ -560,8 +717,11 @@ struct EpisodeList: View {
         // that marks is a trap.
         let opens = !overview.isEmpty || canReveal
         let isOpen = expanded.contains(n) && spoilerSafe && !overview.isEmpty
-        let content = HStack(alignment: .center, spacing: ThemeMetrics.artGap) {
-            tile(f, part: part, n: n, episode: episode, spoilerSafe: spoilerSafe, aired: aired)
+        let isAX = typeSize.isAccessibilitySize
+        let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: ThemeSpace.x2))
+                          : AnyLayout(HStackLayout(alignment: .center, spacing: ThemeMetrics.artGap))
+        let content = layout {
+            tile(f, part: part, n: n, episode: episode, spoilerSafe: spoilerSafe, aired: aired, isNext: isNext)
             VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                 HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -589,7 +749,8 @@ struct EpisodeList: View {
                                 Text(Copy.episode(n))
                                     .type(ThemeType.rowTitle)
                                     .foregroundStyle(drawnWatched ? ThemeColor.textSecondary : ThemeColor.textPrimary)
-                                    .lineLimit(1)
+                                    .lineLimit(isAX ? nil : 1)
+                                    .fixedSize(horizontal: false, vertical: true)
                                     // The title keeps its characters; the tag and the reveal glyph
                                     // give way ("Episo… NEW", captured 6 Sep).
                                     .layoutPriority(1)
@@ -605,12 +766,14 @@ struct EpisodeList: View {
                     Text(sub.text)
                         .type(sub.accent ? ThemeType.rowMetaLead : ThemeType.rowMeta)
                         .foregroundStyle(sub.accent ? ThemeColor.accent : ThemeColor.textSecondary)
-                        .lineLimit(1)
+                        .lineLimit(isAX ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: true)
                         .transition(.opacity)
                 }
             }
-            Spacer(minLength: 0)
+            if !isAX { Spacer(minLength: 0) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         // The title dims and "Next up" moves on with the mark, on the settle spring.
         .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: drawnWatched)
@@ -626,6 +789,10 @@ struct EpisodeList: View {
                 }
                 if aired {
                     mark(f, part: part, n: n, watched: watched, drawnWatched: drawnWatched, isNext: isNext, interactive: interactive)
+                        // The ring is centred in its 44-pt target; pulled 9 pt out so the column of
+                        // discs ends on the content edge, under the season pill and the rules
+                        // (critique, 24 Sep: rings at 366, everything else at 377).
+                        .padding(.trailing, -9)
                 }
             }
             .padding(.vertical, 6)
@@ -641,7 +808,7 @@ struct EpisodeList: View {
         .overlay(alignment: .bottom) {
             if !isLast {
                 Rectangle().fill(ThemeColor.separatorQuiet).frame(height: 1)
-                    .padding(.leading, EpisodeArtwork.slot.width + ThemeMetrics.artGap)
+                    .padding(.leading, isAX ? 0 : EpisodeArtwork.slot.width + ThemeMetrics.artGap)
             }
         }
     }
@@ -652,10 +819,12 @@ struct EpisodeList: View {
     /// text (user, 2 Sep: "not there yet"). The numbered cover is the episode's face where the
     /// catalogue gave it none.
     @ViewBuilder
-    private func tile(_ f: Franchise, part: FranchisePart, n: Int, episode: Episode?, spoilerSafe: Bool, aired: Bool) -> some View {
+    private func tile(_ f: Franchise, part: FranchisePart, n: Int, episode: Episode?, spoilerSafe: Bool, aired: Bool,
+                      isNext: Bool) -> some View {
         if spoilerSafe {
             EpisodeStill(url: episode?.still, landscape: part.stillLandscape(within: f),
-                         poster: part.portraitArt ?? f.portraitArt, tint: tint, number: n)
+                         poster: part.portraitArt ?? f.portraitArt, tint: tint, number: n, featured: isNext,
+                         dimmed: n <= part.progress)
         } else if aired, episode?.still?.isEmpty == false {
             // Withheld, and it says so: `eye.slash`, the glyph on the control that reverses it.
             WithheldStillTile(tint: tint)
@@ -704,7 +873,7 @@ struct EpisodeList: View {
                 .foregroundStyle(ThemeColor.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.leading, EpisodeArtwork.slot.width + ThemeMetrics.artGap)
+        .padding(.leading, typeSize.isAccessibilitySize ? 0 : EpisodeArtwork.slot.width + ThemeMetrics.artGap)
         .padding(.trailing, 44 + ThemeSpace.x2)
         .padding(.bottom, ThemeSpace.x3)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -744,7 +913,7 @@ struct EpisodeList: View {
         if isNext { return (Copy.Label.nextUp, true) }
         if !aired {
             if n == part.airedEpisodes + 1, let at = part.scheduledAiring(now: now, anchor: f.source.timeAnchor) {
-                return (TemporalCopy.airs(at: at, now: now, source: f.source), false)
+                return (TemporalCopy.airsSentence(at: at, now: now, source: f.source), false)
             }
             // Nothing: "Upcoming" says only what the row's position below the dated ones says.
             return nil
@@ -850,10 +1019,13 @@ struct EpisodeList: View {
         prompt = .init(title: Copy.Confirm.batchMarkTitle(count), message: Copy.Confirm.batchMarkMessage(from: part.progress, to: through),
                        confirm: Copy.Confirm.batchMarkConfirm(count)) {
             let prev = part.progress
+            let shelvedAs = appModel.resumableStatus(f, part: part)
             appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: through)
             cascade(from: prev + 1, through: through)
             // A batch's Undo rides the lane: the rows are busy being the receipt.
-            appModel.presentUndo(UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev, title: f.title, episode: through, count: count))
+            var receipt = UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev, title: f.title, episode: through, count: count)
+            appModel.resume(shelvedAs, franchiseId: f.id, mediaId: part.mediaId, prevProgress: prev, receipt: &receipt)
+            appModel.presentUndo(receipt)
         }
     }
 
@@ -869,7 +1041,7 @@ struct EpisodeList: View {
             endCommit()
             appModel.setProgress(franchiseId: f.id, mediaId: part.mediaId, episodes: to)
             appModel.presentUndo(UndoState(mediaId: part.mediaId, franchiseId: f.id, prevProgress: prev, title: f.title, episode: to, count: count,
-                                           customMessage: to == 0 ? "\(part.canonicalLabel) marked as unwatched" : "\(Copy.episodes(count)) marked as unwatched"))
+                                           customMessage: to == 0 ? Copy.Toast.seasonUnmarked(part.canonicalLabel) : Copy.Toast.batchUnmarked(count)))
         }
     }
 }
@@ -905,16 +1077,25 @@ struct SeasonPill: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Text(Self.name(current))
+                // The short form on the pill ("The Calamity", "Season 5"); the menu keeps the
+                // full names. The whole label made a 261-pt pill cut to "…The Ca…" (review, 23 Sep).
+                Text(Copy.compactPartLabel(Self.name(current)))
                     .type(ThemeType.metadataEmphasis)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                     .contentTransition(.opacity)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                Image(systemName: "chevron.down").font(.system(.caption2, weight: .semibold))
             }
             .foregroundStyle(ThemeColor.textPrimary)
             .padding(.horizontal, 14)
+            .frame(maxWidth: 190)
+            // Hugging: min(ideal, 190) — as a flexible frame beside a Spacer it took all 190 and
+            // centred "Season 4" in a wide capsule (iteration 2).
+            .fixedSize(horizontal: true, vertical: false)
             .frame(minHeight: 34)
-            .background(ThemeColor.surfaceFloating, in: Capsule())
+            // A translucent ground that takes the page's colour, not the blue-grey floating
+            // surface — it sat on purple and maroon show pages as an off-palette slab.
+            .background(ThemeColor.textPrimary.opacity(0.10), in: Capsule())
             // `strokeBorder`: a centred stroke straddles the edge and smears (see
             // `SecondaryButtonStyle2`).
             .overlay(Capsule().strokeBorder(ThemeColor.stroke, lineWidth: 1))

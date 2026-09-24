@@ -130,7 +130,7 @@ actor BlurredImages {
 
     // MARK: rendering (off-main)
 
-    nonisolated(unsafe) private static let context = CIContext(options: [.cacheIntermediates: false])
+    private static let context = CIContext(options: [.cacheIntermediates: false])
 
     /// Downsample with Core Graphics (area-averaging, so a 2048-px decode does not alias on its
     /// way to 160), then blur with Core Image, edges clamped so the picture never darkens at its

@@ -44,6 +44,13 @@ enum ThemeColor {
     /// not amber (amber is a fact or a state) and it is not an action colour: it is the name's.
     static let brandPeriod = Color(hex: 0xF0563F)
     static let accentPressed = Color(hex: 0xD88D3B)
+    /// NEWS red — "NEW EPISODE", "NEW SEASON", "NEW SERIES" and the episode list's NEW tag, and
+    /// nothing else (24 Sep, owner: "New Episode is not standing out properly despite the shimmer
+    /// … think of using a Netflix like red"). An amber tag over warm art, 40 pt above the amber
+    /// capsule, was one more amber thing; the streaming apps flag what is NEW in red. White ink.
+    static let news = Color(hex: 0xE5262D)
+    static let newsDeep = Color(hex: 0xB8161D)
+    static let onNews = Color.white
     static let accentSoft = Color(hex: 0xF0A24E).opacity(0.14)
     /// Immediate ground for an artwork wash before a remote image or its palette is available.
     /// It must be visibly warmer than `canvas`: a near-black fallback made a cold device launch

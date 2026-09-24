@@ -69,8 +69,7 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        // ONE pass over the shelves per render. `sections` used to be recomputed by the wash and
-        // by the section loop, and each pass ran `ReturnFact.of` twice per title.
+        // One pass over the shelves per render.
         let sections = rootSections()
         // `watchingShelf` also contains titles that are caught up and merely waiting. The hero is
         // an instruction to continue, so only a title with a real resume part may enter it.
@@ -108,10 +107,6 @@ struct LibraryView: View {
                             // Centred in the content area, not pinned to the top of it: the error
                             // card sat above ~1,000 pt of black while the identical card on Today
                             // was centred.
-                            // `ambient: false`: this screen already owns an ambient wash, and the
-                            // plate's own radial bloom stacked on it met the canvas in a hard
-                            // full-width step (measured: 10 -> 35 in one pixel row at y≈302 pt).
-                            // One wash per screen, and on this screen it is the screen's.
                             EmptyState(appModel.emptyStateCopy, prominence: .major,
                                        primary: emptyStateAction)
                                 .padding(.horizontal, ThemeMetrics.gutter)
@@ -147,22 +142,14 @@ struct LibraryView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             .previouslyRefreshable { await appModel.reload() }
         }
-        // BOTTOM only. The top edge belongs to a real navigation bar: the screen used to hide the
-        // bar and draw "Library" as scrolling content, so nothing named the screen once you had
-        // scrolled, and the app had three different header grammars across its three tab roots.
-        // The bottom edge is ours; the TOP is the bar's own veil (`rootBarVeil`) — the same
-        // gradient the tab bar's edge carries, "relayed upwards" to the title (user, 24 Aug), drawn
-        // from the very top of the screen — over the wash the navigation container paints
-        // (`rootWash`). With no artwork in the library there is nothing for the wash to be ABOUT,
-        // so first run gets the app's own colour: the first frame a new user sees should carry the
-        // product's identity rather than none.
+        // BOTTOM only for ours; the TOP is the bar's own veil over the wash.
         .scrollEdgeChromeBody(top: true, bottom: true, softTop: true, topRaised: raisedTop,
                               topHold: ThemeMetrics.inlineBarBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
         .navigationTitle(Copy.Library.title)
         // Inline on every root — Schedule's model. A large title collapses on the first scroll and
-        // moves the top safe area ~50 pt mid-flight; an inline one holds still over the wash.
+        // moves the top safe area ~50 pt mid-flight; an inline one holds still.
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbar {
@@ -192,8 +179,7 @@ struct LibraryView: View {
             .chromeSharedBackgroundHidden()
         }
         .navigationDestination(item: $all) { route in
-            // The push carries the root's own wash art, so All titles opens in the same light
-            // the root was lit by rather than re-lighting itself from its first alphabetical row.
+            // The push carries the root's own wash art, so All titles opens in the same light.
             LibraryAllView(initialStatus: route.status, initialReturning: route.returning, initialSort: route.sort ?? .title,
                            initialUnwatchedOnly: route.unwatchedOnly,
                            washArt: washArtwork(rootSections(),
@@ -243,7 +229,15 @@ struct LibraryView: View {
         // EVERY bucket is a shelf — board 05's shape: one art moment, then quiet shelves, each
         // one "See all" from the instrument. The Watching bucket is the carousel's, so its shelf
         // only renders when the carousel cannot (a watching list with nothing resumable).
-        let shelves = sections.filter { $0.key != .watching || heroItems.isEmpty }
+        // Next up takes the Watching shows with something to resume; the Watching shelf keeps
+        // the REST (caught up, waiting) — it used to render only when Next up could not, so every
+        // caught-up Watching show was on no shelf at all (review, 23 Sep).
+        let queued = Set(heroItems.map(\.id))
+        let shelves = sections.compactMap { section -> RootSection? in
+            guard section.key == .watching else { return section }
+            let rest = section.items.filter { !queued.contains($0.id) }
+            return rest.isEmpty ? nil : RootSection(key: .watching, items: rest)
+        }
 
         return VStack(alignment: .leading, spacing: ThemeMetrics.sectionGap) {
             if !heroItems.isEmpty {
@@ -301,6 +295,8 @@ struct LibraryView: View {
             case .watching: out.append(RootSection(key: .watching, items: shelf.franchises))
             case .planned:  out.append(RootSection(key: .planned, items: shelf.franchises))
             case .finished: out.append(RootSection(key: .finished, items: shelf.franchises))
+            case .paused:   out.append(RootSection(key: .paused, items: shelf.franchises))
+            case .dropped:  out.append(RootSection(key: .dropped, items: shelf.franchises))
             }
         }
         return out.sorted { $0.key.rank < $1.key.rank }
@@ -315,6 +311,8 @@ struct LibraryView: View {
         case .watching:  return AllTitlesRoute(status: .watching, sort: .progress)
         case .planned:   return AllTitlesRoute(status: .planned)
         case .finished:  return AllTitlesRoute(status: .completed)
+        case .paused:    return AllTitlesRoute(status: .paused)
+        case .dropped:   return AllTitlesRoute(status: .dropped)
         }
     }
 
@@ -383,8 +381,6 @@ private enum LibraryRootMetrics {
     /// The content needs a real breath after the index; the copied rail put a section title almost
     /// directly on its rule while leaving the navigation area comparatively empty.
     static let contentTopPadding: CGFloat = 20
-    // The wash is the one root spec (`ThemeMetrics.rootWashHeight/Intensity`) — this screen's
-    // private 380/0.54 was one of the seven configurations the cohesion pass collapsed.
     /// The lead shelf's card: four fifths of the content width, 16:9, so the next card peeks.
     static let continueCardCount = 5
     static let continueCardSpan = 4
@@ -449,13 +445,15 @@ private struct LibraryContinueShelf: View {
     }
 }
 
-/// One show you are in the middle of: the art wide, the bar on it, the next episode under it.
+/// The same scene/logo composition as Schedule; progress and the next episode stay in the art.
 private struct LibraryContinueCard: View {
     let franchise: Franchise
     let part: FranchisePart
     let action: () -> Void
 
-    private var total: Int { max(part.totalEpisodes, part.airedEpisodes, part.progress) }
+    // The show page's and Today's denominator (`progressDenominator`), so the card's bar is the
+    // hero's bar (review i4: 79 % here, 83 % there).
+    private var total: Int { max(part.progressDenominator(now: Int64(Date().timeIntervalSince1970 * 1000), anchor: franchise.timeAnchor), part.progress) }
     private var ratio: Double { total > 0 ? Double(part.progress) / Double(total) : 0 }
     private var next: String {
         let context = franchise.watchContext(part: part, episode: part.progress + 1)
@@ -471,35 +469,15 @@ private struct LibraryContinueCard: View {
     private var spoken: String { Copy.Progress.watchedOf(part.progress, total) }
 
     var body: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-                art
-                VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
-                    Text(franchise.displayTitle)
-                        .type(ThemeType.rowTitle)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(1...2)
-                        .minimumScaleFactor(0.85)
-                        .multilineTextAlignment(.leading)
-                    Text(next)
-                        .type(ThemeType.rowMeta)
-                        .foregroundStyle(ThemeColor.textSecondary)
-                        .lineLimit(1)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(OverArtPressStyle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel([franchise.title, next, total > 0 ? spoken : nil].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityHint(Copy.Accessibility.opensTheShowHint)
-    }
-
-    private var art: some View {
-        let wide = part.wideArt(within: franchise)
-        return ProgressBanner(url: wide.url, portraitSource: wide.portraitSource,
-                              progress: total > 0 ? ratio : nil, ultraWide: wide.ultraWide,
-                              zoomID: "lib-hero/\(franchise.id)")
+        ArtworkSceneCard(art: part.wideArt(within: franchise),
+                         poster: franchise.portraitArt,
+                         name: franchise.sceneName,
+                         title: franchise.displayTitle,
+                         fact: franchise.watchContext(part: part, episode: part.progress + 1),
+                         progress: total > 0 ? ratio : nil,
+                         onOpen: action) { EmptyView() }
+            .zoomSource("lib-hero/\(franchise.id)")
+            .accessibilityValue(total > 0 ? spoken : "")
     }
 }
 
@@ -522,6 +500,13 @@ private struct LibraryLandscapeShelf: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// A second caption line is reserved only when a caption on THIS shelf can need one (~18
+    /// characters fill a 118-pt band): Black Clover's "Watched" carried 41 pt of empty plate under
+    /// it for a line nothing on its shelf used (review i4, N10).
+    private var reservesSecondLine: Bool {
+        typeSize.isAccessibilitySize || items.contains { ($0.lead ?? $0.meta ?? "").count > 18 }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
             // The app-wide header family — small-caps `SectionHeaderRow` with an inline "See all"
@@ -533,16 +518,29 @@ private struct LibraryLandscapeShelf: View {
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
                     ForEach(items) { item in
-                        BannerCard(title: item.franchise.displayTitle,
-                                   lead: item.lead, meta: item.meta,
-                                   art: item.franchise.wideArt.url,
-                                   portraitSource: item.franchise.wideArt.portraitSource,
-                                   ultraWide: item.franchise.wideArt.ultraWide,
-                                   zoomID: "lib/\(item.franchise.id)") { onOpen(item.franchise) }
-                            .containerRelativeFrame(.horizontal,
-                                                    count: typeSize.isAccessibilitySize ? 1 : 2,
-                                                    span: 1,
-                                                    spacing: ThemeMetrics.shelfGap)
+                        ArtworkPoster(url: item.franchise.tilePoster.url, name: item.franchise.tilePoster.name,
+                                      title: item.franchise.displayTitle,
+                                      detailsInBand: true,
+                                      fixedAspect: 2.0 / 3.0,
+                                      onOpen: { onOpen(item.franchise) }) {
+                            if PosterCaption.style == .band {
+                                // The lead (a date inside the horizon — "Returns 3 Oct") in amber, as
+                                // Today's Planned posters draw it; the rest in white (review i3).
+                                Text(item.lead ?? item.meta ?? "")
+                                    .type(ThemeType.metadata)
+                                    .foregroundStyle(item.lead != nil ? ThemeColor.accent : ThemeColor.textPrimary)
+                                    .multilineTextAlignment(.center)
+                                    // Two lines reserved where the shelf needs them: one caption
+                                    // baseline and one card height across the row.
+                                    .lineLimit(2, reservesSpace: reservesSecondLine)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                PosterCaptionText(title: item.franchise.displayTitle,
+                                                  fact: item.lead ?? item.meta, lead: item.lead != nil)
+                            }
+                        }
+                            .frame(width: typeSize.isAccessibilitySize ? 210 : 150)
+                            .zoomSource("lib/\(item.franchise.id)")
                             .franchiseQuickActions(item.franchise, appModel: appModel)
                     }
                 }
@@ -578,12 +576,8 @@ struct LibraryAllView: View {
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
     /// The empty-library state's action, the same one the root offers.
     var onAddShow: () -> Void = {}
-    /// The artwork the ROOT's wash is currently lit by, handed through the push. Without it this
-    /// screen lit itself from its first row's cover — alphabetical, so usually a different show in
-    /// a different hue — and the push visibly changed the room's light while the comment on the
-    /// wash promised it would not (user, 30 Aug: "a visual consistency miss").
+    /// The artwork the ROOT's wash is lit by, handed through the push.
     var washArt: String? = nil
-
     /// The incoming filter is seeded into `@State` at INIT, not applied in `onAppear`. Applied
     /// late, the screen builds once unfiltered and once filtered — the user sees the whole library
     /// flash past on the way to the six rows they asked for, and the rows that survive both passes
@@ -814,7 +808,7 @@ struct LibraryAllView: View {
                                    primary: hasFilters ? { resetFilters() } : nil)
                             .padding(.horizontal, ThemeMetrics.gutter)
                             .centredState(contentH: contentHeight)
-                    } else if display == .posters {
+                    } else if display == .posters && !typeSize.isAccessibilitySize {
                         grid(sections, sectioned: sectioned, rail: rail).padding(.top, ThemeSpace.x2)
                     } else {
                         // No lead-in: the search drawer already carries its own margin, and the
@@ -851,11 +845,7 @@ struct LibraryAllView: View {
             guard let key else { return }
             proxy.scrollTo("sec-\(key)", anchor: .top)
         }
-        // The same wash the root carries, at the one root spec, so the push does not change the
-        // room's light — and, like every root now, it begins BELOW the chrome and ramps in from
-        // zero there. Run under the bar and its search drawer it drew a step under the field.
-        // The same wash and the same bar veil every root carries (`rootWash` / `rootBarVeil`),
-        // so the push does not change the room's light; the bottom edge is ours.
+        // The same wash the root carries, so the push does not change the room's light.
         .background(alignment: .top) {
             ZStack(alignment: .top) {
                 ThemeColor.canvas
@@ -1255,17 +1245,13 @@ struct LibraryAllView: View {
         // below the recognition floor ("Avatar: Seven Havens" rendered as a black rectangle with
         // unreadable type), and this is the catalogue, the one screen whose whole job is picking
         // a title out of three hundred.
-        return MediaRow(title: f.displayTitle,
-                        meta: facts.meta,
-                        metaLead: facts.metaLead,
-                        lead: facts.lead,
-                        poster: f.portraitArt,
-                        slot: .row,
-                        separator: !last,
-                        hint: Copy.Accessibility.opensTheShowHint,
-                        zoomID: "all/\(f.id)") {
-            onOpenDetail(f.id, "all/\(f.id)")
-        }
+        return ArtworkSceneCard(art: f.wideArt, poster: f.portraitArt,
+                                name: f.sceneName, title: f.displayTitle,
+                                fact: facts.lead, detail: facts.meta, detailLead: facts.metaLead,
+                                aspect: isAX ? 1 : 1.65,
+                                onOpen: { onOpenDetail(f.id, "all/\(f.id)") }) { EmptyView() }
+        .zoomSource("all/\(f.id)")
+        .padding(.bottom, ThemeSpace.x4)
         .franchiseQuickActions(f, appModel: appModel)
     }
 
@@ -1322,36 +1308,25 @@ struct LibraryAllView: View {
         // Resolved once — calling the accessor twice to pick a colour is how a caption and its
         // colour drift apart.
         let caption = gridCaption(f)
-        let radius = PosterSize.shelfMedium.radius
-        return Button { onOpenDetail(f.id, "all/\(f.id)") } label: {
-            VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-                PosterSlot(url: f.portraitArt, width: width, height: (width * 3 / 2).rounded(),
-                           radius: radius, shadow: .art)
-                    // The list variant zooms into Detail and the wall slid, so the transition
-                    // changed with a VIEW-MODE TOGGLE. Same id the push already passes.
-                    .zoomSource("all/\(f.id)")
-                VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
-                    Text(f.displayTitle)
-                        .type(ThemeType.shelfTitle).foregroundStyle(ThemeColor.textPrimary)
-                        // `ShelfCard`'s rule (review i4): a row reserves two lines for one
-                        // caption baseline and ALLOWS a third — the identity title never ellipsizes.
-                        .lineLimit(isAX ? 1...6 : (alignCaptions ? 2...3 : 1...3))
-                        .minimumScaleFactor(0.82)
-                        .allowsTightening(true)
-                        .multilineTextAlignment(.leading)
-                    if let caption {
-                        Text(caption.text)
-                            .type(ThemeType.shelfCaption)
-                            .foregroundStyle(caption.lead ? ThemeColor.accent : ThemeColor.textSecondary)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                    }
+        return ArtworkPoster(url: f.tilePoster.url, name: f.tilePoster.name, title: f.displayTitle,
+                             detailInset: ThemeSpace.x2,
+                             detailsInBand: true,
+                             fixedAspect: 2.0 / 3.0,
+                             onOpen: { onOpenDetail(f.id, "all/\(f.id)") }) {
+            if PosterCaption.style == .band {
+                if let caption {
+                    Text(caption.text)
+                        .type(ThemeType.shelfCaption)
+                        .foregroundStyle(ThemeColor.textPrimary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(width: width, alignment: .leading)
+            } else {
+                PosterCaptionText(title: f.displayTitle, fact: caption?.text, lead: caption?.lead ?? false)
             }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(RowPressStyle(radius: radius))
+        .frame(width: width)
+        .zoomSource("all/\(f.id)")
         .franchiseQuickActions(f, appModel: appModel)
         .accessibilityElement(children: .combine)
         // The spoken title is the WHOLE title, never the shortened one.

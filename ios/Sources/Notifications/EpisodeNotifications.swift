@@ -97,6 +97,39 @@ final class EpisodeNotifications {
             upcoming += perShow.compactMap { $0.count > rank ? $0[rank] : nil }
                 .sorted { $0.airsAt < $1.airsAt }
         }
+        // PREMIERES (review, 23 Sep): a season that has not started is never "releasing", so a
+        // return — Black Clover's Season 2, a Planned show's first episode — never alerted at all,
+        // and TV got nothing. One alert per tracked show (every status but Dropped) whose next
+        // season is DATED within two months: anime at its minute, TV (date-only) at 9 AM local
+        // on the day. They take their turn before any show's second episode.
+        let horizon = now + 60 * Formatting.D
+        let premieres: [(franchiseId: String, title: String, part: FranchisePart, at: Int64)] = library
+            .filter { $0.effectiveStatus != .dropped }
+            .compactMap { f in
+                guard let part = f.parts.filter({ $0.premiereAt.map { $0 > now && $0 <= horizon } ?? false })
+                    .min(by: { ($0.premiereAt ?? .max) < ($1.premiereAt ?? .max) }),
+                      var at = part.premiereAt else { return nil }
+                if f.source.timeAnchor.isDateOnly {
+                    // The DAY is the UTC calendar day of the synthesized 17:00 UTC instant (the
+                    // contract); read in the device's calendar it is the next day east of UTC+7,
+                    // and the alert fired a day late (review i3). That day, at 9 AM local.
+                    let p = Formatting.localParts(at, anchor: .utcDate)
+                    var local = DateComponents()
+                    local.year = p.y; local.month = p.mo; local.day = p.d; local.hour = 9
+                    var cal = Calendar.current
+                    cal.timeZone = .current
+                    guard let nine = cal.date(from: local) else { return nil }
+                    at = Int64(nine.timeIntervalSince1970 * 1000)
+                    guard at > now else { return nil }
+                }
+                return (f.id, f.displayTitle, part, at)
+            }
+        let firstRound = upcoming.prefix(perShow.count)
+        upcoming = Array(firstRound) + premieres.map {
+            UpcomingAiring(franchiseId: $0.franchiseId, title: $0.title, mediaId: $0.part.mediaId,
+                           episode: nil, airsAt: $0.at)
+        } + upcoming.dropFirst(perShow.count)
+        let premiereIds = Set(premieres.map { $0.part.mediaId })
         upcoming = Array(upcoming.prefix(EpisodeNotifications.maxPending))
 
         // The app schedules nothing else, so a full clear + re-add keeps this idempotent.
@@ -105,14 +138,16 @@ final class EpisodeNotifications {
         for airing in upcoming {
             let content = UNMutableNotificationContent()
             content.title = airing.title
-            content.body = Copy.Alert.episodeOut(airing.episode)
+            let premiere = premieres.first { $0.part.mediaId == airing.mediaId && premiereIds.contains(airing.mediaId) && airing.episode == nil }
+            content.body = premiere.map { Copy.Alert.premiere($0.part.canonicalLabel) } ?? Copy.Alert.episodeOut(airing.episode)
             content.sound = .default
             content.threadIdentifier = airing.franchiseId  // group repeat alerts per franchise
 
             let delay = max(1, Double(airing.airsAt - now) / 1000)
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)
             let request = UNNotificationRequest(
-                identifier: "episode-\(airing.mediaId)-\(airing.episode ?? 0)",
+                identifier: premiere == nil ? "episode-\(airing.mediaId)-\(airing.episode ?? 0)"
+                                            : "premiere-\(airing.mediaId)",
                 content: content,
                 trigger: trigger
             )

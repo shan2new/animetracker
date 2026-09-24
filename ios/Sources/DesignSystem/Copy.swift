@@ -46,12 +46,19 @@ enum Copy {
         return compact.isEmpty ? episode(n) : "\(compact) · \(episode(n))"
     }
 
-    /// "Season 5: Hashira Training Arc" → "Season 5"; anything else unchanged.
+    /// "Season 5: Hashira Training Arc" → "Season 5"; a long "Arc - Part" label keeps its last
+    /// segment ("Thousand-Year Blood War - The Calamity" → "The Calamity": the logo above it
+    /// already prints the arc, and the line ran the width of the screen — review, 23 Sep);
+    /// anything else unchanged.
     static func compactPartLabel(_ label: String) -> String {
-        guard let range = label.range(of: #"^Season \d+(?=:)"#, options: .regularExpression) else {
-            return label
+        if let range = label.range(of: #"^Season \d+(?=:)"#, options: .regularExpression) {
+            return String(label[range])
         }
-        return String(label[range])
+        if label.count > 24, let dash = label.range(of: " - ", options: .backwards) {
+            let tail = label[dash.upperBound...].trimmingCharacters(in: .whitespaces)
+            if tail.count >= 3 { return tail }
+        }
+        return label
     }
 
     /// English-only pluraliser. A `.stringsdict` is out of scope for this prototype (confirmed);
@@ -69,6 +76,19 @@ enum Copy {
     static func episodeRange(_ a: Int, _ b: Int) -> String { "Episodes\u{00A0}\(a)\u{2013}\(b)" }
 
     static func episodes(_ n: Int) -> String { plural(n, "episode", "episodes") }
+
+    /// What a part IS, as a caption word: "Film", "OVA", "ONA", "Special". `rawValue.capitalized`
+    /// printed "Ova" (24 Sep).
+    static func partKind(_ kind: PartKind) -> String {
+        switch kind {
+        case .season: return "Season"
+        case .movie: return "Film"
+        case .ova: return "OVA"
+        case .ona: return "ONA"
+        case .special: return "Special"
+        case .music: return "Music"
+        }
+    }
     /// "51 min" — an episode's runtime, in the fact line a row opens to.
     static func minutes(_ n: Int) -> String { "\(n) min" }
 
@@ -130,12 +150,17 @@ enum Copy {
         /// The waiting hero's eyebrow. The MOMENT is the fact line under the title, big and in
         /// accent, so the eyebrow says only what kind of moment it is.
         static let newEpisode = "New episode"
+        /// A season released whole this week (a streaming drop).
+        static let newSeason = "New season"
         /// The row tag on the newest AIRED episode while it is still unwatched — the streaming
         /// apps' "NEW" on a tile, in the app's one amber-for-state rule.
         static let newTag = "NEW"
         /// The empty account's billboard pill: the chart's top show, on the hero's own slate.
         static let trending = "Trending"
         static let upcoming = "Upcoming"
+        /// Catalogue news for a show on air right now — "AIRING" over "Episode 14 airs Sunday at
+        /// 4:30 PM". "UPCOMING" said that and three other things (review, 23 Sep).
+        static let airing = "Airing"
         static let watching = "Watching"
         /// The shelf of shows you are part-way through that have NOTHING airing. Distinct from
         /// `watching` (a status) and from `nextUp` (an episode that is out now).
@@ -189,26 +214,32 @@ enum Copy {
         /// that KNOWS which episode it writes says so, because "Mark as watched" beside a hero that
         /// also shows a behind-count and a latest-aired date left the reader to work out which of
         /// three numbers the button would touch.
-        static func markEpisodeWatched(_ n: Int) -> String { "Mark \(Copy.episodeInSentence(n)) watched" }
-        /// "Mark episodes 2–5 watched" — a batch command STATES ITS RANGE. "Mark through episode 5"
-        /// named only its endpoint, so under a hero saying "Episode 1 next · 9 behind" the 5 read
-        /// as an unexplained third number rather than as first-unwatched + 4.
+        static func markEpisodeWatched(_ n: Int) -> String { "Mark \(Copy.episodeInSentence(n)) as watched" }
+        /// "Mark episodes 2–5 as watched…" — a batch command STATES ITS RANGE. "Mark through episode
+        /// 5" named only its endpoint, so under a hero saying "Episode 1 next · 9 behind" the 5 read
+        /// as an unexplained third number rather than as first-unwatched + 4. A range confirms, so
+        /// it carries the ellipsis; a single episode is `markEpisodeWatched` and does not.
         static func markThrough(from: Int, to: Int) -> String {
             // Word-joiners weld the range into one token — a narrow menu line broke it as
             // "episodes 1–" / "5", which reads as a typo, not a range.
-            from >= to ? "Mark \(Copy.episodeInSentence(to)) watched"
-                       : "Mark episodes \(from)\u{2060}\u{2013}\u{2060}\(to) watched"
+            from >= to ? markEpisodeWatched(to)
+                       : "Mark episodes \(from)\u{2060}\u{2013}\u{2060}\(to) as watched\u{2026}"
         }
-        static func markAll(_ n: Int) -> String { "Mark all \(Copy.episodes(n)) as watched" }
+        /// "Mark all 5 episodes as watched…"; ONE is not "all" ("Mark all 1 episode…", review i5).
+        static func markAll(_ n: Int) -> String {
+            n == 1 ? "Mark 1 episode as watched\u{2026}" : "Mark all \(Copy.episodes(n)) as watched\u{2026}"
+        }
         /// The link from the show page's episode window to the whole season: "All 24 episodes".
         static func allEpisodes(_ n: Int) -> String { "All \(Copy.episodes(n))" }
         /// A long run's in-place doors on the show page (Mail's "Load Earlier Messages"): the list
         /// grows where it is, twelve rows a tap, and nothing is pushed (6 Sep).
         static let showEarlierEpisodes = "Show earlier episodes"
         static let showMoreEpisodes = "Show more episodes"
-        static let markAllEpisodes = "Mark all episodes as watched"
         static func markAllUnwatched(_ n: Int) -> String { "Mark all \(Copy.episodes(n)) as unwatched\u{2026}" }
         static let markCaughtUp = "Mark as caught up"
+        /// A Planned show whose every released episode is marked (3 Body Problem, Season 2 "late
+        /// 2026"): the status the marks already describe.
+        static let moveToWatched = "Move to Watched"
 
         static let startRewatch = "Start rewatch"
         static let continueRewatch = "Continue rewatch"
@@ -246,10 +277,13 @@ enum Copy {
 
         // MARK: The ellipsis rule, as data
 
-        /// Board 09 states the rule as "commands that open a confirmation end in …", but its own
-        /// action table omits the ellipsis from the forward batch marks — which do confirm. The
-        /// table's concrete strings win, so `opensConfirmation` is recorded **independently** of
-        /// the trailing character and the two are never inferred from one another.
+        /// Board 09's rule, and Apple's: **a command that opens a confirmation ends in "…", and
+        /// only such a command does.** Board 09's own action table omitted the ellipsis from the
+        /// forward batch marks — which do confirm — and the table used to side with it, so the
+        /// show page's menu put "Mark all episodes as watched" and "Mark all 15 episodes as
+        /// unwatched…" one above the other, both opening a confirmation, one promising it (review,
+        /// 23 Sep). `opensConfirmation` is still recorded independently of the trailing character,
+        /// so the audit can check the two against each other in BOTH directions.
         struct Command: Hashable, Sendable {
             let label: String
             let opensConfirmation: Bool
@@ -263,8 +297,8 @@ enum Copy {
             Command(label: markEpisodeWatched(19), opensConfirmation: false),
             Command(label: markThrough(from: 6, to: 10), opensConfirmation: true),
             Command(label: markAll(18), opensConfirmation: true),
-            Command(label: markAllEpisodes, opensConfirmation: true),
             Command(label: markAllUnwatched(24), opensConfirmation: true),
+            Command(label: markSeriesWatched, opensConfirmation: true),
             Command(label: markCaughtUp, opensConfirmation: false),
             Command(label: startRewatch, opensConfirmation: false),
             Command(label: continueRewatch, opensConfirmation: false),
@@ -290,10 +324,15 @@ enum Copy {
             commands.first { $0.label == label }?.opensConfirmation ?? false
         }
 
-        /// The invariant the rule really carries: an ellipsis promises a confirmation. (The
-        /// converse is deliberately not required — see `Command`.) Empty means the table is sound.
+        /// An ellipsis promises a confirmation. Empty means the table is sound.
         static var ellipsisViolations: [String] {
             commands.filter { $0.endsInEllipsis && !$0.opensConfirmation }.map(\.label)
+        }
+
+        /// …and a confirmation is promised by an ellipsis (the converse, 23 Sep). Empty means the
+        /// table is sound.
+        static var missingEllipsis: [String] {
+            commands.filter { $0.opensConfirmation && !$0.endsInEllipsis }.map(\.label)
         }
 
         /// A confirmation BUTTON never ends in an ellipsis. Empty means the table is sound.
@@ -310,6 +349,10 @@ enum Copy {
         /// The lane's fact for a batch — "4 episodes watched", parallel to `Progress.episodeWatched`:
         /// "4 episodes marked as watched" truncated beside the poster and Undo (6 Sep).
         static func batchWatched(_ n: Int) -> String { "\(Copy.episodes(n)) watched" }
+        /// A series batch that took the story's films with it: "63 episodes and 2 films watched".
+        static func batchWatched(_ n: Int, films: Int) -> String {
+            films == 0 ? batchWatched(n) : "\(Copy.episodes(n)) and \(Copy.plural(films, "film", "films")) watched"
+        }
 
         /// The same fact, carrying its SUBJECT. The bare form names neither show nor season, yet
         /// the identical toast fires from a Schedule row and a Library context menu, where the
@@ -328,10 +371,21 @@ enum Copy {
         static let removedShort = "Removed from Library"
         /// The last episode of a finished series was marked: the show is filed under Watched.
         static let finished = "Series finished \u{00B7} Moved to Watched"
+        /// A season reset from the show page's menu — the receipt names the season it cleared.
+        static func seasonUnmarked(_ label: String) -> String { "\(label) marked as unwatched" }
+        static func batchUnmarked(_ n: Int) -> String { "\(Copy.episodes(n)) marked as unwatched" }
         static func added(title: String, status: String) -> String { "Added \(title) to \(status)" }
+        /// The lane's clause when a mark also added the show — the poster and the line beneath
+        /// already name it.
+        static func addedTo(_ status: String) -> String { "Added to \(status)" }
         /// Shown only where the row leaves the screen as a result of the change (Library).
         static func movedTo(_ status: String) -> String { "Moved to \(status)" }
+        /// A Watched show whose next season has begun, moved back by the app (`resumeReturningSeries`).
+        static let backOnWatching = "New season started \u{00B7} Moved to Watching"
+        static func backOnWatchingCount(_ n: Int) -> String { "\(n) shows back on Watching \u{00B7} New seasons started" }
         static let rewatchStarted = "Rewatch started"
+        /// Stopping a rewatch that knew where the show stood: the progress is back.
+        static let rewatchStoppedRestored = "Rewatch stopped \u{00B7} Progress restored"
         static let alertsOn = "Episode alerts on"
         static let rewatchRestarted = "Rewatch restarted"
         static let offlinePending = "Saved on this device. Waiting to sync."
@@ -346,12 +400,20 @@ enum Copy {
         static func episodeOut(_ n: Int?) -> String {
             n.map { "\(Copy.episode($0)) is out now" } ?? "A new episode is out now"
         }
+        /// A season (or the show) premiering today: "Season 2 premieres today".
+        static func premiere(_ season: String) -> String {
+            season.isEmpty ? "Premieres today" : "\(season) premieres today"
+        }
     }
 
     // MARK: - Inline notices
 
     /// Noun-first: the thing that failed, then what happened to it.
     enum Notice {
+        /// Profile → Notifications while alerts are off in Settings: asked here first.
+        static let alertsOffTitle = "Episode alerts are off"
+        static let alertsOffMessage = "Turn on notifications for Previously. in Settings to hear when a new episode is out."
+        static let openSettings = "Open Settings"
         static let today = "Airing dates couldn\u{2019}t refresh"
         static let schedule = "Your schedule couldn\u{2019}t refresh"
         static let library = "Your library couldn\u{2019}t refresh"
@@ -417,20 +479,32 @@ enum Copy {
         }
         static func episodeAiring(_ n: Int) -> String { "\(Copy.episode(n)) airing" }
         static func behind(_ n: Int) -> String { "\(Copy.episodes(n))\u{00A0}behind" }
+        /// The count on a release's one line, under its NEW EPISODE badge ("3 behind").
+        static func behindShort(_ n: Int) -> String { "\(n)\u{00A0}behind" }
         static func left(_ n: Int) -> String { "\(Copy.episodes(n))\u{00A0}left" }
+        /// A season released whole this week.
+        static func allOut(_ n: Int) -> String { n == 1 ? "Out now" : "All \(n) episodes out" }
+        /// A Watched show's unmarked episodes, said as a fact about the marks, not a debt.
+        static func unmarked(_ n: Int) -> String { "\(Copy.episodes(n)) not marked" }
         static let caughtUp = "Caught up"
         /// The calm open's headline when the next episode lands TODAY: the day is not "nothing",
         /// and "Caught up" printed over an Upcoming row saying "Today at 8:30 PM" was the state
         /// shouting over the day's real fact (the same inversion Detail's block fixed). The
         /// specifics — which show, what time — stay with the row; the headline only frames the day.
         static let newEpisodeToday = "New episode today"
-        /// The airing cadence, said the way Netflix says it ("New episode coming on Saturday"):
-        /// "New episode Friday at 7:30 PM" · "New episode today at 6:30 PM" · "New episode airs
-        /// in 27 min". "New", not "next": on a show nine episodes behind, "next episode" is the
-        /// one YOU watch next and the reader would take the day for its air date.
-        static func newEpisode(when: String) -> String {
-            let lowered = ["Today", "Tomorrow", "Airs", "In "].contains { when.hasPrefix($0) }
-            return "New episode \(lowered ? when.lowercasedFirst() : when)"
+        /// The airing cadence, NAMED: "Episode 19 airs Friday at 7:30 PM" · "Episode 19 airs
+        /// today at 6:30 PM" · "Episode 19 airs in 27 min" — the future twin of `dropAired`
+        /// ("Episode 18 aired 50 min ago"), which sits on the same block. Not "New episode …":
+        /// "new" is the word for a drop that HAS struck (the NEW EPISODE badge, the episode
+        /// list's NEW tag), and the show page printed "New episode 30 Sep" under a badge about
+        /// an episode that aired an hour ago (review, 23 Sep). Not "next": on a show nine episodes
+        /// behind, "next episode" is the one YOU watch next. With no episode number the line is
+        /// the verb alone — "Airs Friday at 7:30 PM".
+        static func episodeAirs(_ n: Int?, when: String) -> String {
+            let phrase = when.hasPrefix("Airs ") ? String(when.dropFirst(5)) : when
+            let lowered = ["Today", "Tomorrow", "In "].contains { phrase.hasPrefix($0) }
+            let tail = lowered ? phrase.lowercasedFirst() : phrase
+            return n.map { "\(Copy.episode($0)) airs \(tail)" } ?? "Airs \(tail)"
         }
         static let caughtUpAfterThisEpisode = "Caught up after this episode"
         /// Variant B of the calm day: nothing changed AND nothing is dated. Shared with
@@ -498,14 +572,50 @@ enum Copy {
     // MARK: - Confirmations (every one states its exact blast radius)
 
     enum Confirm {
+        static let notNow = "Not now"
+        /// Stopping a rewatch that remembers where the show stood before it.
+        static func stopRewatchRestores(at episode: Int) -> String {
+            "The session stays in your history, stopped at \(Copy.episodeInSentence(episode)). Your progress goes back to where it was before the rewatch."
+        }
         static let cancel = "Cancel"
+
+        // Adding a long run: where are you in it?
+        static func whereAreYou(_ title: String) -> String { "Where are you in \(title)?" }
+        static func whereAreYouMessage(_ n: Int) -> String {
+            "\(Copy.episodes(n).prefix(1).uppercased() + Copy.episodes(n).dropFirst()) have aired. Mark them all as watched, start from the beginning, or pick up where you are."
+        }
+        static let partWay = "I\u{2019}m part-way through"
+        static func caughtUpAdd(_ n: Int) -> String { "I\u{2019}m caught up \u{00B7} Mark \(Copy.episodes(n))" }
+        /// The same answer when the batch also marks the story's films (review i4: "Mark 63
+        /// episodes" beside a series prompt that said "63 episodes and 2 films" for one write).
+        static func caughtUpAdd(_ n: Int, films: Int) -> String {
+            films == 0 ? caughtUpAdd(n)
+                : "I\u{2019}m caught up \u{00B7} Mark \(Copy.episodes(n)) and \(Copy.plural(films, "film", "films"))"
+        }
+        static let startFromBeginning = "Start from Episode 1"
+        /// "I'm part-way through" names the season (review i3): the seasons before it are marked,
+        /// so a show picked up in Season 3 does not count Seasons 1–2 as left.
+        static let whichSeason = "Which season are you on?"
+        static let whichSeasonMessage = "Earlier seasons are marked as watched."
 
         // Contiguous / whole-backlog batch mark.
         static func batchMarkTitle(_ n: Int) -> String { "Mark \(Copy.episodes(n)) as watched?" }
+        static func batchMarkTitle(_ n: Int, films: Int) -> String {
+            films == 0 ? batchMarkTitle(n) : "Mark \(Copy.episodes(n)) and \(Copy.plural(films, "film", "films")) as watched?"
+        }
         static func batchMarkMessage(from a: Int, to b: Int) -> String {
             "Your progress will move from \(Copy.episodeInSentence(a)) to \(Copy.episodeInSentence(b))."
         }
         static func batchMarkConfirm(_ n: Int) -> String { "Mark \(Copy.episodes(n)) as watched" }
+        static func batchMarkConfirm(_ n: Int, films: Int) -> String {
+            films == 0 ? batchMarkConfirm(n) : "Mark \(Copy.episodes(n)) and \(Copy.plural(films, "film", "films"))"
+        }
+        /// The same batch where the screen is not the show's own page (Today's hero): the
+        /// subject leads, then the same sentence.
+        static func batchMarkMessage(title: String, season: String, from a: Int, to b: Int) -> String {
+            let subject = season.isEmpty ? title : "\(title) \u{00B7} \(season)"
+            return "\(subject). \(batchMarkMessage(from: a, to: b))"
+        }
 
         // Reset a season's progress. Nothing is deleted — only progress moves.
         static func resetSeasonTitle(_ total: Int) -> String { "Mark \(Copy.episodes(total)) as unwatched?" }
@@ -551,7 +661,9 @@ enum Copy {
     // MARK: - Session / account state
 
     enum State {
-        static let ask = "Ask"
+        /// Notifications before the system has been asked: a state, not an instruction ("Ask",
+        /// review 23 Sep).
+        static let ask = "Not set"
         static let signedOut = "You\u{2019}re signed out. Sign in again to continue."
         static let checkingForChanges = "Checking for changes"
         static let couldNotCheck = "Couldn\u{2019}t check for changes"
@@ -709,6 +821,9 @@ extension Copy {
         problems += Action.ellipsisViolations.map {
             "\u{201C}\($0)\u{201D} ends in an ellipsis but opens no confirmation"
         }
+        problems += Action.missingEllipsis.map {
+            "\u{201C}\($0)\u{201D} opens a confirmation but has no ellipsis"
+        }
         problems += Action.confirmationButtonViolations.map {
             "confirmation button \u{201C}\($0)\u{201D} ends in an ellipsis"
         }
@@ -783,8 +898,8 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// no dated episodes in it.
     static let emptySchedule = EmptyStateCopy(
         symbol: "calendar",
-        title: "Nothing scheduled",
-        supporting: "Add a show and its air dates appear here.",
+        title: "Build your schedule",
+        supporting: "Add a show to see its upcoming episodes here.",
         primaryLabel: Copy.Action.addAShow)
 
     static let noWatching = EmptyStateCopy(
@@ -821,8 +936,8 @@ struct EmptyStateCopy: Equatable, Sendable {
 
     /// Calm day. Variant A names the next known event; variant B admits there is none. Never both.
     ///
-    /// NOTE: Today no longer renders this as a plate — the calm open is a quiet caught-up line
-    /// (see `TodayView.calmBlock`); "Nothing changed since you were last here" led every calm
+    /// NOTE: Today no longer renders this as a plate — a calm day keeps its billboard in the
+    /// caught-up grammar (`TodayView.calmLockup`); "Nothing changed since you were last here" led every calm
     /// morning with an absence, at display size, above an Upcoming row restating its own
     /// supporting sentence. Kept for previews and the audit until another surface needs it.
     static func calmToday(title: String?, when: String?) -> EmptyStateCopy {
@@ -880,8 +995,8 @@ struct EmptyStateCopy: Equatable, Sendable {
     /// Schedule with a library that has no dated episodes. Not an error and not empty-account.
     static let nothingScheduled = EmptyStateCopy(
         symbol: "calendar",
-        title: "Nothing scheduled",
-        supporting: "None of the shows in your library has an upcoming date.")
+        title: "Your calendar is clear",
+        supporting: "New air dates will appear here as they\u{2019}re announced.")
 
     /// Sync status's calm frame. It claims only what `SyncCenter.failedChanges` can prove.
     static let everythingSynced = EmptyStateCopy(

@@ -1,35 +1,40 @@
 import SwiftUI
 
-/// Two strings this screen needs that the shared copy table does not carry yet: the hero's
-/// secondary action and the primary's committed label. Both are filed as an exact diff against
-/// `Copy.swift` (a design-system file this track does not own); they live here, named and in one
-/// place, until that lands — never inline at a call site.
+/// The recap's strings, named in one place — never inline at a call site.
 private enum TodayCopy {
-    static let details = Copy.Action.details
-    static let continueAction = Copy.Action.continueLabel
     static let whileYouWereAway = Copy.Recap.whileYouWereAway
-    static func andMore(_ n: Int) -> String { "and \(n) more" }
+    static func also(_ names: [String], label: String?) -> String { Copy.Recap.also(names, label: label) }
     static let dismissRecap = Copy.Action.dismissRecap
-    static let opensTheShow = Copy.Accessibility.opensTheShowHint
     static func sinceYourLastVisit(_ phrase: String) -> String { Copy.Recap.sinceYourLastVisit(phrase) }
 }
 
-// "Today" — the Focus Stack (spec v8, boards 01–03), rebuilt around a FULL-BLEED HERO.
+#if DEBUG
+/// Deterministic launch states for simulator review. Launch with
+/// `-todayDemo empty|inactive|single|watched|multiple|caught`.
+private enum TodayDemoState: String {
+    case empty, inactive, single, watched, multiple, caught
+
+    static var current: TodayDemoState? {
+        UserDefaults.standard.string(forKey: "todayDemo").flatMap(TodayDemoState.init(rawValue:))
+    }
+}
+#endif
+
+private extension Franchise {
+    /// The billboard's picture is the SHOW PAGE's (`billboardArt`): the proven-textless poster
+    /// under a logo, else the selected poster whole. One hero grammar on both screens, so the
+    /// show you tap on Today opens on the same picture under the same name (review, 23 Sep).
+    var todayBillboardArt: WideArt { billboardArt }
+}
+
+// Today prioritises fresh releases, with intact poster artwork and in-card tracking controls.
+// The single-release feature and release carousel share the same artwork-safe composition.
+// The recap retains its separate full-bleed arrival treatment.
 //
-// The shipped build put the single most cinematic frame in the app — "here is the thing to watch
-// right now" — inside a 200-pt stroked box with an 80×120 thumbnail in it, on a canvas it was only
-// 4 % lighter than. Identity art went from ≈180 000 px² in the original to ≈11 600 px². This file
-// puts it back: artwork from the status bar to ~72 % of the screen (Apple TV Home's billboard
-// proportion), the wordmark and avatar floating over it, one primary action laid on the art, and
-// rhythm underneath.
-//
-//   arrival  → Previously Recap in the hero frame, over the art of what comes next;
-//   resting  → the hero + the rest of the queue + "Coming next" + the Watching shelf;
-//   calm     → the copy table's calm state over an ambient wash of the next known event.
-//
-// Presentation is derived from AppModel feeds (outNow → keepWatching → nextUp); the view owns only
-// timing state. One haptic per transaction; the committed capsule and the handoff ARE the
-// confirmation — no receipt line is drawn under the hero (removed 17 Sep).
+// Presentation is derived from AppModel feeds (outNow → nextUp); the view owns only timing state.
+// One haptic per transaction; the committed capsule and the handoff ARE the confirmation, and the
+// Undo rides the lane once the handoff settles (23 Sep) — no receipt line is drawn under the hero
+// (removed 17 Sep).
 struct TodayView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AuthManager.self) private var auth
@@ -51,6 +56,8 @@ struct TodayView: View {
     /// A Profile stat tile: open the Library filtered to that status.
     var onOpenLibrary: ((WatchStatus) -> Void)?
     var onAddShow: () -> Void = {}
+    /// "Recommended for you ›" — the longer list.
+    var onOpenRecommendations: (() -> Void)?
 
     private var now: Int64 { appModel.now }
 
@@ -72,8 +79,23 @@ struct TodayView: View {
     // Mark handoff
     @State private var pinned: [Franchise]?        // stack snapshot held while the hero shows its result
     @State private var committedEpisode: Int?
-    /// Queue rows whose ring is drawing its check (650 ms after a tap).
+    /// The show whose billboard is drawing its committed frame — on a deck, not necessarily the
+    /// first page.
+    @State private var committedFranchiseId: String?
+    /// Up next cards whose ring is drawing its check (650 ms after a tap).
     @State private var committedQueue: Set<String> = []
+    /// The release deck: the page on screen, and the tallest page measured (a horizontal scroll
+    /// view has no height of its own).
+    @State private var deckVisibleID: String?
+    /// How many episodes the committed write marked (a batch behind the chevron, or one).
+    @State private var committedCount = 1
+
+    @State private var deckHeight: CGFloat = 0
+    /// The deck's one-time NUDGE: the pages slide 44 pt and settle back, once a session, so the
+    /// second release shows its edge (review i3/i4, P13: page 2 was signalled only by two 7-pt
+    /// dots). One transform on the pages' row; none under Reduce Motion.
+    @State private var deckNudge: CGFloat = 0
+    @MainActor private static var deckNudgedThisSession = false
     @State private var batchPrompt: BatchPrompt?
     /// True from the moment a mark commits until the INCOMING card has finished arriving.
     ///
@@ -96,14 +118,7 @@ struct TodayView: View {
     /// The hero art's mean lightness (`PaletteCache.lightness(for:)`), for `HeroProtection`.
     @State private var heroLightness: Double?
 
-    /// The rest of the queue under the hero, as cards on the Up next shelf (rows at accessibility
-    /// sizes). Two, not four: the stack is what the Watching shelf excludes, and at four an
-    /// eight-show library left ONE poster for that shelf, which then fell back to a single row
-    /// (captured 4 Sep). The upcoming cards follow these on the same shelf.
-    /// Two while a Watching shelf sat under the queue and caught the overflow; four now that
-    /// `Continue watching` only carries shows with NO new episode — an unwatched drop must never
-    /// fall off Today into a shelf that is about backlog (user, 6 Sep).
-    private var queueCount: Int { 4 }
+    /// The most a Today shelf carries — the Planned shelf and the trending shelf.
     private static let shelfCap = 10
 
     /// Height of the floating wordmark band, measured from the bottom of the status bar. The top
@@ -135,14 +150,6 @@ struct TodayView: View {
     /// letting a taller text block spill off the top of its own protection.
     private static let artBand: CGFloat = 132
     private static let accessibilityArtBand: CGFloat = 210
-    /// What a `MediaRow` already contributes above and below itself.
-    ///
-    /// The row carries `ThemeSpace.x2` of vertical padding INSIDE its own minimum height, so a
-    /// container that then adds a full `labelGap` or `sectionGap` produces 8 pt more than the token
-    /// names — measured at 31 pt under a label whose token says 10, and 51–57 pt between sections
-    /// whose token says 30. Rhythm is what the reader sees, so the container pays the token minus
-    /// what the row already spends.
-    private static let rowOwnInset: CGFloat = ThemeSpace.x2
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
@@ -153,12 +160,11 @@ struct TodayView: View {
             let topInset = geo.safeAreaInsets.top
             let screenH = geo.size.height + topInset + geo.safeAreaInsets.bottom
             ZStack(alignment: .top) {
-                // The ambient wash. On a hero day the hero itself is the art; on a calm, empty or
-                // failed day the screen still opens on the atmosphere of the next known event
-                // rather than on #09090B.
+                ThemeColor.canvas.ignoresSafeArea()
+                // The ambient wash — the one root spec every tab draws. On a hero day the hero
+                // itself is the art; on an empty or failed day the screen still opens on the
+                // atmosphere of the next known event rather than on bare canvas.
                 if !showsHero {
-                    // The one root wash spec — Today's no-hero states carried a private 340/0.55,
-                    // one of the seven configurations the cohesion pass collapsed.
                     ArtBackdrop(url: ambientArt, height: ThemeMetrics.rootWashHeight,
                                 intensity: ThemeMetrics.rootWashIntensity)
                         .ignoresSafeArea(edges: .top)
@@ -171,8 +177,24 @@ struct TodayView: View {
                             skeleton(screenH: screenH, topInset: topInset)
                         } content: {
                             VStack(alignment: .leading, spacing: 0) {
-                                topBlock(screenH: screenH, topInset: topInset,
+                                topBlock(screenW: geo.size.width, screenH: screenH, topInset: topInset,
                                          contentH: geo.size.height)
+                                    // The billboards' bar edge, measured off the block's own
+                                    // frame as the recap measures its copy: the bar hardens once
+                                    // the stage has passed under it. Only the recap set it, so
+                                    // on a billboard day every shelf scrolled under a soft veil
+                                    // and the wordmark sat on live captions (review, 23 Sep).
+                                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { maxY in
+                                        guard !recapOnStage else { return }
+                                        scroll.setCopyUnderBand(false)
+                                        // Hard once the LOCKUP reaches the bar — the badge, the
+                                        // lines and the capsule sit in the billboard's last
+                                        // ~`lockupReach` points. At "the whole stage has passed"
+                                        // the lockup's text slid under a soft veil and ghosted
+                                        // through the wordmark band (iteration 2).
+                                        scroll.setHeroUnderBand(maxY - TodayView.lockupReach
+                                            < topInset + TodayView.headerBand + ThemeMetrics.barEdgeRamp)
+                                    }
                                 belowTheFold
                                     // Faded, not removed, while the recap holds the stage. The
                                     // layout survives (removal was the shove the handoff exists
@@ -198,7 +220,7 @@ struct TodayView: View {
                         Color.clear.onGeometryChange(for: CGFloat.self) { proxy in
                             proxy.frame(in: .global).minY
                         } action: { minY in
-                            scroll.set(topInset - minY)
+                            scroll.set((showsHero ? 0 : topInset) - minY)
                         }
                     }
                 }
@@ -209,6 +231,7 @@ struct TodayView: View {
                 .tabBarContentMargin()
                 .laneClearance(appModel)
                 .scrollIndicators(.hidden)
+                .ignoresSafeArea(.container, edges: showsHero ? .top : [])
                 // No mask on the scroll view. It took the content under the wordmark band to
                 // zero while the hero title crossed it — and it cost a full-screen offscreen pass
                 // on every frame of every scroll. The bar does that job now: `TodayVeils` mounts
@@ -244,7 +267,10 @@ struct TodayView: View {
         .onChange(of: appModel.loading) { _, loading in
             if !loading { evaluateRecap() }
         }
-        .onChange(of: appModel.surfaceReady) { _, _ in startRecapClock() }
+        .onChange(of: appModel.surfaceReady) { _, ready in
+            startRecapClock()
+            if ready, forYouStageAllowed == nil { forYouStageAllowed = !appModel.recommendations.isEmpty }
+        }
         .onAppear {
             #if DEBUG
             // `-openProfile 1` (DEBUG, like `-recapDemo`): open the Profile sheet for a capture.
@@ -268,8 +294,21 @@ struct TodayView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { clearRecapStrip() }
         }
-        .confirmationDialog(batchPrompt?.title ?? "", isPresented: Binding(get: { batchPrompt != nil }, set: { if !$0 { batchPrompt = nil } }),
-                            titleVisibility: .visible, presenting: batchPrompt) { prompt in
+        // The screen steps back under the alert, as the show page does (review i4, N2: the glass
+        // took its emphasis from the billboard behind it).
+        .overlay {
+            if batchPrompt != nil {
+                Color.black.opacity(0.72)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: batchPrompt != nil)
+        // An ALERT with Cancel, like every write confirmation (review i3/i4: the anchored dialog is
+        // a glass popover on iOS 26, drawn with no Cancel over the amber capsule).
+        .alert(batchPrompt?.title ?? "", isPresented: Binding(get: { batchPrompt != nil }, set: { if !$0 { batchPrompt = nil } }),
+               presenting: batchPrompt) { prompt in
             Button(prompt.confirm) { prompt.perform() }
             Button(Copy.Confirm.cancel, role: .cancel) {}
         } message: { prompt in
@@ -278,7 +317,7 @@ struct TodayView: View {
     }
 
     #if DEBUG
-    /// `-todayAnchor upnext|watching` (DEBUG, like `-calmDemo`): scroll the loaded screen to a
+    /// `-todayAnchor planned` (DEBUG, like `-calmDemo`): scroll the loaded screen to a
     /// section for a capture — the way to photograph the shelves when the simulator cannot be
     /// touched (the input MCP dies between sessions; `simctl` has no scrolling).
     private func debugScroll(_ proxy: ScrollViewProxy) async {
@@ -287,6 +326,8 @@ struct TodayView: View {
         else { return }
         try? await Task.sleep(for: .milliseconds(1500))
         guard !Task.isCancelled else { return }
+        // `-todayAnchor foryouall`: open "Recommended for you ›" (the longer list) for a capture.
+        if anchor == "foryouall" { onOpenRecommendations?(); return }
         proxy.scrollTo("today.\(anchor)", anchor: UnitPoint(x: 0, y: 0.16))
     }
     #endif
@@ -307,135 +348,832 @@ struct TodayView: View {
     /// Wordmark + account, floating over the hero art. It is not a band with 40 pt of dead air in
     /// it — there is nothing behind it but the show you are about to watch.
     private var header: some View {
-        TodayHeaderBar(scroll: scroll, carriesBase: headerCarriesBase, heroFranchise: heroFranchise,
-                       showProfile: $showProfile)
+        TodayHeaderBar(showProfile: $showProfile, scroll: scroll, overArtwork: showsHero)
     }
 
     // MARK: - Content states
 
     private var isFailed: Bool { appModel.loadError && appModel.libraryEmpty }
-    private var isEmptyAccount: Bool { !appModel.loading && appModel.libraryEmpty && !appModel.loadError }
-    /// A library with nothing to watch. The chart carries the screen, as it already does for an
-    /// empty account — the machinery is the same, only the gate is wider.
-    ///
-    /// Today carries ONLY what you can act on now (6 Sep). The two blocks that reprinted another
-    /// tab are gone — the Upcoming cards (Schedule's own first rows, verbatim) and the Watching
-    /// shelf (Library's) — and a caught-up day opens on the chart rather than on a future airing
-    /// dressed as a hero. A future airing is not actionable BY DEFINITION, so Today does not
-    /// print one at all, not as a card and not as a line: the calendar is a tab that owns dates.
-    private var showsDiscovery: Bool {
-        !appModel.libraryEmpty && !isFailed && !appModel.loading && actionable.isEmpty
+    private var isEmptyAccount: Bool {
+        #if DEBUG
+        if TodayDemoState.current == .empty { return true }
+        #endif
+        return !appModel.loading && appModel.libraryEmpty && !appModel.loadError
     }
-    /// Whether the top of the screen is a full-bleed hero (and therefore owns the art itself).
+
+    /// Shows explicitly marked Watching. A stocked library with none of these is not a quiet
+    /// version of the normal feed; it is the deliberate "choose what is next" state.
+    private var watchingLibrary: [Franchise] {
+        appModel.library.filter { $0.effectiveStatus == .watching }
+    }
+
+    private var isInactiveLibrary: Bool {
+        #if DEBUG
+        if TodayDemoState.current == .inactive { return true }
+        #endif
+        return !appModel.libraryEmpty
+            && freshItems.isEmpty
+            && watchingLibrary.isEmpty
+            && !plannedShows(excluding: []).isEmpty
+    }
+
+    /// The deck is at most three billboards: someone following twelve weekly shows got twelve
+    /// full-screen pages behind two 6-pt dots and no overview (review, 23 Sep). The rest wait on
+    /// the Up next shelf under it.
+    private static let deckCap = 3
+    /// How far up from a billboard's foot its lockup reaches — badge, name or lines, bar and
+    /// capsule — for the bar's hardening (`topBlock`'s probe).
+    fileprivate static let lockupReach: CGFloat = 250
+    private var deckItems: [Franchise] { Array(freshItems.prefix(TodayView.deckCap)) }
+    private var singleRelease: Franchise? { deckItems.count == 1 ? deckItems.first : nil }
+    private var showsMultipleReleases: Bool { !recapOnStage && deckItems.count > 1 }
+
+    /// Every featured state uses the same edge-to-edge stage. More releases add pages,
+    /// not smaller cards; the header continues to float over the artwork.
     private var showsHero: Bool {
-        guard !appModel.libraryEmpty, !isFailed else { return false }
-        return heroFranchise != nil || (recapOnStage && recap != nil)
+        guard !isEmptyAccount, !isFailed else { return false }
+        return (recapOnStage && recap != nil) || !freshItems.isEmpty
+            || (isInactiveLibrary ? inactiveFeature != nil : restingFeature != nil)
     }
-    /// The wash behind a screen that has no hero: whatever the user is closest to caring about.
-    private var ambientArt: String? {
-        appModel.nextUp?.portraitArt ?? appModel.watchingShelf.first?.portraitArt ?? appModel.library.first?.portraitArt
+
+    /// The Planned show to feature: one you can start NOW before one that has not aired, the
+    /// nearest premiere among those — never the list's first row, which on the real account
+    /// was a show whose every episode was already marked (review, 23 Sep).
+    private var inactiveFeature: Franchise? {
+        let planned = plannedShows(excluding: [])
+        func startable(_ f: Franchise) -> Bool {
+            f.mainStoryEpisodicParts.contains { !$0.isUpcoming && $0.availableEpisodes() > $0.progress }
+        }
+        // Among what you can start: one you have ALREADY started, then one on air now, then the
+        // list's order — never simply the first row (iteration 2: a 170-episode finished run
+        // featured over a show with new episodes this week).
+        let startableOnes = planned.filter(startable)
+        if let pick = startableOnes.first(where: { f in f.parts.contains { $0.progress > 0 } })
+            ?? startableOnes.first(where: { $0.releasingPart != nil })
+            ?? startableOnes.first {
+            return pick
+        }
+        return planned.min { (appModel.nextPremiere(of: $0) ?? .max) < (appModel.nextPremiere(of: $1) ?? .max) }
+    }
+
+    /// Nothing new today: a show WAITING on you outranks the next airing. The calm hero said
+    /// "CAUGHT UP" over Slime while Bleach sat six episodes behind, nowhere on the page (review,
+    /// 23 Sep).
+    private var restingFeature: Franchise? {
+        // Through a mark's committed frame the stage holds the show AS IT WAS (the pinned
+        // snapshot): read live, a batch that caught One Piece up swapped the billboard for a flat
+        // slab of its ground 0.4 s in, then another show with no lockup (review i5, F5).
+        if let id = committedFranchiseId, let held = pinned?.first(where: { $0.id == id }) { return held }
+        return liveRestingFeature
+    }
+
+    private var liveRestingFeature: Franchise? {
+        backlogFeature
+            ?? appModel.nextUp
+            ?? watchingLibrary.first { $0.isWatchedThrough }
+            ?? watchingLibrary.first
+            ?? appModel.library.first
+    }
+
+    /// The first Watching show, in Today's order, with something to watch now.
+    private var backlogFeature: Franchise? {
+        watchingInOrder.first { f in kind(of: f).map { queueIsMarkable($0.0) } ?? false }
+    }
+
+    /// Watching shows in the order Today ranks them — `AppModel.watchingShelf` (new drops, then
+    /// mid-season, then the rest), then any Watching show it does not carry.
+    private var watchingInOrder: [Franchise] {
+        var seen = Set<String>()
+        let ranked = appModel.watchingShelf.filter { $0.effectiveStatus == .watching }
+        return (ranked + watchingLibrary).filter { seen.insert($0.id).inserted }
     }
 
     @ViewBuilder
-    private func topBlock(screenH: CGFloat, topInset: CGFloat, contentH: CGFloat) -> some View {
+    private func topBlock(screenW: CGFloat, screenH: CGFloat, topInset: CGFloat,
+                          contentH: CGFloat) -> some View {
         if isFailed {
             stateBlock(SyncCenter.shared.isOnline ? .serverNoCache : .offlineNoData,
                        contentH: contentH) {
                 Task { await appModel.reload() }
             }
+        } else if recapOnStage, recap != nil {
+            hero(nil, screenH: screenH, topInset: topInset)
         } else if isEmptyAccount {
-            // A first run opens on television, not on an instruction: the chart's top show on
-            // the billboard with one way in, and the rest of the chart under it. The card is the
-            // fallback for an account that cannot see a chart (offline, or the chart failed).
-            if let top = appModel.trending.first {
-                trendingBlock(top, screenH: screenH, topInset: topInset)
-            } else if appModel.trendingLoading {
-                skeleton(screenH: screenH, topInset: topInset)
-            } else {
-                // `emptyToday`, not `emptyAccount`: the latter is LIBRARY's string, and a state
-                // may not title itself after a tab the user is not looking at.
-                stateBlock(.emptyToday, contentH: contentH, action: onAddShow)
-            }
-        } else if showsDiscovery {
-            // The same billboard the first run gets, for the same reason: there is nothing to
-            // continue, so the screen shows television rather than four posters saying "Caught up".
-            if let top = appModel.trending.first {
-                trendingBlock(top, screenH: screenH, topInset: topInset)
-            } else if appModel.trendingLoading {
-                skeleton(screenH: screenH, topInset: topInset)
-            } else {
-                calmBlock
-            }
-        } else if showsHero {
-            hero(heroFranchise, screenH: screenH, topInset: topInset)
+            emptyLibraryBlock(screenW: screenW)
+        } else if showsMultipleReleases {
+            multipleReleaseBlock(screenW: screenW, screenH: screenH)
+        } else if let singleRelease {
+            singleReleaseBlock(singleRelease, screenW: screenW, screenH: screenH)
+        } else if isInactiveLibrary {
+            inactiveLibraryBlock(screenW: screenW, screenH: screenH)
         } else {
-            calmBlock
+            restingBlock(screenW: screenW, screenH: screenH)
         }
     }
 
-    // MARK: - First contact: the trending billboard
+    // MARK: - Today's states (20 Sep, in the app's amber grammar since 23 Sep)
 
-    /// A brand-new account's first frame, on the hero's own billboard: the chart's top show, its
-    /// name and identity, ONE action ("Add to Library" — Netflix's "+ My List" on the billboard),
-    /// and the rest of the chart on a shelf beneath. The block opens the show. Apple TV's and
-    /// Netflix's first screen is never a sentence on a black canvas; it is television with a way
-    /// in. The add is `addToLibrary`'s optimistic path, so the capsule flips to "In library" on
-    /// the tap and the real hero takes over when the library lands.
-    @ViewBuilder
-    private func trendingBlock(_ item: FranchiseSummary, screenH: CGFloat, topInset: CGFloat) -> some View {
-        let h = heroHeight(screenH)
-        // The same order as the hero's: the server-selected landscape first, the cover composited
-        // only when there is none.
-        let billboard = item.billboardArt
-        let art = billboard.url
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .bottom) {
-                (heroTint ?? PaletteCache.fallback)
-                    .frame(height: h)
-                    .frame(maxWidth: .infinity)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                StretchingHeroArt(scroll: scroll, url: art, height: h, tint: heroTint,
-                                  scrimBottom: 0, portrait: billboard.portraitSource,
-                                  ultraWide: billboard.ultraWide,
-                                  onArtLoaded: markArtReady,
-                                  topInset: (item.billboardName == .type ? topInset + TodayView.headerBand : 0),
-                                  groundDim: HeroProtection.groundDim(heroStrength))
-                    .frame(height: h, alignment: .bottom)
-                heroTextScrim
-                TrendingFocus(item: item,
-                              owned: appModel.isInLibrary(item.id),
-                              onOpen: { onOpenDetail(item.id, "trending/\(item.id)") },
-                              onAdd: {
-                                  appModel.addToLibrary(franchiseId: item.id, title: item.title,
-                                                        isReleasing: item.isReleasing)
-                              })
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                    .padding(.bottom, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heroCopyHeight = $0 }
-            }
-            .frame(height: h)
+    /// ONE new release owns the stage — the show page's billboard (`TodayBillboard`).
+    private func singleReleaseBlock(_ franchise: Franchise, screenW: CGFloat,
+                                    screenH: CGFloat) -> some View {
+        releaseBillboard(franchise, width: screenW, fillHeight: heroFillHeight(screenH))
             .frame(maxWidth: .infinity)
-            .mask(alignment: .bottom) {
-                Rectangle().padding(.top, -2000).allowsHitTesting(false)
+    }
+
+    /// An empty account: three posters from the chart, one sentence, the one next step in amber —
+    /// "Add a show", the words Library's and Schedule's empty states use for the same action —
+    /// and the chart itself under the name Search gives it ("Trending now"). It said "Find shows"
+    /// over "Popular this week", two new names for two things the app already named (review,
+    /// 23 Sep).
+    private func emptyLibraryBlock(screenW: CGFloat) -> some View {
+        TodayEmptyLibraryState(
+            fanCovers: Array(appModel.trending.compactMap(\.portraitArt).prefix(3)),
+            onAddShow: onAddShow
+        ) {
+            // The fan IS the chart's first three; the shelf carries on from the fourth, so one
+            // screen never shows the same three posters twice (review, 23 Sep).
+            trendingShelf(skipping: 3)
+        }
+        .padding(.top, TodayView.headerBand + ThemeSpace.x5)
+    }
+
+    /// A library with nothing marked Watching: its first Planned show on the billboard, in the
+    /// show page's Planned grammar, with the one step that starts it — the same "Start watching"
+    /// the show page offers a Planned show.
+    @ViewBuilder
+    private func inactiveLibraryBlock(screenW: CGFloat, screenH: CGFloat) -> some View {
+        if let feature = inactiveFeature {
+            let alone = plannedShows(excluding: [feature.id]).isEmpty && forYouShelfItems.isEmpty
+            TodayBillboard(franchise: feature, width: screenW,
+                           fillHeight: heroFillHeight(screenH, alone: alone),
+                           content: plannedLockup(feature),
+                           scroll: scroll,
+                           onOpen: { onOpenDetail(feature.id, "today-start/\(feature.id)") },
+                           onArtLoaded: markArtReady) {
+                Button {
+                    appModel.setStatus(franchiseId: feature.id, status: .watching)
+                } label: {
+                    Text(Copy.Today.startOrContinue(feature)).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PrimaryButtonStyle2())
             }
-            .overlay(alignment: .top) { topVeil(topInset: topInset) }
-            .padding(.top, -topInset)
-            .zoomSource("trending/\(item.id)")
-            .task(id: art) {
-                let resolved = await PaletteCache.shared.resolve(url: art, maxPixel: 360)
-                heroTint = resolved
-                heroLightness = PaletteCache.shared.lightness(for: art)
-            }
-            trendingShelf
+            .zoomSource("today-start/\(feature.id)")
+            .franchiseQuickActions(feature, appModel: appModel)
         }
     }
+
+    /// Several new releases: a deck of billboards, one page per show — the SAME billboard as the
+    /// single release, so more releases add pages, not smaller cards.
+    private func nudgeDeckOnce(pages: Int) {
+        guard pages > 1, !reduceMotion, !Self.deckNudgedThisSession else { return }
+        Self.deckNudgedThisSession = true
+        Task { @MainActor in
+            // After the launch has settled (the ident gone — `surfaceReady`) and the reader has
+            // had a beat on page 1.
+            while !appModel.surfaceReady { try? await Task.sleep(for: .milliseconds(200)) }
+            try? await Task.sleep(for: .milliseconds(1400))
+            guard deckVisibleID == deckItems.first?.id else { return }
+            withAnimation(.spring(duration: 0.42, bounce: 0)) { deckNudge = -44 }
+            try? await Task.sleep(for: .milliseconds(420))
+            withAnimation(.spring(duration: 0.55, bounce: 0.18)) { deckNudge = 0 }
+        }
+    }
+
+    private func multipleReleaseBlock(screenW: CGFloat, screenH: CGFloat) -> some View {
+        let items = deckItems
+        let frame = heroFillHeight(screenH)
+        return VStack(alignment: .leading, spacing: 0) {
+            ScrollView(.horizontal) {
+                // EAGER, so every page is measured before the first frame: lazily, the deck took
+                // the height of the pages it had laid out, and the first swipe to a taller page
+                // pushed the whole screen down under the finger. A deck is a handful of pages.
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(items) { f in
+                        // Every page as tall as the deck: a shorter page used to end above the dots
+                        // on bare canvas (140 pt of it under a whole poster beside a filled page,
+                        // 23 Sep). Its ground runs on under the poster and its lockup sits at the
+                        // foot, like every other page's.
+                        releaseBillboard(f, width: screenW, fillHeight: frame, minHeight: deckHeight)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
+                                if h > deckHeight + 0.5 { deckHeight = h }
+                            }
+                            .id(f.id)
+                    }
+                }
+                .scrollTargetLayout()
+                .offset(x: deckNudge)
+            }
+            // A horizontal scroll view has no intrinsic height: without this boundary the shelf
+            // under the deck compressed its layout while the full-size artwork drew over it. The
+            // TALLEST PAGE once measured — never a floor of the filled frame: a whole poster is
+            // shorter than 72 % of the screen, and the floor left a band of bare canvas between
+            // every poster and the dots (review, 23 Sep).
+            .frame(height: deckHeight > 0 ? deckHeight : frame)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $deckVisibleID, anchor: .center)
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+            .onAppear {
+                if deckVisibleID == nil { deckVisibleID = items.first?.id }
+                nudgeDeckOnce(pages: items.count)
+                #if DEBUG
+                // `-deckPage N` (DEBUG, like `-todayAnchor`): open the deck on its Nth page (0-based).
+                let page = UserDefaults.standard.integer(forKey: "deckPage")
+                if page > 0, items.indices.contains(page) { deckVisibleID = items[page].id }
+                #endif
+            }
+            .onChange(of: items.map(\.id)) { _, ids in
+                if deckVisibleID == nil || !ids.contains(deckVisibleID ?? "") { deckVisibleID = ids.first }
+                deckHeight = 0
+            }
+            .onChange(of: typeSize) { _, _ in deckHeight = 0 }
+
+            let current = items.firstIndex { $0.id == (deckVisibleID ?? items.first?.id) } ?? 0
+            HStack(spacing: 8) {
+                ForEach(items) { f in
+                    Circle()
+                        .fill(f.id == items[current].id ? ThemeColor.textPrimary : ThemeColor.textTertiary)
+                        .frame(width: 7, height: 7)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 20)
+            .padding(.top, ThemeSpace.x2)
+            // The dots belong to the billboard: they leave under the bar with its lockup instead
+            // of hanging alone under the wordmark at the foot of the page (review i3).
+            .fadesUnderBar(ThemeMetrics.topSafeInset + TodayView.headerBand, lead: 160)
+            // A page control VoiceOver can read and move (review, 23 Sep: the dots were hidden
+            // from it, so the second release was unreachable without sight).
+            .accessibilityElement()
+            .accessibilityLabel(Copy.Today.releasePosition(current + 1, items.count))
+            .accessibilityValue(items[current].displayTitle)
+            .accessibilityAdjustableAction { direction in
+                let next = direction == .increment ? current + 1 : current - 1
+                guard items.indices.contains(next) else { return }
+                withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
+                    deckVisibleID = items[next].id
+                }
+            }
+        }
+    }
+
+    /// Nothing new today: the show airing next (else the one you are closest to) on the billboard
+    /// in the show page's calm grammar — nothing to mark — over the whole viewport when no shelf
+    /// follows. A show with a backlog is not calm: it keeps its count and its mark capsule.
+    @ViewBuilder
+    private func restingBlock(screenW: CGFloat, screenH: CGFloat) -> some View {
+        if let rec = forYouFeature, let stub = rec.stub {
+            forYouBillboard(rec, stub: stub, screenW: screenW, screenH: screenH)
+        } else if let feature = restingFeature {
+            let alone = plannedShows(excluding: [feature.id]).isEmpty && forYouShelfItems.isEmpty
+            // Anything with an episode to watch wears the markable billboard — a fresh drop as
+            // much as a backlog: the calm lockup said "CAUGHT UP" over Re:ZERO three behind
+            // (review, 23 Sep).
+            if kind(of: feature).map({ queueIsMarkable($0.0) }) ?? false {
+                releaseBillboard(feature, width: screenW, fillHeight: heroFillHeight(screenH, alone: alone))
+            } else {
+                TodayBillboard(franchise: feature, width: screenW,
+                               fillHeight: heroFillHeight(screenH, alone: alone),
+                               content: calmLockup(feature),
+                               scroll: scroll,
+                               onOpen: { onOpenDetail(feature.id, "today-resting/\(feature.id)") },
+                               onArtLoaded: markArtReady) { EmptyView() }
+                    .zoomSource("today-resting/\(feature.id)")
+                    .franchiseQuickActions(feature, appModel: appModel)
+            }
+        }
+    }
+
+    /// The billboard frame for FILLED art: the show page's fraction, or the whole viewport when
+    /// nothing follows the hero. A poster drawn whole takes its own height (`TodayBillboard`).
+    private func heroFillHeight(_ screenH: CGFloat, alone: Bool = false) -> CGFloat {
+        alone ? screenH - ThemeMetrics.tabBarClearance : screenH * TodayView.heroFraction
+    }
+
+    /// Unstarted shows only: an active, paused, finished or dropped show already has an expressed
+    /// relationship and does not belong on the Planned shelf beside the thing you are watching.
+    /// Your Planned list in the order you can ACT on it: what you can watch tonight first (a show
+    /// you started before one you have not), then premieres by date, then what waits on an
+    /// undated return. Library order led with 3 Body Problem — every released episode watched,
+    /// Season 2 "late 2026" — as the first thing to start (review i3/i4, P3-N5).
+    private func plannedShows(excluding ids: Set<String>) -> [Franchise] {
+        // A title just added from For you is still on that shelf, ticked, until the next list —
+        // not twice on one screen (review i5, N4).
+        let fromShelf = appModel.addedRecommendationIds
+        let ranked = appModel.library.enumerated()
+            .filter { $0.element.effectiveStatus == .planned && !ids.contains($0.element.id)
+                      && !fromShelf.contains($0.element.id) }
+            .map { index, f -> (f: Franchise, tier: Int, key: Int64) in
+                if let p = f.currentPart, !p.isUpcoming, p.markTarget(now: now) > p.progress {
+                    let started = f.parts.contains { $0.progress > 0 }
+                    return (f, started ? 0 : 1, Int64(index))
+                }
+                if let at = appModel.nextPremiere(of: f) { return (f, 2, at) }
+                return (f, 3, Int64(index))
+            }
+            .sorted { a, b in a.tier != b.tier ? a.tier < b.tier : a.key < b.key }
+        return Array(ranked.map(\.f).prefix(TodayView.shelfCap))
+    }
+
+    /// What the hero(es) above the shelf are showing — the Planned shelf never repeats them.
+    private var heroIds: Set<String> {
+        if showsMultipleReleases || singleRelease != nil { return Set(deckItems.map(\.id)) }
+        if forYouFeature != nil { return [] }
+        if isInactiveLibrary, let feature = inactiveFeature { return [feature.id] }
+        if let feature = restingFeature { return [feature.id] }
+        return []
+    }
+
+    /// The artwork the wash is lit by when there is no hero: the next thing to air, else the first
+    /// Watching show, else the library's first.
+    private var ambientArt: String? {
+        appModel.nextUp?.portraitArt ?? watchingLibrary.first?.portraitArt ?? appModel.library.first?.portraitArt
+    }
+
+    // MARK: - What a billboard says
+
+    /// A release — or a backlog — on the billboard: the show page's lockup, with its mark capsule.
+    private func releaseBillboard(_ f: Franchise, width: CGFloat, fillHeight: CGFloat,
+                                  minHeight: CGFloat = 0) -> some View {
+        let r = releaseLockup(f)
+        return TodayBillboard(franchise: f, width: width, fillHeight: fillHeight, minHeight: minHeight,
+                              content: r?.content ?? calmLockup(f),
+                              interactive: !handoffInFlight || r?.committed == true,
+                              scroll: scroll,
+                              onOpen: { onOpenDetail(f.id, "focus/\(f.id)") },
+                              onArtLoaded: markArtReady) {
+            if let r, let cta = r.cta {
+                MarkSplitButton(episode: cta,
+                                committed: r.committed,
+                                behind: r.behind,
+                                title: f.title,
+                                committedCount: r.committed ? committedCount : 1,
+                                // The part the LOCKUP names: a mark aimed elsewhere (the airing
+                                // part at its ceiling) returned nil and the capsule did nothing
+                                // (review i5, F1).
+                                onMark: { mark(f, mediaId: r.part.mediaId) },
+                                onMarkThrough: { n in promptBatch(f, part: r.part, through: n) },
+                                // `markTarget(now:)`, never `progressCeiling` — see `promptBatch`.
+                                onMarkAll: { promptBatch(f, part: r.part, through: r.part.markTarget(now: now)) })
+            }
+        }
+        .zoomSource("focus/\(f.id)")
+        .franchiseQuickActions(f, appModel: appModel)
+    }
+
+    /// The markable billboard's lockup — the show page's grammar: the STATE on the badge ("NEW
+    /// EPISODE" only for a drop that struck today; else the count), the moment and the episode as
+    /// the one line (the moment only when the drop IS the next episode — review i1), where you
+    /// are as the bar, and the drop named on a support line when a backlog stands between you and
+    /// it. The 20 Sep cards paired the next episode with the latest drop's time ("Episode 16 ·
+    /// Aired 16 min ago", while Episode 18 was the one that aired) and badged a five-day-old drop
+    /// NEW (review, 23 Sep).
+    private func releaseLockup(_ f: Franchise)
+        -> (content: TodayLockupContent, part: FranchisePart, cta: Int?, behind: Int, committed: Bool)? {
+        guard let (kind, part) = kind(of: f) else { return nil }
+        let nextEpisode = part.progress + 1
+        let behind: Int = {
+            if case .fresh(let b) = kind { return b }
+            if case .backlog(let l) = kind { return l }
+            return 0
+        }()
+        let committed = committedEpisode != nil && committedFranchiseId == f.id
+        // The whole block advances in the SAME frame as the capsule's label, so for the length of
+        // the confirmation the card never says the episode is both next and already watched.
+        let copy: (eyebrow: String, fact: String, support: String?) = committed
+            ? advanced(kind, f: f, part: part, from: committedEpisode ?? nextEpisode, behind: behind, marked: committedCount)
+            : (eyebrow(kind, f: f, part: part), freshCount(kind, fact: factLine(kind, f: f, part: part)), nil)
+        // Watched over what there is to watch: aired-by-now for a fresh drop, the available run
+        // for a backlog. It advances with the mark, never after it.
+        let bar: (ratio: Double, spoken: String)? = {
+            let done = committed ? (committedEpisode ?? part.progress) : part.progress
+            let total: Int
+            let spoken: String
+            switch kind {
+            case .fresh:
+                total = part.airedByNow(now: now, anchor: f.timeAnchor)
+                spoken = Copy.Progress.behind(max(0, total - done))
+            case .backlog:
+                total = part.availableEpisodes()
+                spoken = Copy.Progress.left(max(0, total - done))
+            default: return nil
+            }
+            guard total > 0, done > 0, done < total else { return nil }
+            return (Double(done) / Double(total), spoken)
+        }()
+        let fresh: Bool = { if case .fresh = kind { return true }; return false }()
+        // ONE line under the name (24 Sep, owner: "the text in the Hero is too verbose"): the
+        // badge is the state — NEW EPISODE already says the drop is new — and the line is the
+        // episode the capsule marks. No recency prefix on a release, no second line of drops and
+        // cadences under it; the bar is where you are, wordless.
+        let content = TodayLockupContent(badge: copy.eyebrow,
+                                         attention: fresh && !committed,
+                                         moment: committed || fresh ? nil : momentText(kind, f: f, part: part),
+                                         fact: copy.fact,
+                                         support: nil,
+                                         progress: bar?.ratio,
+                                         progressSpoken: bar?.spoken)
+        let cta: Int? = committed ? committedEpisode : (behind > 0 ? nextEpisode : nil)
+        return (content, part, cta, behind, committed)
+    }
+
+    /// The calm billboard: waiting on the next airing, else caught up — the show page's words,
+    /// nothing to mark.
+    private func calmLockup(_ f: Franchise) -> TodayLockupContent {
+        guard let (kind, part) = calmKind(of: f) else {
+            return TodayLockupContent(badge: Copy.Progress.caughtUp, fact: "")
+        }
+        // The one line: the next airing leading the episode; a finished season's return date
+        // (the support line's old job) becomes the line when there is no airing to lead it.
+        let moment = momentText(kind, f: f, part: part)
+        let fact = factLine(kind, f: f, part: part)
+        let returns = moment == nil ? supportLine(kind, f: f, part: part) : nil
+        return TodayLockupContent(badge: eyebrow(kind, f: f, part: part),
+                                  moment: moment,
+                                  fact: returns.map { "\(fact) \u{00B7} \($0)" } ?? fact)
+    }
+
+    /// A Planned show: the show page's Planned block ("PLANNED", the episode it would start on,
+    /// its next airing when it has one).
+    private func plannedLockup(_ f: Franchise) -> TodayLockupContent {
+        let part = f.currentPart ?? f.resumePart ?? f.episodicPartsInOrder.first
+        let fact = part.map { f.watchContext(part: $0, episode: $0.progress + 1) } ?? ""
+        // The airing NAMES its episode (the show page's line): a bare "Sunday at 4:30 PM" under
+        // "Season 5 · Episode 9" read as episode 9 airing Sunday (review i3). Not
+        // `nextEpisodeLine`, which a Planned show's calendar gate would silence.
+        let next: String? = f.nextAiring(now: now).map { at in
+            let airing = f.releasingPart
+            let episode = airing?.airings.first(where: { $0.at == at })?.episode ?? airing?.nextEpisodeNumber
+            return Copy.Progress.episodeAirs(episode, when: TemporalCopy.airs(at: at, now: now, source: f.source))
+        }
+        _ = next
+        // One line: where it starts (the capsule's "Start watching" acts on it).
+        return TodayLockupContent(badge: Copy.Status(.planned), fact: fact)
+    }
+
+    // MARK: - Up next (the shelf)
+
+    /// One card on the Up next shelf: a show, the episode the card is about, and the focus
+    /// grammar's own kind — so the card knows whether it can be marked.
+    private struct UpNextItem: Identifiable {
+        let franchise: Franchise
+        let kind: FocusKind
+        let part: FranchisePart
+        var id: String { franchise.id }
+        var airsAt: Int64? { if case .waiting(let at) = kind { return at } else { return nil } }
+    }
+
+    /// The Watching shows the billboard is not showing: every one with something to watch now,
+    /// whatever the age of its last episode, then this week's airings, soonest first.
+    private var upNextItems: [UpNextItem] {
+        let shown = heroIds
+        let pool = watchingInOrder.filter { !shown.contains($0.id) }
+        let markable: [UpNextItem] = pool.compactMap { f in
+            guard let (k, part) = kind(of: f), queueIsMarkable(k) else { return nil }
+            return UpNextItem(franchise: f, kind: k, part: part)
+        }
+        let taken = Set(markable.map(\.id))
+        let week = now + 7 * Formatting.D
+        let coming: [UpNextItem] = pool.compactMap { f in
+            guard !taken.contains(f.id), let part = f.releasingPart,
+                  let at = f.nextAiring(now: now), at <= week else { return nil }
+            return UpNextItem(franchise: f, kind: .waiting(at: at), part: part)
+        }
+        .sorted { ($0.airsAt ?? 0) < ($1.airsAt ?? 0) }
+        return Array((markable + coming).prefix(TodayView.shelfCap))
+    }
+
+    private func queueIsMarkable(_ kind: FocusKind) -> Bool {
+        switch kind {
+        case .fresh, .backlog: return true
+        case .caughtUp, .waiting: return false
+        }
+    }
+
+    /// Everything waiting for you, as television: one shelf of 16:9 cards under the billboard —
+    /// what you can watch now (each with its mark ring), then what is coming. Apple TV's Up Next
+    /// row, in the Library's Continue-card geometry: four fifths of the content width, the next
+    /// card peeking. Headed "Next up" while a card can be marked and "Upcoming" when nothing has
+    /// aired, so "Next up" only ever heads something you can watch right now.
+    @ViewBuilder
+    private func upNextShelf(_ cards: [UpNextItem]) -> some View {
+        let markable = cards.contains { queueIsMarkable($0.kind) }
+        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
+            SectionHeaderRow(markable ? Copy.Label.nextUp : Copy.Label.upcoming) {
+                onSeeAllWatching()
+            }
+            .padding(.horizontal, ThemeMetrics.gutter)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
+                    ForEach(cards) { item in
+                        upNextCard(item)
+                            // A peek is an affordance for a NEXT card; a shelf of one, or a
+                            // grown type size, runs gutter to gutter.
+                            .containerRelativeFrame(.horizontal, count: 5,
+                                                    span: cards.count == 1 || isAX ? 5 : 4,
+                                                    spacing: ThemeMetrics.shelfGap)
+                            .franchiseQuickActions(item.franchise, appModel: appModel)
+                            .transition(handoff)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .contentMargins(.horizontal, ThemeMetrics.gutter, for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+            .fixedSize(horizontal: false, vertical: true)
+            .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion),
+                       value: cards.map(\.id))
+        }
+    }
+
+    /// One card: the show's wide art with the episode on it and where you are as the bar, the
+    /// show named beneath with ONE caption, and the mark ring beside that while there is
+    /// something to mark. The card opens the show; the ring is its own control.
+    ///
+    /// Not Library's "Next up" scene card, on purpose (review i3 asked for one anatomy): this
+    /// shelf is where episodes are MARKED — the ring and its in-place receipt need a caption row
+    /// of their own. On the scene card they shared a ~120-pt column over the art with the logo
+    /// beside them, and the receipt truncated to "Episo… · Undo" (photographed 24 Sep). Library's
+    /// shelf is for browsing and keeps the scene card.
+    @ViewBuilder
+    private func upNextCard(_ item: UpNextItem) -> some View {
+        let f = item.franchise, part = item.part
+        let wide = part.wideArt(within: f)
+        let caption = upNextCaption(item)
+        let episode = upNextEpisode(item).map(Copy.episode)
+        let zoom = "upnext/\(f.id)"
+        VStack(alignment: .leading, spacing: ThemeSpace.x2) {
+            Button { onOpenDetail(f.id, zoom) } label: {
+                ProgressBanner(url: wide.url, portraitSource: wide.portraitSource,
+                               progress: upNextProgress(item),
+                               episode: episode, ultraWide: wide.ultraWide,
+                               zoomID: zoom)
+                    // RIGID 16:9 at the card's width: left flexible, the art gave way to a longer
+                    // caption beside it and the second card's art was 20 pt shorter and narrower
+                    // than the first's (review i4, N8).
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(OverArtPressStyle())
+            .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+            HStack(alignment: .center, spacing: ThemeSpace.x3) {
+                Button { onOpenDetail(f.id, zoom) } label: {
+                    VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
+                        Text(f.displayTitle)
+                            .type(ThemeType.rowTitle)
+                            .foregroundStyle(ThemeColor.textPrimary)
+                            .lineLimit(1...2)
+                            .minimumScaleFactor(0.85)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        // The ring's receipt takes the caption's own line while it is live —
+                        // under the card it was a layout child that dropped the Planned shelf
+                        // 32 pt for six seconds (review i2).
+                        if ReceiptLine.isLive(appModel, host: ReceiptHost.todayQueue(f.id)) {
+                            ReceiptLine(host: ReceiptHost.todayQueue(f.id), compact: true, inline: true)
+                        } else if let caption {
+                            // The rows' two-colour grammar: a forward-looking TIME is amber, an
+                            // identity or a count is grey.
+                            Text(caption.text)
+                                .type(caption.lead ? ThemeType.rowMetaLead : ThemeType.rowMeta)
+                                .foregroundStyle(caption.lead ? ThemeColor.accent : ThemeColor.textSecondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(RowPressStyle())
+                .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+                if queueIsMarkable(item.kind) {
+                    MarkRing(marked: committedQueue.contains(f.id),
+                             style: .quiet,
+                             // A film has no episode numeral to put in the ring.
+                             episode: part.kind == .movie ? nil : part.progress + 1,
+                             label: "\(Copy.Action.markAsWatched), \(watchLabel(f, part: part, episode: part.progress + 1)) of \(f.title)") {
+                        markQueueRow(f)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel([f.title, episode, caption?.text].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    /// One transaction, one haptic (fired inside the write), one receipt — in place, under the
+    /// card's caption: the card stays where it is, so the receipt can live on it.
+    private func markQueueRow(_ f: Franchise) {
+        guard !committedQueue.contains(f.id) else { return }
+        guard let undo = appModel.markNext(franchiseId: f.id) else { return }
+        withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
+            _ = committedQueue.insert(f.id)
+        }
+        appModel.presentUndo(undo.placed(at: ReceiptHost.todayQueue(f.id)))
+        Announce.status(Copy.Progress.episodeWatched(undo.episode))
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(650))
+            committedQueue.remove(f.id)
+        }
+    }
+
+    /// The episode the card is about: the next unwatched one, or the one coming.
+    private func upNextEpisode(_ item: UpNextItem) -> Int? {
+        let part = item.part
+        switch item.kind {
+        case .waiting: return part.nextEpisodeNumber ?? part.airedEpisodes + 1
+        case .fresh, .backlog: return part.kind == .movie ? nil : part.progress + 1
+        case .caughtUp: return nil
+        }
+    }
+
+    /// Where you are in the season, on the art — watched over aired-by-now for a fresh drop, over
+    /// the available run for a backlog; nothing for a show with nothing started or nothing left.
+    private func upNextProgress(_ item: UpNextItem) -> Double? {
+        let part = item.part
+        let total: Int
+        switch item.kind {
+        case .fresh: total = part.airedByNow(now: now, anchor: item.franchise.timeAnchor)
+        case .backlog: total = part.availableEpisodes()
+        case .waiting, .caughtUp: return nil
+        }
+        guard total > 0, part.progress > 0, part.progress < total else { return nil }
+        return Double(part.progress) / Double(total)
+    }
+
+    /// The card's one caption, in the rows' two-colour grammar — the episode itself is the pill on
+    /// the art. A forward-looking TIME in amber: the airing ("Sunday at 8:30 PM") or today's drop
+    /// ("Aired 2h ago"). Else the count in grey — "behind" while the season airs, "left" once it
+    /// has finished — else the season on a multi-part show.
+    private func upNextCaption(_ item: UpNextItem) -> (text: String, lead: Bool)? {
+        let f = item.franchise, part = item.part
+        // The SHORT season name ("The Calamity"), the season pill's — the raw arc label printed
+        // "Thousand-Year Blood War -…" under the card (review i3).
+        let season: String? = {
+            let label = Copy.compactPartLabel(part.canonicalLabel)
+            return f.parts.count == 1 || label.isEmpty ? nil : label
+        }()
+        switch item.kind {
+        case .waiting(let at):
+            return (TemporalCopy.airs(at: at, now: now, source: f.source), true)
+        case .fresh(let behind):
+            // The drop's recency while the deck would call it fresh — amber on its own day.
+            if let last = part.lastAired(now: now, anchor: f.timeAnchor), now - last <= AppModel.outNowWindow,
+               behind <= 1 || Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0 {
+                return (TemporalCopy.aired(at: last, now: now, source: f.source),
+                        Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0)
+            }
+            if behind > 1 { return (Copy.Progress.behind(behind), false) }
+            return season.map { ($0, false) }
+        case .backlog(let left):
+            // A film is its own caption — the show page's NEXT UP names it the same way.
+            if part.kind == .movie { return (part.canonicalLabel, false) }
+            if left > 1 || part.isReleasing {
+                // The STORY's count once the run is over — the hero's and the show page's
+                // (`seriesLeft`), not this season's (iteration 2: 8 here, 16 there).
+                return (part.isReleasing ? Copy.Progress.behind(left)
+                                         : Copy.Progress.left(max(left, f.seriesLeft(now: now))), false)
+            }
+            return season.map { ($0, false) }
+        case .caughtUp:
+            return (Copy.Progress.caughtUp, false)
+        }
+    }
+
+    /// The rest of what you planned to watch — a wall of POSTERS, the cinematic grammar under a
+    /// billboard (Library's two-up landscape cards here read as a settings list under a film
+    /// poster, and lost Today its poster wall — user, 23 Sep), with the Library's own facts for
+    /// the same shows: where you stopped ("Season 5 · Episode 9 next"), else the premiere with
+    /// its verb ("Premieres 9 Oct", amber inside the horizon), else what it is.
+    @ViewBuilder
+    private func plannedShelf(_ items: [Franchise]) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
+                SectionHeaderRow(Copy.Status(.planned)) { onOpenLibrary?(.planned) }
+                    .padding(.horizontal, ThemeMetrics.gutter)
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
+                        ForEach(items) { f in
+                            let caption = plannedCaption(f)
+                            // The 20 Sep poster tile, with the one fact that matters for a Planned
+                            // show — where you stopped, or when it premieres — in its lower band.
+                            // Every card carries its band, captioned or not, with two lines
+                            // reserved: one caption position and one card height per row.
+                            ArtworkPoster(url: f.tilePoster.url, name: f.tilePoster.name, title: f.displayTitle,
+                                          detailInset: ThemeSpace.x2,
+                                          detailsInBand: true,
+                                          fixedAspect: 2.0 / 3.0,
+                                          onOpen: { onOpenDetail(f.id, "today-planned/\(f.id)") }) {
+                                if PosterCaption.style == .band {
+                                    (caption?.text ?? Text(""))
+                                        .type(ThemeType.caption)
+                                        .multilineTextAlignment(.center)
+                                        .lineLimit(2, reservesSpace: true)
+                                        .minimumScaleFactor(0.85)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                } else {
+                                    // The name, then the one fact on one line: "Season 5 · Episode
+                                    // 9 next", "Season 3 · Premieres 20 Nov" (the date amber).
+                                    PosterCaptionText(title: f.displayTitle, fact: caption?.fact,
+                                                      lead: caption?.lead ?? false, factHead: caption?.season)
+                                }
+                            }
+                            .frame(width: PosterSize.todayShelf.size.width)
+                            .zoomSource("today-planned/\(f.id)")
+                            .accessibilityLabel([f.displayTitle, caption?.spoken].compactMap { $0 }.joined(separator: ", "))
+                            .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+                            .franchiseQuickActions(f, appModel: appModel)
+                        }
+                    }
+                    .padding(.horizontal, ThemeMetrics.gutter)
+                    .padding(.vertical, ThemeSpace.x1)
+                }
+                .scrollIndicators(.hidden)
+                .scrollClipDisabled()
+            }
+            .id("today.planned")
+        }
+    }
+
+    /// A poster's one caption, at a poster's width (100 pt): where you stopped ("Episode 9
+    /// next"), else the premiere ("Premieres 9 Oct" — amber inside the horizon, "Premieres late
+    /// 2026" beyond it; the installment's name is the show page's, it cut the caption), else
+    /// what the show is.
+    private func plannedCaption(_ f: Franchise) -> PlannedCaption? {
+        // Where you stopped, the season NAMED on a show of several (review i3: "Episode 1 next"
+        // under Rick and Morty, eight seasons in, read as never started).
+        if let p = f.currentPart, !p.isUpcoming, f.parts.contains(where: { $0.progress > 0 }),
+           p.markTarget(now: now) > p.progress {
+            if p.kind == .movie { return PlannedCaption(season: nil, fact: p.canonicalLabel, lead: false) }
+            let season = f.seasonPartsInOrder.count > 1 ? Copy.compactPartLabel(p.canonicalLabel) : ""
+            return PlannedCaption(season: season.isEmpty ? nil : season,
+                                  fact: Copy.Progress.episodeNext(p.progress + 1), lead: false)
+        }
+        // Not started, with episodes out: where it STARTS — or, on air, that it is and when the
+        // next one lands. Percy (Seasons 1–2 out) pointed at Season 3's 20 Nov while its page said
+        // "Start watching", and an unstarted airing show fell back to "Anime · 2021" (review i5,
+        // N13).
+        if !f.parts.contains(where: { $0.progress > 0 }), let p = f.currentPart, !p.isUpcoming,
+           p.markTarget(now: now) > 0 {
+            if p.isReleasing, let at = f.nextAiring(now: now) {
+                return PlannedCaption(season: Copy.ForYou.airing,
+                                      fact: TemporalCopy.airsCompact(at: at, now: now, source: f.source), lead: true)
+            }
+            if p.kind == .movie { return PlannedCaption(season: nil, fact: p.canonicalLabel, lead: false) }
+            let season = f.seasonPartsInOrder.count > 1 ? Copy.compactPartLabel(p.canonicalLabel) : ""
+            return PlannedCaption(season: season.isEmpty ? nil : season, fact: Copy.episode(1), lead: false)
+        }
+        // The installment over its date, the verb by progress (`ReturnFact.premiereParts`):
+        // "Season 3" over "Premieres 20 Nov" — the season name used to be stripped, and Percy
+        // Jackson, two seasons out, read as a series that had never aired.
+        // Two deliberate lines in a band ~84 pt wide — the installment (else the verb) over the
+        // DATE: "Season 3" / "20 Nov", "Premieres" / "9 Oct". Left to wrap, the date split
+        // inside itself: "Premieres 9" / "Oct", "Premieres late" / "2026" (review i3).
+        if let parts = ReturnFact.premiereParts(of: f, appModel: appModel) {
+            let sentence = parts.fact.sentence.isEmpty ? parts.fact.text : parts.fact.sentence
+            // The fact arrives bound with no-break spaces (`ReturnFact`'s one-line rule) — split
+            // on either kind of space; the date keeps its own binding.
+            let words = sentence.split(maxSplits: 1, whereSeparator: { $0 == " " || $0 == "\u{00A0}" })
+                .map(String.init)
+            let verb = words.first ?? sentence
+            let date = words.count > 1 ? words[1].prefix(1).uppercased() + words[1].dropFirst() : ""
+            // With an installment the verb STAYS on the date line — "Season 2" / "Returns late
+            // 2026" — a bare "Late 2026" under "Season 2" said nothing about which way the date
+            // points (review i5, N13); without one, the verb heads the date.
+            if date.isEmpty || parts.installment != nil {
+                return PlannedCaption(season: parts.installment, fact: sentence, lead: parts.fact.soon)
+            }
+            return PlannedCaption(season: verb, fact: date, lead: parts.fact.soon)
+        }
+        // The dot stays on the first line when the caption wraps (AX-XL printed "Anime / · 2019",
+        // review i5, F24).
+        let identity = [f.kindWord, f.year.map(String.init)].compactMap { $0 }.joined(separator: "\u{00A0}\u{00B7} ")
+        return identity.isEmpty ? nil : PlannedCaption(season: nil, fact: identity, lead: false)
+    }
+
+    /// A Planned poster's caption: the installment (white) over the fact (amber when it is a
+    /// date inside the horizon) — one text, two lines, two inks.
+    private struct PlannedCaption {
+        let season: String?
+        let fact: String
+        let lead: Bool
+        var spoken: String { [season, fact].compactMap { $0 }.joined(separator: ", ") }
+        var text: Text {
+            let factText = Text(fact).foregroundStyle(lead ? ThemeColor.accent : ThemeColor.textPrimary)
+            guard let season else { return factText }
+            return Text(season + "\n").foregroundStyle(ThemeColor.textPrimary) + factText
+        }
+    }
+
+    // MARK: - The trending shelf
 
     /// The rest of the chart, in the app's one shelf anatomy. The header walks to Search, where
     /// the whole chart is the browse grid.
     @ViewBuilder
-    private var trendingShelf: some View {
-        let items = Array(appModel.trending.dropFirst().prefix(9))
+    private func trendingShelf(skipping: Int = 1) -> some View {
+        let items = Array(appModel.trending.dropFirst(skipping).prefix(9))
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
                 SectionHeaderRow(Copy.Search.trendingNow, action: onAddShow)
@@ -443,26 +1181,42 @@ struct TodayView: View {
                 ScrollView(.horizontal) {
                     HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
                         ForEach(items) { item in
-                            let caption = [item.source.kindWord, item.year.map(String.init)]
-                                .compactMap { $0 }.joined(separator: " · ")
-                            ShelfCard(title: item.title,
-                                      caption: caption,
-                                      poster: item.portraitArt,
-                                      slot: .todayShelf,
-                                      zoomID: "trending/\(item.id)") {
-                                onOpenDetail(item.id, "trending/\(item.id)")
-                            }
+                            // The 20 Sep poster tile: the show's own key art whole, on a soft wash
+                            // of itself, naming itself — no caption under it.
+                            // One tap builds the first-run Today (the spike's two-tap setup): the
+                            // add Search makes, question and all — an airing show opens its page
+                            // with "where are you?" raised; a finished one lands on Planned.
+                            ArtworkPoster(url: item.tilePoster.url, name: item.tilePoster.name, title: item.title,
+                                          showsDetails: false,
+                                          cornerMark: appModel.isInLibrary(item.id)
+                                            ? AnyView(OwnedMark().padding(ThemeSpace.x2).allowsHitTesting(false))
+                                            : AnyView(TileAddDisc(label: "\(Copy.Action.add), \(item.title)") { addTrending(item) }),
+                                          onOpen: { onOpenDetail(item.id, "trending/\(item.id)") }) { EmptyView() }
+                            .frame(width: PosterSize.todayShelf.size.width)
+                            .zoomSource("trending/\(item.id)")
+                            .accessibilityLabel(item.title)
                             .accessibilityHint(Copy.Accessibility.opensTheShowHint)
                         }
                     }
                     .padding(.leading, ThemeMetrics.gutter)
                     .padding(.vertical, ThemeSpace.x1)
+                    // Every tile carries a mark (+ or the check): one corner for the shelf.
+                    .environment(\.cornerRow, CornerRow(urls: items.compactMap(\.tilePoster.url)))
                 }
                 .scrollIndicators(.hidden)
                 .scrollClipDisabled()
             }
             .padding(.top, ThemeSpace.x5)
         }
+    }
+
+    private func addTrending(_ item: FranchiseSummary) {
+        if item.isReleasing {
+            appModel.pendingAddPrompt = item.id
+            onOpenDetail(item.id, "trending/\(item.id)")
+            return
+        }
+        appModel.addToLibrary(franchiseId: item.id, title: item.title, isReleasing: item.isReleasing)
     }
 
     /// A state that IS the whole screen — nothing follows it, because both cases that reach here
@@ -518,45 +1272,11 @@ struct TodayView: View {
         }
     }
 
-    /// The calm day. No hero, because nothing has happened — a calm screen that opens on a
-    /// 440-pt slab of artwork is lying about how much there is to do.
-    ///
-    /// And no PLATE either. This used to render `EmptyState(.calmToday)`: a boxed card opening
-    /// the app with "Nothing changed since you were last here" at display size — the day's first
-    /// sentence describing an absence, in empty-state clothing on a populated screen, restating
-    /// the exact event the Upcoming row 60 pt below already carries with artwork and an amber
-    /// time. The calm open is one quiet, POSITIVE headline, and the Upcoming section owns the
-    /// event. Only when nothing is dated anywhere does a supporting sentence say that instead.
-    ///
-    /// No glyph, on purpose (device capture, 30 Aug): an amber check disc in the wordmark's own
-    /// column read as a second lockup — `[amber bookmark] Previously.` mirrored 40 pt above
-    /// `[amber check] Caught up`, the exact twin-brand-object collision the account disc was
-    /// quieted for. The WORD is the state; the above-the-fold amber budget stays on the fact
-    /// ("Today at 8:30 PM" in the Upcoming row), and the headline sits a full breath below the
-    /// masthead so it reads as the page's title, not a rider on the brand's.
-    private var calmBlock: some View {
-        VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-            // `heroTitle`, a full step above the 20-pt section headers under it: at `showTitleL`
-            // (22) "New episode today" and "Upcoming" 60 pt below read as two headings of one
-            // rank. This is the page's title; those are its sections.
-            Text(calmHeadline)
-                .type(ThemeType.heroTitle)
-                .foregroundStyle(ThemeColor.textPrimary)
-            if comingNext == nil {
-                Text(Copy.Progress.noNewDates)
-                    .type(ThemeType.metadata)
-                    .foregroundStyle(ThemeColor.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.horizontal, ThemeMetrics.gutter)
-        .padding(.top, TodayView.headerBand + ThemeSpace.x8)
-        .accessibilityElement(children: .combine)
-    }
-
     // MARK: - The stack
 
-    /// Actionable items, most actionable first: fresh unwatched episodes, then backlog.
+    /// Fresh unwatched releases, most actionable first. Older backlog deliberately does not enter
+    /// Today: it belongs to the Library, and turning Today into a catch-up dashboard was the
+    /// rejected direction.
     ///
     /// Within the fresh set, shows the user is WATCHING outrank the rest. `outNow` orders purely
     /// by recency, which handed the hero — the most prominent slot on the urgency surface — to a
@@ -564,12 +1284,9 @@ struct TodayView: View {
     /// compressed into thumbnails below it. A shelved show keeps its place in the feed; it just
     /// doesn't headline over something the user actually said they are watching.
     private var liveItems: [Franchise] {
-        #if DEBUG
-        // `-calmDemo 1`: empty the stack so the calm open renders on a library that has
-        // backlog — the same capture-pass convention as `-recapDemo 1`.
-        if UserDefaults.standard.bool(forKey: "calmDemo") { return [] }
-        #endif
-        let fresh = appModel.outNow.sorted {
+        // A PAUSED show is off the deck (review i3): paused is "not now", and a billboard with
+        // "Mark as watched" is the loudest "now" the app has.
+        let fresh = appModel.outNow.filter { $0.effectiveStatus != .paused }.sorted {
             let a = $0.effectiveStatus == .watching, b = $1.effectiveStatus == .watching
             if a != b { return a }
             // The airings-advanced recency, never `lastAiredSortKey`: that field is the
@@ -577,87 +1294,32 @@ struct TodayView: View {
             // episode that had struck 27 minutes earlier (user, 2 Sep).
             return ($0.lastAired(now: now) ?? 0) > ($1.lastAired(now: now) ?? 0)
         }
-        return fresh + appModel.keepWatching
+        #if DEBUG
+        switch TodayDemoState.current {
+        case .empty, .inactive, .caught: return []
+        case .single, .watched:
+            if let title = UserDefaults.standard.string(forKey: "todayDemoTitle"),
+               let item = fresh.first(where: { $0.displayTitle.localizedCaseInsensitiveContains(title) }) {
+                return [item]
+            }
+            return Array(fresh.prefix(1))
+        case .multiple: return Array(fresh.prefix(3))
+        case nil: break
+        }
+        if UserDefaults.standard.bool(forKey: "calmDemo") { return [] }
+        #endif
+        return fresh
     }
     private var items: [Franchise] { pinned ?? liveItems }
     /// Only items the Focus grammar can actually describe reach the stack.
     private var actionable: [Franchise] { items.filter { kind(of: $0) != nil } }
-    /// The calm day's hero: the show airing next, else the show you are closest to. Nothing to
-    /// mark, so the card carries no action row — the art, the state and the moment, tap to open.
-    ///
-    /// The calm open used to be a headline on a wash ("New episode today" / "Caught up") over a
-    /// row and a shelf, with 500 pt of canvas under them — a TV app that, on a quiet day, showed
-    /// no television (user, 2 Sep: "utter trash"). Apple TV's Up Next and Netflix's home are
-    /// never without a billboard; there is always a next thing, and it is always its art.
-    private var calmHero: Franchise? {
-        // A show you are caught up on is not a hero. The billboard is for something you can
-        // press play on; the calendar is a tab.
-        return nil
-    }
-    private var heroFranchise: Franchise? { actionable.first ?? calmHero }
+    private var freshItems: [Franchise] { actionable.filter(isFresh) }
+    private var heroFranchise: Franchise? { singleRelease }
     /// True when the show has an episode OUT NOW and unwatched.
     private func isFresh(_ f: Franchise) -> Bool {
         if case .fresh = kind(of: f)?.0 { return true }
         return false
     }
-    /// "Next up" means episodes that are OUT NOW. A show you are part-way through with nothing
-    /// airing is not "next up" — it is Continue watching, and letting it into the queue is what
-    /// emptied that shelf when `queueCount` went to four (6 Sep).
-    private var queue: [Franchise] {
-        Array(actionable.dropFirst().filter(isFresh).prefix(queueCount))
-    }
-    private var stackIds: Set<String> {
-        // What the stack ACTUALLY draws, so Continue watching can exclude exactly that and no
-        // more (the count-based guess claimed four backlog shows the queue never showed).
-        var ids = Set(queue.map(\.id))
-        if let hero = heroFranchise { ids.insert(hero.id) }
-        return ids
-    }
-    private var updateCount: Int { appModel.outNow.count }
-    private var comingNext: Franchise? {
-        guard let f = appModel.nextUp, !stackIds.contains(f.id) else { return nil }
-        return f
-    }
-
-    /// The calm open's headline, chosen by the day. "Caught up" printed over an Upcoming row
-    /// saying "Today at 8:30 PM" was the state shouting over the day's real fact (user, 30 Aug —
-    /// the same state/fact inversion Detail's block fixed): when the next episode lands today,
-    /// the headline frames the day and the row below keeps the specifics. `dayDiff` with the
-    /// source's own anchor is the exact test the row's "Today" word comes from, so the two can
-    /// never disagree.
-    private var calmHeadline: String {
-        if let f = comingNext, let at = f.nextAiring(now: appModel.now),
-           Formatting.dayDiff(ts: at, now: appModel.now, anchor: f.source.timeAnchor) == 0 {
-            return Copy.Progress.newEpisodeToday
-        }
-        return Copy.Progress.caughtUp
-    }
-    /// The Watching shelf's contents.
-    ///
-    /// `watchingShelf` is already narrowed by a "live claim" predicate, and this narrows it again
-    /// against the stack — on a 9-show library that left ONE card in 340 pt of dead black under a
-    /// "See all", while the loading skeleton four seconds earlier had promised four cards running
-    /// off the right edge. A horizontal shelf that does not reach its trailing edge gives no reason
-    /// to swipe and reads as artwork that failed to load. So: when the claim would leave fewer than
-    /// three, drop it and fall back to everything the user is watching.
-    private var shelf: [Franchise] {
-        // CONTINUE WATCHING, not "Watching": shows you are part-way through that have nothing
-        // airing — Game of Thrones, House of the Dragon, a finished run you stopped mid-season.
-        // A show you are caught up on has nothing to continue and is not here; that is what made
-        // the old shelf four posters captioned "Caught up" (user, 6 Sep).
-        let shown = stackIds
-        return Array(appModel.library.filter {
-            $0.effectiveStatus == .watching && !shown.contains($0.id) && $0.continueBacklog > 0
-        }
-        .sorted { $0.continueBacklog > $1.continueBacklog }
-        .prefix(TodayView.shelfCap))
-    }
-
-    /// Below three honest items there is no shelf to swipe — the same content becomes full-width
-    /// rows under the same header, and "See all" goes away because there is nothing more to see.
-    private var shelfIsList: Bool { isAX || shelf.count < 3 }
-    private var showsViewAll: Bool { updateCount > queueCount + 1 }
-
     // MARK: - Hero
 
     private func heroHeight(_ screenH: CGFloat) -> CGFloat {
@@ -683,13 +1345,13 @@ struct TodayView: View {
     /// 4 Sep and every production billboard was a zoomed slice). The recap's own cover stands in
     /// while a recap holds the frame with no franchise behind it.
     private func heroArt(_ f: Franchise?) -> String? {
-        f?.billboardArt.url ?? recap?.beats.first?.cover
+        f?.todayBillboardArt.url ?? recap?.beats.first?.cover
     }
 
     /// Whether the resolved hero art is a 2:3 COVER rather than a landscape asset — `billboardArt`'s
     /// own answer, so the composite path can never disagree with the URL it is given.
     private func heroArtIsPortrait(_ f: Franchise?) -> Bool {
-        f?.billboardArt.portraitSource ?? true
+        f?.todayBillboardArt.portraitSource ?? true
     }
 
     @ViewBuilder
@@ -725,9 +1387,12 @@ struct TodayView: View {
             StretchingHeroArt(scroll: scroll, url: art, height: h, tint: heroTint,
                               scrimBottom: recapOnStage ? 1.9 : 0,
                               portrait: heroArtIsPortrait(f),
-                              ultraWide: f?.billboardArt.ultraWide ?? false,
+                              ultraWide: f?.todayBillboardArt.ultraWide ?? false,
                                   onArtLoaded: markArtReady,
-                                  topInset: (f?.billboardName == .type ? topInset + TodayView.headerBand : 0),
+                                  // The recap (no franchise) is a poster too, often with its
+                                  // title printed across the top: it starts under the header,
+                                  // not under the clock (review, 23 Sep).
+                                  topInset: (f == nil || f?.billboardName == .type ? topInset + TodayView.headerBand : 0),
                                   groundDim: HeroProtection.groundDim(heroStrength))
                 .frame(height: h, alignment: .bottom)
                 .id(key)
@@ -744,12 +1409,13 @@ struct TodayView: View {
                                  reduceMotion: reduceMotion,
                                  heroArt: art,
                                  beatLabel: recapBeatLabel,
+                                 beatTitle: { appModel.franchise(id: $0.franchiseId)?.displayTitle ?? $0.title.shelfShortened },
+                                 onOpenBeat: { beat in
+                                     handoffRecap()
+                                     onOpenDetail(beat.franchiseId, "recap/\(beat.franchiseId)")
+                                 },
                                  onContinue: { handoffRecap() },
                                  onDismiss: { dismissRecap() })
-                        .transition(handoff)
-                } else if let f {
-                    heroOverlay(f)
-                        .id(f.id)
                         .transition(handoff)
                 }
             }
@@ -863,74 +1529,6 @@ struct TodayView: View {
         return (.caughtUp, part)
     }
 
-    @ViewBuilder
-    private func heroOverlay(_ f: Franchise) -> some View {
-        if let (kind, part) = (f.id == calmHero?.id ? calmKind(of: f) : kind(of: f)) {
-            let nextEpisode = part.progress + 1
-            let behind: Int = {
-                if case .fresh(let b) = kind { return b }
-                if case .backlog(let l) = kind { return l }
-                return 0
-            }()
-            let committed = committedEpisode != nil && pinned?.first?.id == f.id
-            // The whole meta block advances in the SAME frame as the button's label. It used to
-            // lag, so for the length of the confirmation the card said the episode was both next
-            // and already watched.
-            let copy: (eyebrow: String, fact: String, support: String?) = committed
-                ? advanced(kind, f: f, part: part, from: committedEpisode ?? nextEpisode, behind: behind)
-                : (eyebrow(kind, f: f, part: part),
-                   factLine(kind, f: f, part: part),
-                   supportLine(kind, f: f, part: part))
-            // The season bar: watched over what there is to watch — aired-by-now for a fresh
-            // drop, the available run for a backlog. It advances in the same frame as a mark
-            // (`committedEpisode`), so the bar never lags the button that just moved it.
-            let bar: (ratio: Double, spoken: String)? = {
-                let done = committed ? (committedEpisode ?? part.progress) : part.progress
-                let total: Int
-                let spoken: String
-                switch kind {
-                case .fresh:
-                    total = part.airedByNow(now: now, anchor: f.timeAnchor)
-                    spoken = Copy.Progress.behind(max(0, total - done))
-                case .backlog:
-                    total = part.availableEpisodes()
-                    spoken = Copy.Progress.left(max(0, total - done))
-                default: return nil
-                }
-                guard total > 0, done > 0, done < total else { return nil }
-                return (Double(done) / Double(total), spoken)
-            }()
-            HeroFocus(
-                franchise: f,
-                eyebrow: copy.eyebrow,
-                moment: committed ? nil : momentText(kind, f: f, part: part),
-                fact: copy.fact,
-                support: copy.support,
-                progress: bar?.ratio,
-                progressSpoken: bar?.spoken,
-                // No poster beside the copy any more. It existed because the old composite
-                // backdrop was the cover blurred into ambience — the featured show had no face
-                // (Mushoku, 30 Aug) — but the billboard hero shows the sharp cover whole as the
-                // backdrop itself, so a 92-pt copy of it beside the title IS the recap's
-                // postage-stamp case: the same asset twice in one frame.
-                ctaEpisode: committed ? committedEpisode : (behind > 0 ? nextEpisode : nil),
-                committed: committed,
-                behind: behind,
-                // Only a genuinely fresh drop earns the beat — never a backlog, never a wait.
-                attention: { if case .fresh = kind, !committed { return true }; return false }(),
-                interactive: !handoffInFlight,
-                onOpen: { onOpenDetail(f.id, "focus/\(f.id)") },
-                onMark: { mark(f) },
-                onMarkThrough: { n in promptBatch(f, part: part, through: n) },
-                // `markTarget(now:)`, not `progressCeiling`. The ceiling is `Int.max` for an ongoing
-                // AniList season with no published episode count, and for every other releasing
-                // season it is the season's SIZE — so "Mark all 6" would have written every unaired
-                // episode too. The target is what has actually aired.
-                onMarkAll: { promptBatch(f, part: part, through: part.markTarget(now: now)) }
-            )
-        }
-    }
-
     // MARK: - Below the fold
 
     /// Everything under the hero.
@@ -945,17 +1543,10 @@ struct TodayView: View {
     private var belowTheFold: some View {
         let strip = !recapOnStage && recapMode == .strip && recap != nil
         let notice = appModel.loadError && !appModel.libraryEmpty
-        let hasQueue = showsHero && (!queue.isEmpty || showsViewAll)
-        // The first block under a hero gets the hero's clearance; every block after it gets a
-        // section gap. One rhythm, decided once, instead of 16 pt between everything.
-        // x4 under a hero (review, 5 Sep: capsule → next header measured 66 pt; the shelf is
-        // the hero's continuation, not a new room. The in-place receipt lives in this band.)
         let first = showsHero
             ? (isAX ? ThemeMetrics.heroClearance : ThemeSpace.x4)
             : ThemeMetrics.sectionGap
-        let gap = ThemeMetrics.sectionGap
-        // A section that ENDS in a `MediaRow` has already spent `rowOwnInset` below its last row.
-        let gapAfterRow = gap - TodayView.rowOwnInset
+        let rail = plannedShows(excluding: heroIds)
         VStack(alignment: .leading, spacing: 0) {
             if strip, let recap {
                 // Tucked against the hero it summarises (x3, not the section gap): the line is
@@ -971,499 +1562,225 @@ struct TodayView: View {
                     .padding(.horizontal, ThemeMetrics.gutter)
                     .padding(.top, strip ? ThemeMetrics.cardGap : first)
             }
-            // No "Upcoming" block: a future airing is Schedule's, and Today carries only what
-            // can be acted on now (6 Sep).
-            let hasUpNext = hasQueue
-            if hasUpNext {
-                if isAX {
-                    // Rows at accessibility sizes: a 16:9 card gives a grown caption four words.
-                    queueSection.padding(.top, strip || notice ? gap : first)
-                } else {
-                    upNextShelf(upcoming: [])
-                        .id("today.upnext")
-                        // After the recap's line, x5: the line belongs to the hero above it.
-                        .padding(.top, strip ? ThemeSpace.x5 : (notice ? gap : first))
-                }
+            // Everything else you can watch now, then what airs this week — the shows Today
+            // used to drop the day their last episode turned eight days old (review, 23 Sep:
+            // Bleach, six behind, appeared nowhere on it). The Planned shelf follows it.
+            let upNext = upNextItems
+            if !recapOnStage, !isEmptyAccount, !isFailed, !upNext.isEmpty {
+                upNextShelf(upNext)
+                    .padding(.top, strip || notice ? ThemeMetrics.sectionGap : first)
+                    .id("today.upnext")
             }
-            if !shelf.isEmpty {
-                // A full section gap after the card shelf; after rows, the gap minus what the
-                // last row already spent.
-                let top: CGFloat = hasUpNext ? (isAX ? gapAfterRow : gap) : (strip || notice ? gap : first)
-                watchingShelf
-                    .id("today.watching")
-                    .padding(.top, top)
+            // DISCOVERY, after everything of yours you can act on and above your own list: the
+            // spike's rule — a recommendation never sits over a new episode or a backlog, and never
+            // where nobody scrolls. Planned is yours and does not change; this rotates daily.
+            // A Planned-only library is CHOOSING what to start: its own shortlist comes first,
+            // right under "Start watching", and the strangers after it (review i5, U-N14 — the
+            // shelf pushed Planned ~370 pt down, below the fold).
+            let forYou = forYouShelfItems
+            let showsForYou = !recapOnStage && !isEmptyAccount && !isFailed && (!forYou.isEmpty || forYouLoading)
+            let showsPlanned = !recapOnStage && !isEmptyAccount && !isFailed && !rail.isEmpty
+            let plannedFirst = isInactiveLibrary && showsPlanned
+            if plannedFirst {
+                plannedShelf(rail)
+                    .padding(.top, upNext.isEmpty && !strip && !notice ? first : ThemeMetrics.sectionGap)
+            }
+            if showsForYou {
+                forYouShelf(forYou)
+                    .padding(.top, upNext.isEmpty && !strip && !notice && !plannedFirst ? first : ThemeMetrics.sectionGap)
+                    .id("today.foryou")
+            }
+            if showsPlanned, !plannedFirst {
+                plannedShelf(rail)
+                    .padding(.top, ThemeMetrics.sectionGap)
             }
         }
         .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: recapMode)
     }
 
-    // MARK: - Queue
+    // MARK: - Recommended for you
 
-    /// The rest of what is waiting.
-    ///
-    /// It used to sit unlabelled on the canvas between a hero and a labelled `COMING NEXT` while
-    /// every other block announced itself — and it vanished entirely in the committed state, so
-    /// the screen's section structure changed shape between frames.
-    private var queueSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // `Copy.Label.nextUp` — the one "next" rule. "UP NEXT" and "COMING NEXT" differed by a
-            // single word, in the same token, 60 pt apart, with no rule anyone could infer; the
-            // not-yet-aired block below is now "Upcoming" so there is never a second "next" on one
-            // screen. This is the specific episode you can watch right now.
-            SectionHeaderRow(Copy.Label.nextUp)
-                .padding(.horizontal, ThemeMetrics.gutter)
-            // The rhythm is built by the CONTAINER, not by a stack spacing that fights the rows'
-            // own padding: measured, label-bottom to first content was 31 pt against a `labelGap`
-            // of 10, because `SectionHeaderRow` draws 12 pt outside its layout rect and `MediaRow`
-            // adds its own vertical padding on top of the spacing.
-            queueRows.padding(.top, ThemeMetrics.labelGap - TodayView.rowOwnInset)
+    /// When NOTHING of yours needs the stage — no fresh drop, no backlog to mark, a library that is
+    /// not Planned-only — the top recommendation takes the billboard: the moment discovery has the
+    /// most to give (the spike, 24 Sep: the calm state was a full-screen "CAUGHT UP · Returns
+    /// Sunday" dead end). Only a title that already has a show page, so the tap opens at once;
+    /// rotating daily among the first three. An added one stays on stage, now "In Planned", until
+    /// the next list leaves it out.
+    private var forYouFeature: RecommendationItem? {
+        guard !isEmptyAccount, !isFailed, !recapOnStage, !isInactiveLibrary, freshItems.isEmpty,
+              forYouStageAllowed != false || Self.forYouDemo else { return nil }
+        if let f = restingFeature {
+            if kind(of: f).map({ queueIsMarkable($0.0) }) ?? false { return nil }
+            // YOUR show airing within a day keeps the stage: "Tomorrow at 7:30 PM · Episode 24"
+            // is why Today exists, and a stranger's poster in its place put it in a small
+            // Upcoming card (review i5, N2). (`-forYouStage 1`, DEBUG: photograph the stage anyway.)
+            if !Self.forYouStageDemo, let next = f.nextAiring(now: now), next - now <= 30 * Formatting.H { return nil }
+            // ...and so does a show marked this session — the mark that caught you up is not
+            // followed, 650 ms later, by a recommendation taking its place.
+            if appModel.markedThisSession.contains(f.id) { return nil }
+        }
+        // The session's pick holds the stage — through an add (it turns into its Planned lockup,
+        // "Start watching") and through refetches: advancing to another title a second after the
+        // user chose this one yanked it away mid-thought (review i5, F6).
+        if let staged = appModel.sessionStage, !appModel.hiddenRecommendationKeys.contains(staged.key) {
+            return staged
+        }
+        // Nothing hidden and nothing yours — a cached list must not feature a show added since.
+        let ready = appModel.visibleRecommendations.filter {
+            $0.franchiseId != nil && ($0.hasBillboardArt || Self.forYouStageDemo) && !appModel.isOwned($0)
+        }
+        let pick = appModel.stagedRecommendation(from: ready)
+        appModel.sessionStage = pick
+        return pick
+    }
+
+    /// Whether a recommendation may take the stage this session: decided the first time Today
+    /// surfaces — yes if a list is already in hand (the offline copy), no if it is not, so a list
+    /// arriving 1.5 s after launch fills the SHELF and never swaps the billboard under the reader
+    /// (review i5, N7). The next launch has the copy.
+    @State private var forYouStageAllowed: Bool?
+
+    /// `-forYouDemo 1` builds its list after launch, so it is exempt from the first-paint rule.
+    private static var forYouDemo: Bool {
+        #if DEBUG
+        UserDefaults.standard.bool(forKey: "forYouDemo")
+        #else
+        false
+        #endif
+    }
+
+    private static var forYouStageDemo: Bool {
+        #if DEBUG
+        UserDefaults.standard.bool(forKey: "forYouStage")
+        #else
+        false
+        #endif
+    }
+
+    /// The shelf: every visible recommendation the billboard is not showing, up to twelve.
+    private var forYouShelfItems: [RecommendationItem] {
+        let onStage = forYouFeature?.key
+        return Array(appModel.visibleRecommendations.filter { $0.key != onStage }.prefix(12))
+    }
+
+    /// The first list is on its way: the shelf holds its place as a skeleton rather than arriving
+    /// under the reader's thumb.
+    private var forYouLoading: Bool {
+        appModel.recommendationsState == .idle && appModel.recommendations.isEmpty && !appModel.libraryEmpty
+            // Offline, or against a server that has said 404 today, no list is coming: a
+            // skeleton would never resolve (review i5, N14/U-N4).
+            && SyncCenter.shared.isOnline && !appModel.loadError && !appModel.recommendationsRecentlyUnavailable
+    }
+
+    private func openRecommendation(_ r: RecommendationItem) {
+        Task {
+            if let id = await appModel.franchiseId(for: r) { onOpenDetail(id, "foryou/\(r.key)") }
         }
     }
 
-    private var queueRows: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(queue.enumerated()), id: \.element.id) { index, f in
-                MediaRow(title: f.title,
-                         meta: queueMeta(f),
-                         lead: queueLead(f),
-                         poster: f.portraitArt,
-                         // Today's purpose-built 52×78 slot keeps logo-led covers recognisable
-                         // without borrowing the catalogue's 60×90 / 100-pt row. Accessibility
-                         // sizes keep the larger slot while text expands.
-                         slot: isAX ? .row : .todayQueue,
-                         // No chevron: this row has a trailing CONTROL. A disclosure indicator and
-                         // a mark ring in the same column is two trailing affordances on one row.
-                         chevron: false,
-                         separator: index < queue.count - 1 || showsViewAll,
-                         hint: TodayCopy.opensTheShow,
-                         zoomID: "queue/\(f.id)",
-                         trailing: { queueMark(f) }) {
-                    onOpenDetail(f.id, "queue/\(f.id)")
-                }
-                // The same long-press menu every Library card carries. Today's rows had none.
-                .franchiseQuickActions(f, appModel: appModel)
-                .padding(.horizontal, ThemeMetrics.gutter)
-                .transition(handoff)
-            }
-            if showsViewAll {
+    /// The recommendation on the billboard: the show page's hero grammar, with the reason as its
+    /// one line ("Because you finished Game of Thrones") and one step, "Add to Planned".
+    private func forYouBillboard(_ r: RecommendationItem, stub: Franchise, screenW: CGFloat,
+                                 screenH: CGFloat) -> some View {
+        let owned = appModel.isOwned(r)
+        return TodayBillboard(franchise: stub, width: screenW,
+                              fillHeight: heroFillHeight(screenH, alone: forYouShelfItems.isEmpty
+                                                          && plannedShows(excluding: []).isEmpty && upNextItems.isEmpty),
+                              // Why (the line), and what it IS (the support line — the show
+                              // page's identity grammar, "Anime · 2020 · Action · Supernatural"):
+                              // the two things a stranger's poster cannot say. On air now leads.
+                              // Once added, the SAME stage says so on its badge ("IN PLANNED")
+                              // and offers the next step — never a disabled capsule, never a
+                              // swap to another title (review i5, P5-N4/F6).
+                              // One line — why (24 Sep: the identity line under it was one line
+                              // too many; the show page carries what it is).
+                              content: TodayLockupContent(badge: owned ? Copy.ForYou.addedToPlanned : Copy.ForYou.badge,
+                                                          fact: Copy.ForYou.reason(reason(of: r))),
+                              scroll: scroll,
+                              onOpen: { openRecommendation(r) },
+                              onArtLoaded: markArtReady) {
+            if owned, let id = appModel.showId(of: r) {
+                // "Start watching" — the Planned billboard's step: it files the show under
+                // Watching, and Today's own billboard takes it from there.
                 Button {
-                    (onViewAllUpdates ?? onSeeAllWatching)()
+                    appModel.setStatus(franchiseId: id, status: .watching)
                 } label: {
-                    HStack(spacing: 6) {
-                        Text(Copy.Action.viewAllUpdates(updateCount))
-                        // 13 semibold — the one size `chevron.forward` is drawn at anywhere
-                        // (`MediaRow`, the recap rows); this was an 11 for no reason.
-                        Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold))
-                    }
+                    Text(Copy.ForYou.startWatching).frame(maxWidth: .infinity)
                 }
-                .buttonStyle(InlineLinkButtonStyle())
-                // The style holds its 44-pt target with leading padding so it can sit at the
-                // trailing end of a header row; pulled back here so the word starts on the gutter.
-                .padding(.leading, ThemeMetrics.gutter - 12)
-            }
-        }
-        .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: queue.map(\.id))
-    }
-
-    /// The queue row's own mark control.
-    ///
-    /// The comment above this section called Today "a queue you act on" while the rows carried no
-    /// action at all: clearing an evening was one tap for the hero and four taps per row for
-    /// everything under it (row → Detail → season → episode). It is the same `MarkRing` Schedule's
-    /// rows use, so the gesture, the target and the drawn check are the app's one mark, not a
-    /// second dialect. Rows with nothing to mark (a show that is only waiting) get no control.
-    @ViewBuilder
-    private func queueMark(_ f: Franchise) -> some View {
-        if let (kind, part) = kind(of: f), queueIsMarkable(kind) {
-            // `marked` follows the row's own committed set, as Schedule's rows do: the ring
-            // was hard-wired to `false`, so the app's signature drawn check never appeared on
-            // one of its two most-tapped mark controls, and a second tap in the same beat
-            // marked a second episode.
-            MarkRing(marked: committedQueue.contains(f.id),
-                     style: .quiet,
-                     episode: part.progress + 1,
-                     label: "\(Copy.Action.markAsWatched), \(watchLabel(f, part: part, episode: part.progress + 1)) of \(f.title)") {
-                markQueueRow(f)
-            }
-        }
-    }
-
-    private func queueIsMarkable(_ kind: FocusKind) -> Bool {
-        switch kind {
-        case .fresh, .backlog: return true
-        case .caughtUp, .waiting: return false
-        }
-    }
-
-    /// One transaction, one haptic (fired inside the write), one toast. Unlike the hero there is no
-    /// card handing over here, so the toast is presented immediately rather than deferred.
-    private func markQueueRow(_ f: Franchise) {
-        guard !committedQueue.contains(f.id) else { return }
-        guard let undo = appModel.markNext(franchiseId: f.id) else { return }
-        withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
-            _ = committedQueue.insert(f.id)
-        }
-        // In place, under the card's caption.
-        appModel.presentUndo(undo.placed(at: ReceiptHost.todayQueue(f.id)))
-        Announce.status(Copy.Progress.episodeWatched(undo.episode))
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(650))
-            committedQueue.remove(f.id)
-        }
-    }
-
-    // One grammar for the two-colour row, decided once and obeyed by every row on this screen:
-    //
-    //   amber `rowMetaLead`  the forward-looking TIME — "Aired yesterday", "Tomorrow at 8:30 PM"
-    //   grey  `rowMeta`      the EPISODE IDENTITY and its counts — "Season 7 · Episode 5"
-    //
-    // The shipped rows swapped those two meanings between adjacent blocks (queue: amber episode,
-    // grey count; Coming next four lines below: amber time, grey episode), so the reader had to
-    // re-learn the code halfway down the screen.
-
-    /// A queue row's forward-looking time, in accent.
-    private func queueLead(_ f: Franchise) -> String? {
-        guard let (kind, part) = kind(of: f) else { return nil }
-        switch kind {
-        case .fresh:
-            // Amber is for what is live: today's drop. An older one is a plain row — its ring
-            // already names the episode, and "Aired 28 Aug" in accent spent the colour on a
-            // fact that is neither next nor now.
-            guard let last = part.lastAired(now: now, anchor: f.timeAnchor),
-                  Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0 else { return nil }
-            return TemporalCopy.aired(at: last, now: now, source: f.source)
-        case .backlog: return nil
-        case .caughtUp: return nil
-        case .waiting(let at): return TemporalCopy.airs(at: at, now: now, source: f.source)
-        }
-    }
-
-    /// A queue row's episode identity, in neutral ink.
-    private func queueMeta(_ f: Franchise) -> String? {
-        guard let (kind, part) = kind(of: f) else { return nil }
-        let ep = watchLabel(f, part: part, episode: part.progress + 1)
-        // The row DROPS a fact rather than wrapping one.
-        //
-        // "Season 7 · Episode 5 · 3 / episodes left" put a numeral on one line and its noun on the
-        // next, on the first row of the first section. The direction's own rule is to drop a fact
-        // when the line will not hold, and the count is the droppable one: the episode identity is
-        // what the row is for, the hero's eyebrow carries the count when it matters, and the row's
-        // own `MarkRing` is the action. Always at accessibility sizes; at default sizes only when
-        // the identity is already long enough to fill the line on its own ("OVA 2: No Regrets ·
-        // Episode 1" is 28 characters before the count is even appended).
-        // 13, not 22: at 22 a two-season identity ("Season 2 · Episode 2", 20 chars) still took
-        // the count and the assembled line overran the row's ~240 pt, wrapping "… · 11 /
-        // episodes left" mid-phrase — the exact defect this heuristic exists to prevent. 13
-        // admits the single-part form ("Episode 2") and nothing longer.
-        let roomForCount = !isAX && ep.count <= 13
-        switch kind {
-        case .fresh(let behind):
-            return behind > 1 && roomForCount ? "\(ep) · \(Copy.Progress.behind(behind))" : ep
-        case .backlog(let left):
-            return left > 1 && roomForCount ? "\(ep) · \(Copy.Progress.left(left))" : ep
-        case .caughtUp: return Copy.Progress.caughtUp
-        case .waiting:
-            return watchLabel(f, part: part, episode: part.nextEpisodeNumber ?? part.airedEpisodes + 1)
-        }
-    }
-
-    // MARK: - Coming next
-
-
-    // MARK: - Up next (the shelf)
-
-    /// One card on the Up next shelf: a show, the episode the card is about, and the focus
-    /// grammar's own kind — so the card knows whether it can be marked.
-    private struct UpNextItem: Identifiable {
-        let franchise: Franchise
-        let kind: FocusKind
-        let part: FranchisePart
-        var id: String { franchise.id }
-    }
-
-    /// Everything waiting for you, as television: one shelf of 16:9 cards under the billboard —
-    /// the rest of the queue first (episodes you can watch now, each with its mark ring), then
-    /// what is coming (the moment as a pill on the art). Apple TV's Up Next row, in the Library's
-    /// Continue-card geometry: four fifths of the content width, the next card peeking.
-    ///
-    /// It replaces two vertical lists (4 Sep): a "Next up" of 52×78 poster rows and an
-    /// "Upcoming" of 44×66 rows with an amber second line and a two-line grey subtitle — a
-    /// settings table under a billboard, on the most-viewed screen in the app ("This UI won't
-    /// cut it", user). The header says `nextUp` while a card can be marked and `upcoming` when
-    /// nothing has aired, so the one "next" rule holds: "Next up" only ever heads something you
-    /// can watch right now. At accessibility sizes the rows stay (`queueSection` /
-    /// `upcomingSection`): a 16:9 card gives a grown caption four words.
-    @ViewBuilder
-    private func upNextShelf(upcoming: [Franchise]) -> some View {
-        let queued: [UpNextItem] = queue.compactMap { f in
-            guard let (kind, part) = kind(of: f) else { return nil }
-            return UpNextItem(franchise: f, kind: kind, part: part)
-        }
-        let coming: [UpNextItem] = upcoming.compactMap { f in
-            guard let part = f.releasingPart, let at = f.nextAiring(now: now) else { return nil }
-            return UpNextItem(franchise: f, kind: .waiting(at: at), part: part)
-        }
-        let cards = queued + coming
-        let markable = cards.contains { queueIsMarkable($0.kind) }
-        let viewAll: (() -> Void)? = showsViewAll ? { (onViewAllUpdates ?? onSeeAllWatching)() } : nil
-        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-            SectionHeaderRow(markable ? Copy.Label.nextUp : Copy.Label.upcoming,
-                             actionLabel: showsViewAll ? Copy.Action.viewAllUpdates(updateCount) : nil,
-                             action: viewAll)
-                .padding(.horizontal, ThemeMetrics.gutter)
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
-                    ForEach(cards) { item in
-                        upNextCard(item)
-                            // A peek is an affordance for a NEXT card; a shelf of one runs
-                            // gutter to gutter (review, 5 Sep).
-                            .containerRelativeFrame(.horizontal, count: 5, span: cards.count == 1 ? 5 : 4,
-                                                    spacing: ThemeMetrics.shelfGap)
-                            .franchiseQuickActions(item.franchise, appModel: appModel)
-                            .transition(handoff)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            .contentMargins(.horizontal, ThemeMetrics.gutter, for: .scrollContent)
-            .scrollTargetBehavior(.viewAligned)
-            .scrollIndicators(.hidden)
-            .scrollClipDisabled()
-            .fixedSize(horizontal: false, vertical: true)
-            .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion),
-                       value: cards.map(\.id))
-        }
-    }
-
-    /// One card: the show's wide art with the moment on it, the episode named beneath, the mark
-    /// ring beside that while there is something to mark — Schedule's airing card at shelf
-    /// width, on the Library's Continue-card frame (`ProgressBanner`), with the season bar on the
-    /// art for a show in progress. The card opens the show; the ring is its own control.
-    @ViewBuilder
-    private func upNextCard(_ item: UpNextItem) -> some View {
-        let f = item.franchise, part = item.part
-        let wide = part.wideArt(within: f)
-        let caption = upNextCaption(item)
-        let episode = upNextEpisode(item).map(Copy.episode)
-        let zoom = "upnext/\(f.id)"
-        VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-            Button { onOpenDetail(f.id, zoom) } label: {
-                ProgressBanner(url: wide.url, portraitSource: wide.portraitSource,
-                               progress: upNextProgress(item),
-                               episode: episode, ultraWide: wide.ultraWide,
-                               zoomID: zoom)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(OverArtPressStyle())
-            .accessibilityHint(TodayCopy.opensTheShow)
-            HStack(alignment: .center, spacing: ThemeSpace.x3) {
-                Button { onOpenDetail(f.id, zoom) } label: {
-                    VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
-                        Text(f.displayTitle)
-                            .type(ThemeType.rowTitle)
-                            .foregroundStyle(ThemeColor.textPrimary)
-                            .lineLimit(1...2)
-                            .minimumScaleFactor(0.85)
-                            .multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if let caption {
-                            // The rows' two-colour grammar: a forward-looking TIME is amber
-                            // (`rowMetaLead`), an identity or a count is grey.
-                            Text(caption.text)
-                                .type(caption.lead ? ThemeType.rowMetaLead : ThemeType.rowMeta)
-                                .foregroundStyle(caption.lead ? ThemeColor.accent : ThemeColor.textSecondary)
-                                .lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(RowPressStyle())
-                .accessibilityHint(TodayCopy.opensTheShow)
-                if queueIsMarkable(item.kind) {
-                    MarkRing(marked: committedQueue.contains(f.id),
-                             style: .quiet,
-                             episode: part.progress + 1,
-                             label: "\(Copy.Action.markAsWatched), \(watchLabel(f, part: part, episode: part.progress + 1)) of \(f.title)") {
-                        markQueueRow(f)
-                    }
-                }
-            }
-            // The ring's receipt, in place under the caption.
-            ReceiptLine(host: ReceiptHost.todayQueue(f.id), compact: true)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel([f.title, episode, caption?.text].compactMap { $0 }.joined(separator: ", "))
-    }
-
-    /// The episode the card is about: the next unwatched one, or the one coming.
-    private func upNextEpisode(_ item: UpNextItem) -> Int? {
-        let part = item.part
-        switch item.kind {
-        case .waiting: return part.nextEpisodeNumber ?? part.airedEpisodes + 1
-        case .fresh, .backlog: return part.progress + 1
-        case .caughtUp: return nil
-        }
-    }
-
-    /// Where you are in the season, on the art — watched over aired-by-now for a fresh drop, over
-    /// the available run for a backlog; nothing for a show with nothing started or nothing left.
-    private func upNextProgress(_ item: UpNextItem) -> Double? {
-        let part = item.part
-        let total: Int
-        switch item.kind {
-        case .fresh: total = part.airedByNow(now: now, anchor: item.franchise.timeAnchor)
-        case .backlog: total = part.availableEpisodes()
-        case .waiting, .caughtUp: return nil
-        }
-        guard total > 0, part.progress > 0, part.progress < total else { return nil }
-        return Double(part.progress) / Double(total)
-    }
-
-    /// The card's one caption, in the rows' two-colour grammar — the episode itself is the pill on
-    /// the art. A forward-looking TIME in amber: the airing ("Sunday at 8:30 PM") or today's drop
-    /// ("Aired 2h ago"). Else the count in grey ("6 episodes left", "3 episodes behind" — Today is
-    /// the urgency room), else the season on a multi-part show, else nothing. (The card used to
-    /// wear the moment as a SECOND pill on the art over a caption that said only "Season 5" —
-    /// two chips and a fragment, the busiest object on the screen.)
-    private func upNextCaption(_ item: UpNextItem) -> (text: String, lead: Bool)? {
-        let f = item.franchise, part = item.part
-        let season: String? = {
-            let label = part.canonicalLabel
-            return f.parts.count == 1 || label.isEmpty ? nil : label
-        }()
-        switch item.kind {
-        case .waiting(let at):
-            return (TemporalCopy.airs(at: at, now: now, source: f.source), true)
-        case .fresh(let behind):
-            if let last = part.lastAired(now: now, anchor: f.timeAnchor),
-               Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0 {
-                return (TemporalCopy.aired(at: last, now: now, source: f.source), true)
-            }
-            if behind > 1 { return (Copy.Progress.behind(behind), false) }
-            return season.map { ($0, false) }
-        case .backlog(let left):
-            if left > 1 { return (Copy.Progress.left(left), false) }
-            return season.map { ($0, false) }
-        case .caughtUp:
-            return (Copy.Progress.caughtUp, false)
-        }
-    }
-
-    // MARK: - Watching shelf
-
-    @ViewBuilder
-    private var watchingShelf: some View {
-        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-            watchingHeader
-                .padding(.horizontal, ThemeMetrics.gutter)
-            if shelfIsList {
-                axWatchingList
+                .buttonStyle(PrimaryButtonStyle2())
             } else {
-                shelfScroller
-            }
-        }
-    }
-
-    /// The shared header. Its chevron is tertiary ink, so it no longer competes with the toast's
-    /// Undo the way the amber-adjacent "See all" link did — no special case needed.
-    private var watchingHeader: some View {
-        SectionHeaderRow(Copy.Label.continueWatching,
-                         actionLabel: shelfIsList ? nil : Copy.Action.seeAll,
-                         action: shelfIsList ? nil : onSeeAllWatching)
-    }
-
-    /// Rows instead of a shelf, in the two cases where a shelf is the wrong container: at
-    /// accessibility sizes a 112-pt card gives a show's name four characters before it truncates,
-    /// and below three items a scroller has nothing to scroll.
-    private var axWatchingList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(shelf.enumerated()), id: \.element.id) { index, f in
-                let caption = shelfCaption(f)
-                MediaRow(title: f.title,
-                         meta: caption.flatMap { $0.lead ? nil : $0.text },
-                         lead: caption.flatMap { $0.lead ? $0.text : nil },
-                         poster: f.portraitArt,
-                         slot: .queue,
-                         chevron: false,
-                         separator: index < shelf.count - 1,
-                         // A distinct id from the poster shelf's: the same franchise must never
-                         // register two zoom sources in one namespace, even when only one of the
-                         // two layouts is mounted at a time.
-                         zoomID: "shelfrow/\(f.id)") {
-                    onOpenDetail(f.id, "shelfrow/\(f.id)")
+                Button {
+                    appModel.addRecommendation(r)
+                } label: {
+                    Label(Copy.ForYou.addToPlanned, systemImage: "plus")
+                        .frame(maxWidth: .infinity)
                 }
-                .franchiseQuickActions(f, appModel: appModel)
-                .padding(.horizontal, ThemeMetrics.gutter)
+                .buttonStyle(PrimaryButtonStyle2())
+                .disabled(appModel.resolvingRecommendations.contains(r.key))
+                .accessibilityHint(Copy.ForYou.addHint)
             }
         }
+        .zoomSource("foryou/\(r.key)")
+        .contextMenu { ForYouMenu(item: r, reason: reason(of: r), onOpen: { openRecommendation(r) }) }
     }
 
-    private var shelfScroller: some View {
-        ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
-                ForEach(shelf) { f in
-                    let caption = shelfCaption(f)
-                    ShelfCard(title: f.title,
-                              // The captions are this shelf's load-bearing facts; a fact column
-                              // with three baselines cannot be scanned (review i3 — challenging
-                              // the 24 Aug rule for this shelf only).
-                              caption: caption?.text,
-                              // Same grammar as the rows above: a caption that is a TIME or a next
-                              // step is amber. "Wed 6:30 PM" was `textSecondary` here while the
-                              // identical class of fact 150 pt above was accent — and the
-                              // `shelfCaption` token's own note ("accent when it is a next step")
-                              // was already honoured by Library's RETURNING shelf.
-                              captionIsLead: caption?.lead ?? false,
-                              // The season is ON AIR. On a Continue-watching shelf this is the
-                              // difference between "I can finish this whenever" and "this is
-                              // still running and I am behind" — a poster states neither.
-                              airing: f.isReleasing,
-                              airingFresh: isFresh(f),
-                              poster: f.portraitArt,
-                              slot: .todayShelf,
-                              zoomID: "shelf/\(f.id)") {
-                        onOpenDetail(f.id, "shelf/\(f.id)")
-                    }
-                    .franchiseQuickActions(f, appModel: appModel)
-                }
-            }
-            .padding(.leading, ThemeMetrics.gutter)
-        }
-        .scrollIndicators(.hidden)
-        .scrollClipDisabled()
-        // Art may run off the trailing edge; TYPE may not. See `shelfScroller`.
-        .shelfScroller()
+    /// The reason as Today should SAY it: the user's own short names for their shows ("Re:ZERO",
+    /// not the catalogue's "Re:ZERO -Starting Life in Another World-"), and — where several of
+    /// their shows agree — the one that fits the moment named first: a show being watched on a
+    /// new-episode day, a finished one when there is nothing to watch (the spike's rule). The
+    /// server's order breaks ties; a single-seed reason keeps its own verb and seed.
+    private func reason(of r: RecommendationItem) -> RecommendationItem.Reason {
+        let spoken = appModel.spokenReason(r)
+        let seeds = spoken.seeds
+        guard seeds.count > 1 else { return spoken }
+        let preferred: WatchStatus = freshItems.isEmpty ? .completed : .watching
+        let ordered = seeds.enumerated().sorted { a, b in
+            let ra = appModel.franchise(id: a.element.franchiseId)?.effectiveStatus == preferred ? 0 : 1
+            let rb = appModel.franchise(id: b.element.franchiseId)?.effectiveStatus == preferred ? 0 : 1
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+        return .init(kind: r.reason.kind, seeds: ordered, count: r.reason.count)
     }
 
-    /// A shelf caption and whether it is a forward-looking fact (amber) or an identity/state fact
-    /// (grey) — the same two-colour grammar the rows above obey.
-    ///
-    /// Every card gets one. A dormant show reached the shelf only because the honest-count fallback
-    /// widened it, and three captionless cards beside one that has a caption is worse than saying
-    /// the true, quiet thing.
-    private func shelfCaption(_ f: Franchise) -> (text: String, lead: Bool)? {
-        switch appModel.shelfState(of: f) {
-        case .newEpisode:
-            // The count the badge above carries (review, 5 Sep).
-            let behind = f.releasingPart.map { $0.behind(now: now, anchor: f.timeAnchor) } ?? 0
-            // Amber only while the drop is today's fact (review i4): the Up next card prints the
-            // same count in grey, and one screen may not read one number two ways.
-            let struck = f.lastAired(now: now).map { Formatting.dayDiff(ts: $0, now: now, anchor: f.timeAnchor) == 0 } ?? false
-            return behind > 1 ? (Copy.Progress.behind(behind), struck) : (Copy.Label.newEpisode, true)
-        case .backlog:
-            guard let p = f.resumePart else { return nil }
-            return (Copy.Progress.episodeNext(p.progress + 1), false)
-        case .airingWait:
-            if let at = f.nextAiring(now: now) {
-                return (TemporalCopy.airsCompact(at: at, now: now, source: f.source), true)
+    /// What the title IS and what it ASKS: "Anime · 2011 · 148 episodes · Adventure" — after "why",
+    /// the size of the commitment is the next question a stranger's show raises (review i5, N14).
+    private func forYouIdentity(_ r: RecommendationItem, stub: Franchise) -> String {
+        let size = (r.episodes ?? 0) > 1 ? Copy.episodes(r.episodes ?? 0) : nil
+        let genres = r.genres.prefix(size == nil ? 2 : 1)
+            .map { $0.localizedCapitalized.replacingOccurrences(of: " ", with: "\u{00A0}") }
+        return ([stub.kindWord] + [r.year.map(String.init), size].compactMap { $0 } + genres)
+            .joined(separator: " \u{00B7} ")
+    }
+
+    /// Recommended for you — a wall of the shows' own posters (the 20 Sep shelf grammar), each
+    /// saying which of YOUR shows it comes from; + adds it to Planned; the long press says why in
+    /// full and carries "Not interested" and "Already seen".
+    private func forYouShelf(_ items: [RecommendationItem]) -> some View {
+        let reasons = shelfReasons(items)
+        return ForYouShelf(items: items, loading: forYouLoading, reason: { reasons[$0.key] ?? reason(of: $0) },
+                           onOpen: { openRecommendation($0) },
+                           onSeeAll: onOpenRecommendations)
+    }
+
+    /// The shelf's reasons read as a SET: where a title has several of the user's shows behind
+    /// it, the tile names one its neighbours have not already named (after the moment's
+    /// preference) — two neighbours both said "Like TSUKIMICHI" (review i5, N8). The billboard's
+    /// seed counts as named.
+    private func shelfReasons(_ items: [RecommendationItem]) -> [String: RecommendationItem.Reason] {
+        var named = Set<String>()
+        if let staged = forYouFeature, let first = reason(of: staged).seeds.first { named.insert(first.franchiseId) }
+        var out: [String: RecommendationItem.Reason] = [:]
+        for r in items {
+            let base = reason(of: r)
+            var seeds = base.seeds
+            if seeds.count > 1, named.contains(seeds[0].franchiseId),
+               let fresh = seeds.firstIndex(where: { !named.contains($0.franchiseId) }) {
+                seeds.insert(seeds.remove(at: fresh), at: 0)
             }
-            return (Copy.Progress.caughtUp, false)
-        case .premiereSoon:
-            return (TemporalCopy.returns(at: appModel.nextPremiere(of: f), now: now, source: f.source), true)
-        case nil: return (Copy.Progress.caughtUp, false)
+            if let first = seeds.first { named.insert(first.franchiseId) }
+            out[r.key] = .init(kind: base.kind, seeds: seeds, count: base.count)
         }
+        return out
     }
 
     // MARK: - Focus grammar
@@ -1473,12 +1790,14 @@ struct TodayView: View {
     private func kind(of f: Franchise) -> (FocusKind, FranchisePart)? {
         // Evaluated on the object (not the live feed) so a pinned snapshot keeps its wording while
         // the hero shows its result.
-        if let part = f.releasingPart {
+        // The airing part, or a season released whole this week (`freshPart`, review i4).
+        if let part = f.freshPart(now: now, window: AppModel.outNowWindow), f.hasReached(part) {
             // Airings-derived (`behind` / `lastAired`), never the catalogue's hourly counts: the
             // episode that struck a minute ago is the whole reason this screen exists.
-            let behind = part.behind(now: now, anchor: f.timeAnchor)
+            let behind = part.unwatchedOut(now: now, anchor: f.timeAnchor)
             if now - (part.lastAired(now: now, anchor: f.timeAnchor) ?? 0) <= AppModel.outNowWindow,
-               behind > 0 || appModel.justCaught.contains(f.id) {
+               behind > 0 || appModel.justCaught.contains(f.id),
+               part.isNews(now: now, anchor: f.timeAnchor, window: AppModel.outNowWindow) {
                 return behind > 0 ? (.fresh(behind: behind), part) : (.caughtUp, part)
             }
         }
@@ -1492,33 +1811,49 @@ struct TodayView: View {
     /// "CONTINUE" was an imperative sitting directly above an amber button that already gives the
     /// instruction, and it alternated with "AIRED YESTERDAY" (a fact) with no inferable rule. The
     /// dot is reserved for genuinely just-aired episodes and nothing else.
+    /// A release with a backlog behind it keeps its count on the one line, compactly.
+    private func freshCount(_ kind: FocusKind, fact: String) -> String {
+        guard case .fresh(let behind) = kind, behind > 1 else { return fact }
+        return "\(fact) \u{00B7} \(Copy.Progress.behindShort(behind))"
+    }
+
     private func eyebrow(_ kind: FocusKind, f: Franchise, part: FranchisePart) -> String {
         switch kind {
         case .fresh(let behind):
+            // A season released whole is NEW SEASON — never "8 EPISODES BEHIND" about a run that
+            // came out this week (review i4, the streaming drop).
+            if !part.isReleasing { return Copy.Label.newSeason }
             // The recency of today's drop is the MOMENT row's ("Aired 29 min ago" — the news
             // the person opened the app for, user 2 Sep); the eyebrow says the STATE: the count
             // while there is one, else that this is new. An older drop with a backlog leads
             // with the count; an older single one with its day.
-            let last = part.lastAired(now: now, anchor: f.timeAnchor)
-            if let last, Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0 {
-                return behind > 1 ? Copy.Progress.behind(behind) : Copy.Label.newEpisode
-            }
-            if behind > 1 { return Copy.Progress.behind(behind) }
-            if let last { return TemporalCopy.aired(at: last, now: now, source: f.source) }
+            // A release IS the news, whatever the backlog behind it: NEW EPISODE, in the news red,
+            // on every page of the deck (24 Sep, owner: "New Episode is not standing out"). The
+            // count rides the one line ("Season 4 · Episode 16 · 3 behind").
+            _ = behind
             return Copy.Label.newEpisode
         case .backlog(let left):
-            return left > 1 ? Copy.Progress.left(left) : Copy.Progress.lastEpisodeOfTheSeason
+            // "Behind" while the season is still airing, "left" once its run is over — the show
+            // page's words for the same show (review, 23 Sep).
+            if part.isReleasing { return Copy.Progress.behind(left) }
+            // A FILM is next, not "the last episode of the season" (review i5, F17 — Demon
+            // Slayer's Infinity Castle); the show page says "NEXT UP" for the same state.
+            if part.kind == .movie { return Copy.Label.nextUp }
+            // The whole story left, the show page's count (`seriesLeft`), not the season's.
+            let all = max(left, f.seriesLeft(now: now))
+            return all > 1 ? Copy.Progress.left(all) : Copy.Progress.lastEpisodeOfTheSeason
         case .caughtUp: return Copy.Progress.caughtUp
         // The state only — "NEW EPISODE". The moment ("Today at 7:30 PM · in 1h 24m") is the
         // `HeroMoment` row under the title, with its own instrument; said here as well it was
         // either a capsule over a 34-pt amber clock (2 Sep) or a small-caps sentence that
         // treated the app's one delight "like just another thing" (both 4 Sep, user).
-        case .waiting(let at):
-            // A badge states a fact that is TRUE NOW: today's airing keeps the delight; a later
-            // one is "CAUGHT UP · Wednesday at 6:30 PM · …", exactly the show page's block
-            // (review i2: "NEW EPISODE" over a Wednesday, on a Saturday).
-            let a = Formatting.localParts(at, anchor: f.timeAnchor), n = Formatting.localParts(now, anchor: f.timeAnchor)
-            return (a.y, a.mo, a.d) == (n.y, n.mo, n.d) ? Copy.Label.newEpisode : Copy.Progress.caughtUp
+        case .waiting:
+            // A badge states a fact that is TRUE NOW, and an episode that has not aired is not
+            // new yet: "CAUGHT UP" over "Today at 7:30 PM · Season 4 · Episode 21" — the show
+            // page's block for the same show, word for word. "NEW EPISODE" hours before the
+            // drop made the two rooms disagree about one show (review, 23 Sep; review i2 had
+            // already caught it over a Wednesday, on a Saturday). The moment carries the delight.
+            return Copy.Progress.caughtUp
         }
     }
 
@@ -1534,8 +1869,7 @@ struct TodayView: View {
             // Only when the drop IS the next episode: "Aired yesterday · Season 4 · Episode 19"
             // under "3 EPISODES BEHIND" bound episode 21's drop to episode 19 (review, 5 Sep).
             // With a backlog the drop names its own episode on the support line.
-            guard behind == 1, let last = part.lastAired(now: now, anchor: f.timeAnchor),
-                  Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0 else { return nil }
+            guard behind == 1, let last = part.lastAired(now: now, anchor: f.timeAnchor) else { return nil }
             return TemporalCopy.aired(at: last, now: now, source: f.source)
         case .caughtUp:
             guard let at = part.nextAiringAt, at > now else { return nil }
@@ -1564,16 +1898,33 @@ struct TodayView: View {
     /// when it is not already said — one more thing. "Latest aired 28 Aug" under "9 EPISODES
     /// BEHIND" and "11 of 24 watched" under "13 EPISODES LEFT" were second sentences about the
     /// same fact.
+    /// "Episode 24 airs Friday at 7:30 PM" — the show page's `newEpisodeLine`, for the same show.
+    private func nextEpisodeLine(_ f: Franchise) -> String? {
+        guard f.tracksAirings, let at = f.nextAiring(now: now) else { return nil }
+        let part = f.releasingPart
+        let episode = part?.airings.first(where: { $0.at == at })?.episode ?? part?.nextEpisodeNumber
+        return Copy.Progress.episodeAirs(episode, when: TemporalCopy.airs(at: at, now: now, source: f.source))
+    }
+
     private func supportLine(_ kind: FocusKind, f: Franchise, part: FranchisePart) -> String? {
         switch kind {
         case .fresh(let behind):
+            // A season released whole: how much of it is out ("All 8 episodes out").
+            if !part.isReleasing { return Copy.Progress.allOut(part.airedEpisodes) }
             // The drop, named: with a backlog the moment cannot lead the line (it would read as
             // the next episode's), so it says which episode it is about — the same builder the
             // committed frame uses for "Episode 20 airs Friday".
-            guard behind > 1, let last = part.lastAired(now: now, anchor: f.timeAnchor),
-                  Formatting.dayDiff(ts: last, now: now, anchor: f.timeAnchor) == 0 else { return nil }
-            return Copy.Progress.dropAired(episode: part.airedByNow(now: now, anchor: f.timeAnchor),
-                                           when: TemporalCopy.aired(at: last, now: now, source: f.source))
+            // For as long as the deck holds the drop (`outNowWindow`), not only on its calendar
+            // day: at 00:09 the deck still led with a five-hour-old episode and had stopped
+            // naming it (review i3).
+            if behind > 1, let last = part.lastAired(now: now, anchor: f.timeAnchor),
+               now - last <= AppModel.outNowWindow {
+                return Copy.Progress.dropAired(episode: part.airedByNow(now: now, anchor: f.timeAnchor),
+                                               when: TemporalCopy.aired(at: last, now: now, source: f.source))
+            }
+            // Else the cadence — the show page's line for the same show, verbatim ("Episode 24
+            // airs Friday at 7:30 PM"); Today said nothing where the page said this (review, 23 Sep).
+            return nextEpisodeLine(f)
         case .backlog, .waiting:
             // The eyebrow carries the count and the moment row the recency; the bar under the
             // fact carries where you are. Nothing is left for a third line to say.
@@ -1592,8 +1943,10 @@ struct TodayView: View {
     /// hero must never read "Episode 2 · 6 episodes left" beside a button saying episode 2 is
     /// watched.
     private func advanced(_ kind: FocusKind, f: Franchise, part: FranchisePart, from episode: Int,
-                          behind: Int) -> (eyebrow: String, fact: String, support: String?) {
-        let left = max(0, behind - 1)
+                          behind: Int, marked: Int = 1) -> (eyebrow: String, fact: String, support: String?) {
+        // What is left after THIS write — a batch of five that cleared a backlog of five is
+        // caught up, not "4 EPISODES BEHIND · Episode 14" (review i5, F4).
+        let left = max(0, behind - marked)
         guard left > 0 else {
             // The button already says "Episode 19 watched"; the footnote says what comes next
             // instead of saying it twice.
@@ -1695,43 +2048,11 @@ struct TodayView: View {
             ], startPoint: .top, endPoint: .bottom))
             .padding(.top, -topInset)
 
-            // The Up next shelf's shape: a header and two 16:9 cards with their captions, at the
-            // shelf's own card width (four fifths of the content width on a 393-pt screen) —
-            // rows at accessibility sizes, as the loaded screen draws them.
-            VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-                SkeletonLine(width: 84, height: 19)
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                if isAX {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(0..<2, id: \.self) { _ in
-                            SkeletonRow(poster: PosterSize.row.size, lines: [180, 110],
-                                        posterRadius: PosterSize.row.radius)
-                        }
-                    }
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                } else {
-                    // A scroller, like the shelf it stands in for: two 286-pt cards in a plain
-                    // stack are wider than the screen and would centre everything above them.
-                    ScrollView(.horizontal) {
-                        HStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
-                            ForEach(0..<2, id: \.self) { _ in
-                                VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-                                    SkeletonPoster(width: 286, height: 161, radius: ThemeRadius.card)
-                                    SkeletonLine(width: 180, height: 14)
-                                    SkeletonLine(width: 110, height: 12)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, ThemeMetrics.gutter)
-                    }
-                    .scrollDisabled(true)
-                    .scrollIndicators(.hidden)
-                }
-            }
-            .padding(.top, isAX ? ThemeMetrics.heroClearance : ThemeSpace.x5)
+            // The Planned shelf's shape — the one shelf under the billboard (23 Sep): a header
+            // and the 100-pt poster cards with their captions.
 
             VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
-                SkeletonLine(width: 84, height: 10)
+                SkeletonLine(width: 84, height: 19)
                     .padding(.horizontal, ThemeMetrics.gutter)
                 // Four 100-pt cards plus gaps are 468 pt wide — wider than the screen. In a plain
                 // stack that oversized child sets the ideal width of everything above it, and the
@@ -1753,47 +2074,69 @@ struct TodayView: View {
 
     // MARK: - Mark timeline
 
-    private func mark(_ f: Franchise) {
+    private func mark(_ f: Franchise, mediaId: Int? = nil) {
         // `handoffInFlight` covers the window `committedEpisode` cannot: the 460 ms during which
         // the NEXT show's card is fading in with a live Mark button on it.
         guard committedEpisode == nil, !handoffInFlight else { return }
-        let snapshot = items
-        guard let undo = appModel.markNext(franchiseId: f.id) else { return }
-        // No receipt under the capsule (removed 17 Sep — the committed frame already confirms the
-        // mark; the line read as an extra). The undo for a hero mark lives on the show page's
-        // episode list; the Up next cards keep their own in-place receipts.
-        settleHero(snapshot: snapshot, undo: undo)
+        // The show being marked rides in the snapshot even when it is not in the deck (a backlog
+        // on the resting billboard), so the stage can hold it through the frame.
+        let snapshot = items.contains(where: { $0.id == f.id }) ? items : items + [f]
+        guard let undo = appModel.markNext(franchiseId: f.id, mediaId: mediaId) else { return }
+        // No receipt UNDER the capsule (removed 17 Sep — the committed frame already confirms the
+        // mark; the line read as an extra). Its Undo goes to the lane once the frame settles
+        // (`settleHero`), as the batch behind the chevron's does and as the show page's does.
+        settleHero(f, snapshot: snapshot, undo: undo)
     }
 
     /// The committed frame, shared by the single mark and the batch behind the chevron: 650 ms
-    /// of the drawn check and the advanced bar on the SAME card, then the handoff to the next
-    /// show. The batch used to skip all of it — confirm six episodes and the hero was simply
-    /// someone else, with no acknowledgement that anything had been recorded.
+    /// of the drawn check and the advanced bar on the SAME billboard, then the handoff — the next
+    /// release, or the deck without this one.
     ///
-    /// No receipt is presented here (17 Sep): the committed frame is the confirmation, and the
-    /// in-place line under the capsule was read as a duplicate of it.
-    private func settleHero(snapshot: [Franchise], undo: UndoState) {
+    /// The committed frame is the confirmation; there is no in-place line under the capsule (17
+    /// Sep: it read as a duplicate of the frame). What the frame cannot carry is the way BACK, so
+    /// once the handoff has settled the Undo is presented in the LANE — the tab bar's accessory,
+    /// away from the capsule — for the single mark and the batch alike, as on the show page. The
+    /// hero was the one mark in the app with no Undo at all, and the 20 Sep toggle offered one for
+    /// 1.1 s on the button (review, 23 Sep). The receipt is also where "Series finished · Moved to
+    /// Watched" is told.
+    private func settleHero(_ f: Franchise, snapshot: [Franchise], undo: UndoState) {
         pinned = snapshot
         handoffInFlight = true
+        committedFranchiseId = f.id
+        committedCount = max(1, undo.episode - undo.prevProgress)
         withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) {
             committedEpisode = undo.episode
         }
         Announce.status(Copy.Progress.episodeWatched(undo.episode))
         clearRecapStrip()
+        // Warm what comes NEXT while the frame holds: its picture and its poster's reading, so the
+        // handoff lands a composed billboard instead of art first and the lockup seconds later.
+        if let next = liveRestingFeature, next.id != f.id, let url = next.billboardArt.url,
+           let source = URL(string: url) {
+            Task.detached(priority: .userInitiated) {
+                _ = try? await ImageLoader.shared.image(for: source, maxPixel: 2048)
+            }
+            if next.billboardName == .embedded {
+                Task { _ = await PosterTitleCache.shared.analysis(url: url, title: next.title) }
+            }
+        }
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(650))
             let settle = ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)
             withAnimation(settle) {
                 pinned = nil
                 committedEpisode = nil
-            } completion: {
-                // The incoming card's insertion is delayed by `handoff` and then runs `uiSettle`;
-                // it is not tappable until it has actually arrived.
-                Task { @MainActor in
-                    if !reduceMotion { try? await Task.sleep(for: .milliseconds(300)) }
-                    handoffInFlight = false
-                }
+                committedFranchiseId = nil
             }
+            // On a CLOCK, not the animation's completion: the completion never fired on this
+            // hand-off, so the Undo was never presented and `handoffInFlight` stayed up — the
+            // billboard stopped taking marks after the first (found 23 Sep, on the local build).
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 120 : 420))
+            appModel.presentUndo(undo)
+            // The incoming card's insertion is delayed by `handoff` and then runs `uiSettle`;
+            // it is not tappable until it has actually arrived.
+            if !reduceMotion { try? await Task.sleep(for: .milliseconds(300)) }
+            handoffInFlight = false
         }
     }
 
@@ -1819,14 +2162,15 @@ struct TodayView: View {
         guard count > 0 else { return }
         batchPrompt = BatchPrompt(
             title: Copy.Confirm.batchMarkTitle(count),
-            message: "\(f.title) · \(part.label). \(Copy.Confirm.batchMarkMessage(from: part.progress, to: through))",
+            message: Copy.Confirm.batchMarkMessage(title: f.title, season: part.label, from: part.progress, to: through),
             confirm: Copy.Confirm.batchMarkConfirm(count),
             perform: {
                 guard committedEpisode == nil, !handoffInFlight else { return }
-                let snapshot = items
+                // The show being marked rides in the snapshot (see `mark`).
+                let snapshot = items.contains(where: { $0.id == f.id }) ? items : items + [f]
                 guard let undo = appModel.markThrough(franchiseId: f.id, mediaId: part.mediaId,
                                                       episode: through, present: false) else { return }
-                settleHero(snapshot: snapshot, undo: undo)
+                settleHero(f, snapshot: snapshot, undo: undo)
                 Announce.status(Copy.Confirm.batchMarkConfirm(count))
             }
         )
@@ -1924,7 +2268,9 @@ struct TodayView: View {
         // (review i5: "3 episodes aired" twice, 330 px apart).
         if n == 1 { return watchLabel(f, part: part, episode: latest) }
         let range = Copy.episodeRange(max(1, latest - n + 1), latest)
-        return f.parts.count > 1 ? "\(part.canonicalLabel) \u{00B7} \(range)" : range
+        // The short season name ("The Calamity · Episodes 3–8"): the long arc label pushed the
+        // range — the row's one fact — to a second line (iteration 2).
+        return f.parts.count > 1 ? "\(Copy.compactPartLabel(part.canonicalLabel)) \u{00B7} \(range)" : range
     }
 
     private func recapSpokenSummary(_ recap: RecapDigest) -> String {
@@ -1945,9 +2291,10 @@ struct TodayView: View {
         withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
             recapOnStage = false
             recapMode = next
-        } completion: {
-            persistRecapAcknowledgement()
         }
+        // Persistence animates nothing, so it runs here, not in an animation completion that
+        // cannot be relied on to fire (the hero's Undo never did, 23 Sep).
+        persistRecapAcknowledgement()
     }
 
     /// The recap's explicit ✕.
@@ -1960,9 +2307,8 @@ struct TodayView: View {
         withAnimation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion)) {
             recapOnStage = false
             recapMode = .none
-        } completion: {
-            persistRecapAcknowledgement()
         }
+        persistRecapAcknowledgement()
     }
 
     /// Persistence only — it animates nothing, so it may run in a completion handler without
@@ -1994,14 +2340,12 @@ struct TodayView: View {
     }
 
     private func recapStripText(_ recap: RecapDigest) -> String {
-        let aired = recap.beats.reduce(0) { acc, b in
-            if case .episodesAired(let n, _) = b.kind { return acc + n } else { return acc }
-        }
+        let aired = recap.airedCount
         let since = sinceFragment(recap.since)
         // No numeral: the badge 260 pt above already carries one, and "3 episodes aired" under
         // "3 EPISODES BEHIND" was the same number twice (review, 5 Sep).
         if aired > 0 { return "What you missed \(since)" }
-        return "\(Copy.updates(recap.beats.count + recap.hiddenBeatCount)) \(since)"
+        return "\(Copy.updates(recap.allBeats.count)) \(since)"
     }
 }
 
@@ -2076,136 +2420,245 @@ private struct StretchingHeroArt: View {
     }
 }
 
-// MARK: - Hero focus
+// MARK: - The billboard
 
-/// The one thing to watch, laid on its own artwork — a billboard LOCKUP (4 Sep, direction B of
-/// three photographed on the simulator).
-///
-/// Reading order, top to bottom: the STATE as a filled `HeroBadge` ("NEW EPISODE", "4 EPISODES
-/// BEHIND"), the show's name at `displayXL` — THE headline, always — then ONE line: the moment
-/// and the episode ("Today at 7:30 PM · Season 4 · Episode 21", "Aired 29 min ago · Season 4 ·
-/// Episode 12", or the episode alone for a backlog), the season bar, and one primary action when
-/// there is something to mark. Prime Video's and Disney+'s grammar: a badge is the signal, the
-/// size goes to the title, and the rest is one line.
-///
-/// Before, in one day (4 Sep): the 2–3 Sep "slate" — a scrimmed capsule pill over the CLOCK at
-/// `displayXL` in amber, the show a size down — read on the device as a badge and a clock
-/// widget over a black void ("like a 3rd grade app"); a bare small-caps eyebrow with a 20-pt
-/// live moment row under the title read as "text heavy and cognitively overloaded". Three rows,
-/// one of them a ground, is the answer the user picked.
-private struct HeroFocus: View {
-    let franchise: Franchise
-    /// The badge's text: the state.
-    let eyebrow: String
-    /// The WHEN, folded into the one line ahead of the episode: "Today at 7:30 PM", "Aired 29
-    /// min ago", date-only "Friday". Nil for a state with no live moment (a backlog, an older
-    /// drop).
-    var moment: String? = nil
-    let fact: String
-    let support: String?
-    /// Where you are in the season, 0–1, drawn as the one `ProgressBar` under the fact — never
-    /// "4 episodes behind" in words (the 2 Sep prose rule). Nil when there is nothing to show:
-    /// nothing watched yet, or everything.
-    var progress: Double? = nil
-    /// What the bar says to VoiceOver ("4 episodes behind").
-    var progressSpoken: String? = nil
-    let ctaEpisode: Int?
-    let committed: Bool
-    let behind: Int
-    /// A drop is out now and unwatched — the badge takes the finite entrance beat.
+/// What a billboard says — the show page's lockup grammar (`HeroLockup`) as data: the STATE on
+/// the badge, the moment and the episode as the one line, where you are as the bar, and a support
+/// line only where it is earned.
+private struct TodayLockupContent {
+    var badge: String
     var attention: Bool = false
-    /// False while a mark is handing over to the next show: the incoming card may not be tapped
-    /// until it has arrived.
+    var moment: String? = nil
+    var fact: String
+    var support: String? = nil
+    var progress: Double? = nil
+    var progressSpoken: String? = nil
+}
+
+/// Today's billboard — the SHOW PAGE's hero, on Today (23 Sep: one hero grammar, the user's pick).
+/// A poster that carries its own title (`BillboardName.embedded`) is drawn WHOLE at its native
+/// aspect and the lockup is laid AROUND the printed title (`PosterLockupLayout`, the title found
+/// on device by `PosterTitleCache`) — never cropped and never typed a second time. Any other art
+/// fills the frame and the lockup sits at its foot on the copy scrim. The lockup is `HeroLockup`
+/// in the app's amber, the same view the show page draws; the 20 Sep card cropped the titled
+/// poster to 0.80 of the screen and laid a white badge and a white toggle over its lettering.
+private struct TodayBillboard<Actions: View>: View {
+    let franchise: Franchise
+    let width: CGFloat
+    /// The frame for FILLED art; a whole poster takes its own height.
+    let fillHeight: CGFloat
+    /// A page of the release deck is as tall as the deck.
+    var minHeight: CGFloat = 0
+    let content: TodayLockupContent
     var interactive: Bool = true
+    /// Today's scroll offset: a PULL grows the art from its foot instead of opening a black band
+    /// above it with the ribbon and the avatar floating on nothing (review i5, F9). Read only by
+    /// `PullStretch`, one transform, so a scroll frame re-runs that modifier and nothing else.
+    var scroll: ScrollOffset? = nil
     let onOpen: () -> Void
-    let onMark: () -> Void
-    let onMarkThrough: (Int) -> Void
-    let onMarkAll: () -> Void
+    var onArtLoaded: (() -> Void)? = nil
+    @ViewBuilder var actions: () -> Actions
 
     @Environment(\.dynamicTypeSize) private var typeSize
-    private var isAX: Bool { typeSize.isAccessibilitySize }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The poster's reading (`PosterTitleCache`); nil until known, and the picture and its lockup
+    /// wait for it rather than landing on a guess and jumping.
+    @State private var analysis: PosterAnalysis?
+    @State private var headlineHeight: CGFloat = 0
+    @State private var controlsHeight: CGFloat = 0
+    @State private var copyHeight: CGFloat = 0
+    @State private var tint: Color?
+    @State private var lightness: Double?
 
-    /// The SHARED lockup (`HeroLockup`, 5 Sep — the show page draws the same view), fed Today's
-    /// grammar: `displayTitle` as every row and shelf names the show ("Re:ZERO", not the full
-    /// title across two lines), `displayXL` with a scale floor so the hero may never ellipsize the
-    /// one name the screen exists to show, and ONE action — "Details" beside it duplicated the
-    /// block's own tap; Apple TV's and Netflix's second button is a different verb, never "open
-    /// what you are already looking at".
+    private var isAX: Bool { typeSize.isAccessibilitySize }
+    private var art: WideArt { franchise.billboardArt }
+    private var embedded: Bool { franchise.billboardName == .embedded }
+    private var strength: Double { HeroProtection.strength(lightness: lightness) }
+
+    /// The reading this frame can use: the one this view fetched, else one a previous launch
+    /// remembered — so a known poster is staged on its first frame.
+    private var reading: PosterAnalysis? {
+        analysis ?? PosterTitleCache.shared.cached(url: art.url, title: franchise.title)
+    }
+
+    /// The poster staged around its printed title (`PosterStage`). Before the reading lands the
+    /// frame is sized on the gallery's aspect and the lower-third guess, and nothing is drawn on it.
+    private var stage: PosterStage {
+        let gallery: CGFloat? = franchise.artwork?.portraitAspect(for: art.url).map { CGFloat($0) }
+        let aspect: CGFloat = reading?.aspect ?? gallery ?? (2.0 / 3.0)
+        return PosterStage(posterHeight: width / aspect, region: reading?.region ?? .lowerTitle,
+                           chromeBottom: ThemeMetrics.topSafeInset + PosterStage.chromeBand,
+                           headline: headlineHeight, controls: controlsHeight, minHeight: minHeight)
+    }
+
     var body: some View {
-        HeroLockup(badge: eyebrow,
-                   badgeAttention: attention,
+        Group {
+            if embedded { wholePoster } else { filled }
+        }
+        .task(id: art.url) {
+            async let palette = PaletteCache.shared.resolve(url: art.url, maxPixel: 360)
+            if embedded {
+                if reading == nil {
+                    let found = await PosterTitleCache.shared.analysis(url: art.url, title: franchise.title)
+                    guard !Task.isCancelled else { return }
+                    withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) { analysis = found }
+                }
+                onArtLoaded?()
+            }
+            tint = await palette
+            lightness = PaletteCache.shared.lightness(for: art.url)
+        }
+    }
+
+    private var wholePoster: some View {
+        let stage = self.stage
+        let ground = tint ?? PaletteCache.fallback
+        // The show's colour behind the picture, landing on CANVAS AT THE POSTER'S FOOT — the
+        // colour the poster itself fades to (`AuthoredHeroArt`'s ground). Ramping to canvas at the
+        // STAGE's foot instead put a band of tint under a poster already faded to canvas: an
+        // inverted step across the full width at 589 pt, and a flat navy band at AX (review i3).
+        let posterFoot = max(0.001, min(1, (stage.posterTop + stage.posterHeight) / max(stage.height, 1)))
+        let fadeFrom = max(0, min(posterFoot, (stage.posterTop + stage.posterHeight - 96) / max(stage.height, 1)))
+        return ZStack(alignment: .top) {
+            LinearGradient(stops: [.init(color: ground, location: 0),
+                                   .init(color: ground, location: fadeFrom),
+                                   .init(color: ThemeColor.canvas, location: posterFoot)],
+                           startPoint: .top, endPoint: .bottom)
+            // The whole picture opens the show, and dips when pressed like every art surface. It
+            // is drawn at once, full bleed; only the lockup waits for the poster's reading, so it
+            // lands around the printed title instead of jumping to it.
+            Button(action: onOpen) {
+                AuthoredHeroArt(url: art.url, imageHeight: stage.posterHeight,
+                                nameBottom: stage.untitled ? nil : stage.nameBottom)
+            }
+            .buttonStyle(OverArtPressStyle())
+            .accessibilityLabel(franchise.displayTitle)
+            .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+            .frame(height: stage.posterHeight)
+            .modifier(PullStretch(scroll: scroll, height: stage.posterHeight))
+            lockup(stage: stage)
+                .padding(.horizontal, ThemeMetrics.gutter)
+                .opacity(reading == nil ? 0 : 1)
+            // The clock and the brand mark over a bright poster — a veil only as deep as the bar,
+            // at its lightest, so a title printed across the top is never buried under it.
+            HeroTopVeil(band: ThemeMetrics.topSafeInset + TodayView.headerBand,
+                        ramp: TodayView.veilRamp, strength: min(strength, 0.35))
+                .allowsHitTesting(false)
+        }
+        .frame(width: width, height: stage.height)
+        // Clipped at the sides and the foot only — the pull's stretch grows above the frame.
+        .clipShape(Rectangle().size(width: width, height: stage.height + 2000).offset(y: -2000))
+    }
+
+    private var filled: some View {
+        let h = max(fillHeight, copyHeight + (isAX ? 210 : 132), minHeight)
+        return ZStack(alignment: .bottom) {
+            (tint ?? PaletteCache.fallback)
+            ArtHeader(url: art.url, height: h, tint: tint, scrimTop: 0, scrimBottom: 0,
+                      focus: .top, portraitSource: art.portraitSource, drift: true,
+                      ultraWide: art.ultraWide, onArtLoaded: onArtLoaded,
+                      groundDim: HeroProtection.groundDim(strength)) { EmptyView() }
+                .modifier(PullStretch(scroll: scroll, height: h))
+            HeroCopyScrim(copyHeight: copyHeight, strength: strength)
+            lockup(stage: nil)
+                .padding(.horizontal, ThemeMetrics.gutter)
+                .padding(.bottom, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { copyHeight = $0 }
+        }
+        .frame(width: width, height: h)
+        .overlay(alignment: .top) {
+            HeroTopVeil(band: ThemeMetrics.topSafeInset + TodayView.headerBand,
+                        ramp: TodayView.veilRamp, strength: strength)
+                .allowsHitTesting(false)
+        }
+        // Clipped at the sides and the foot only — the pull's stretch grows above the frame.
+        .clipShape(Rectangle().size(width: width, height: h + 2000).offset(y: -2000))
+    }
+
+    private func lockup(stage: PosterStage?) -> some View {
+        HeroLockup(badge: content.badge,
+                   badgeAttention: content.attention,
                    title: franchise.displayTitle,
                    name: franchise.billboardName,
+                   posterStage: stage,
+                   onPosterHeadlineHeight: { headlineHeight = $0 },
+                   onPosterControlsHeight: { controlsHeight = $0 },
+                   posterProtection: strength,
                    lineLimit: isAX ? 3 : 2,
-                   moment: moment,
-                   fact: fact,
-                   support: support,
-                   progress: progress,
-                   progressSpoken: progressSpoken,
-                   onOpen: onOpen,
+                   moment: content.moment,
+                   fact: content.fact,
+                   support: content.support,
+                   progress: content.progress,
+                   progressSpoken: content.progressSpoken,
+                   onOpen: stage == nil ? onOpen : nil,
                    interactive: interactive,
-                   accessory: { EmptyView() }) {
-            if let ctaEpisode {
-                MarkSplitButton(episode: ctaEpisode,
-                                committed: committed,
-                                behind: behind,
-                                title: franchise.title,
-                                onMark: onMark,
-                                onMarkThrough: onMarkThrough,
-                                onMarkAll: onMarkAll)
-            }
-        }
+                   fadeBand: ThemeMetrics.topSafeInset + TodayView.headerBand,
+                   accessory: { EmptyView() },
+                   actions: actions)
     }
 }
 
-// MARK: - Trending focus
-
-/// The empty account's slate on the billboard: pill → show → identity, and one capsule. The same
-/// anatomy as `HeroFocus` minus the episode, because there is no episode yet — only a show.
-private struct TrendingFocus: View {
-    let item: FranchiseSummary
-    let owned: Bool
-    let onOpen: () -> Void
-    let onAdd: () -> Void
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-    private var isAX: Bool { typeSize.isAccessibilitySize }
-
-    private var identity: String {
-        [item.source.kindWord, item.year.map(String.init)].compactMap { $0 }.joined(separator: " · ")
-    }
+/// Three chart posters fanned over an empty account's first sentence.
+private struct TodayPosterFan: View {
+    let covers: [String]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: onOpen) {
-                // Centred, as `HeroLockup` is (5 Sep): one billboard axis.
-                VStack(alignment: .center, spacing: 0) {
-                    HeroBadge(text: Copy.Label.trending)
-                    HeroTitle(text: item.title.shelfShortened, name: item.billboardName, lineLimit: isAX ? 3 : 2)
-                        .padding(.top, ThemeSpace.x3)
-                    Text(identity)
-                        .type(ThemeType.heroMeta)
-                        .foregroundStyle(ThemeColor.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, ThemeSpace.x1)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .contentShape(Rectangle())
+        ZStack {
+            ForEach(Array(covers.prefix(3).enumerated()), id: \.element) { index, cover in
+                PosterSlot(url: cover, width: index == 1 ? 142 : 126,
+                           height: index == 1 ? 213 : 189, radius: PosterSize.shelfLarge.radius)
+                    .rotationEffect(.degrees(Double(index - 1) * 9))
+                    .offset(x: CGFloat(index - 1) * 82,
+                            y: index == 1 ? 0 : 17)
+                    .zIndex(index == 1 ? 2 : 1)
             }
-            .buttonStyle(OverArtPressStyle())
-            .shadow(.art)
-            .accessibilityElement(children: .combine)
-            .accessibilityHint(Copy.Accessibility.opensTheShowHint)
-
-            Button(action: onAdd) {
-                Text(owned ? Copy.Search.inLibrary : Copy.Search.addToLibrary)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(PrimaryButtonStyle2())
-            .disabled(owned)
-            .padding(.top, isAX ? ThemeSpace.x5 : ThemeSpace.x4)
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: 226)
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
+    }
+}
+
+/// An empty account's first frame: three posters from the chart, one sentence, the next step in
+/// the app's amber — the same "Add a show", hugging, that Library's and Schedule's empty states
+/// offer — and the chart.
+private struct TodayEmptyLibraryState<Shelf: View>: View {
+    let fanCovers: [String]
+    let onAddShow: () -> Void
+    @ViewBuilder var shelf: () -> Shelf
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if fanCovers.count == 3 {
+                TodayPosterFan(covers: fanCovers)
+            }
+            VStack(spacing: ThemeSpace.x2) {
+                Text(Copy.Today.buildYourToday)
+                    .type(ThemeType.displayL)
+                    .foregroundStyle(ThemeColor.textPrimary)
+                    .multilineTextAlignment(.center)
+                Text(Copy.Today.buildYourTodaySupporting)
+                    .type(ThemeType.callout)
+                    .foregroundStyle(ThemeColor.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: 320)
+            .padding(.horizontal, ThemeMetrics.gutter)
+            .padding(.top, fanCovers.count == 3 ? ThemeSpace.x5 : ThemeSpace.x8)
+
+            Button(Copy.Action.addAShow, action: onAddShow)
+                .buttonStyle(PrimaryButtonStyle2())
+                .fixedSize(horizontal: !typeSize.isAccessibilitySize, vertical: false)
+                .padding(.horizontal, ThemeMetrics.gutter)
+                .padding(.top, ThemeSpace.x5)
+
+            shelf()
+                .padding(.top, ThemeMetrics.sectionGap)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -2231,6 +2684,12 @@ private struct RecapArrival: View {
     /// The beat's meta line, resolved against the library so it can carry the season the hero
     /// carries. `RecapBeat` knows only a franchise id and a title.
     let beatLabel: (RecapBeat) -> String
+    /// The beat's show by the name every other row uses (`displayTitle`) — the recap printed
+    /// "Re:ZERO -Starting Life in Another World-" over the hero that says "Re:ZERO" (review, 23 Sep).
+    var beatTitle: (RecapBeat) -> String = { $0.title }
+    /// A row opens ITS show (review, 23 Sep: every row looked like a link, and tapping Bleach
+    /// only collapsed the card). Nil keeps the whole card as the one Continue target.
+    var onOpenBeat: ((RecapBeat) -> Void)? = nil
     let onContinue: () -> Void
     let onDismiss: () -> Void
 
@@ -2244,7 +2703,7 @@ private struct RecapArrival: View {
             if showsPoster { PosterSlot(url: beat.cover, .beat) }
             VStack(alignment: .leading, spacing: ThemeMetrics.titleGap) {
                 HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-                    Text(beat.title)
+                    Text(beatTitle(beat))
                         .type(ThemeType.rowTitle)
                         // BOTH rows at `textPrimary`. The second used to be `textSecondary`, so it
                         // read as disabled; the aired-vs-upcoming distinction lives in the meta line.
@@ -2252,7 +2711,7 @@ private struct RecapArrival: View {
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: ThemeSpace.x2)
-                    if i == 0 {
+                    if i == 0 || onOpenBeat != nil {
                         Image(systemName: "chevron.forward")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(ThemeColor.textDisabled)
@@ -2262,7 +2721,10 @@ private struct RecapArrival: View {
                 Text(beatLabel(beat))
                     .type(ThemeType.rowMeta)
                     .foregroundStyle(ThemeColor.textSecondary)
-                    .lineLimit(1)
+                    // Two lines: a long arc name ("Thousand-Year Blood War - The Calamity") cut
+                    // the one fact the row exists for — the episodes — off the end.
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .opacity(revealed ? 1 : 0)
@@ -2271,22 +2733,49 @@ private struct RecapArrival: View {
             .delay(reduceMotion ? 0 : 0.12 * Double(i + 1)), value: revealed)
     }
 
+    /// The beats past the third row, by name — one opens its show like the rows above it.
+    @ViewBuilder
     private var moreLine: some View {
-        Text(TodayCopy.andMore(digest.hiddenBeatCount))
-            .type(ThemeType.metadata)
-            .foregroundStyle(ThemeColor.textTertiary)
-            .opacity(revealed ? 1 : 0)
-            .animation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)
-                .delay(reduceMotion ? 0 : 0.12 * Double(digest.beats.count + 1)), value: revealed)
+        let hidden = digest.hidden
+        let text = TodayCopy.also(hidden.map(beatTitle), label: hidden.count == 1 ? hidden.first.map(beatLabel) : nil)
+        Group {
+            if hidden.count == 1, let beat = hidden.first, let onOpenBeat {
+                Button { onOpenBeat(beat) } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
+                        Text(text)
+                            .type(ThemeType.metadata)
+                            .foregroundStyle(ThemeColor.textSecondary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: ThemeSpace.x2)
+                        Image(systemName: "chevron.forward")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(ThemeColor.textDisabled)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(RowPressStyle())
+                .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+            } else {
+                Text(text)
+                    .type(ThemeType.metadata)
+                    .foregroundStyle(ThemeColor.textTertiary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .opacity(revealed ? 1 : 0)
+        .animation(ThemeMotion.pick(ThemeMotion.uiReveal, reduceMotion: reduceMotion)
+            .delay(reduceMotion ? 0 : 0.12 * Double(digest.beats.count + 1)), value: revealed)
     }
 
-    /// "2 updates since 18 Aug" — what the card is, in the hero's voice.
+    /// "11 episodes aired" / "2 updates waiting" — what the card is, in the hero's voice, counted
+    /// over EVERY beat, the ones past the third row included.
     private var headline: String {
-        let aired = digest.beats.reduce(0) { acc, b in
-            if case .episodesAired(let n, _) = b.kind { return acc + n } else { return acc }
-        }
-        let total = digest.beats.count + digest.hiddenBeatCount
-        return aired > 0 ? "\(Copy.episodes(aired)) aired" : "\(Copy.updates(total)) waiting"
+        let aired = digest.airedCount
+        return aired > 0 ? "\(Copy.episodes(aired)) aired" : "\(Copy.updates(digest.allBeats.count)) waiting"
     }
 
     /// Whether the beat rows carry artwork at all.
@@ -2303,9 +2792,12 @@ private struct RecapArrival: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
+            // The badge, the headline and its since-line on the billboard's CENTRED axis, as on
+            // every other billboard (review i3: the recap was the one lockup on the gutter); the
+            // dismiss keeps the trailing corner.
+            ZStack(alignment: .topTrailing) {
                 HeroBadge(text: TodayCopy.whileYouWereAway)
-                Spacer(minLength: ThemeSpace.x3)
+                    .frame(maxWidth: .infinity)
                 // A real dismiss. 22 pt of low-contrast glyph was the only way out of a full-screen
                 // takeover, and it called `onContinue` — so ✕ and "Continue" did the same thing and
                 // the card came back as the strip 460 ms later. 30 pt on its own ground, ringed, in
@@ -2332,14 +2824,18 @@ private struct RecapArrival: View {
                 .foregroundStyle(ThemeColor.textPrimary)
                 .lineLimit(2)
                 .minimumScaleFactor(0.85)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
                 .padding(.top, ThemeSpace.x3)
             // "Since 23 Jul" named a date with no anchor — since what? The last visit is what the
             // digest is actually built from, so the card says so. The strip below stays terse.
             Text(TodayCopy.sinceYourLastVisit(TemporalCopy.since(digest.since, now: now)))
                 .type(ThemeType.metadata)
                 .foregroundStyle(ThemeColor.textSecondary)
+                .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
                 .padding(.top, ThemeSpace.x0_5)
 
             // The WHOLE card is the button, and the chevron sits on the title row.
@@ -2351,7 +2847,14 @@ private struct RecapArrival: View {
             Button(action: onContinue) {
                 VStack(alignment: .leading, spacing: ThemeSpace.x3) {
                     ForEach(Array(digest.beats.enumerated()), id: \.element.id) { i, beat in
-                        beatRow(beat, index: i)
+                        if let onOpenBeat {
+                            Button { onOpenBeat(beat) } label: { beatRow(beat, index: i).contentShape(Rectangle()) }
+                                .buttonStyle(RowPressStyle())
+                                .accessibilityLabel("\(beatTitle(beat)), \(beatLabel(beat))")
+                                .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+                        } else {
+                            beatRow(beat, index: i)
+                        }
                     }
                     if digest.hiddenBeatCount > 0 { moreLine }
                 }
@@ -2364,9 +2867,12 @@ private struct RecapArrival: View {
             }
             .buttonStyle(OverArtPressStyle())
             .padding(.top, ThemeSpace.x5)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(digest.beats.map { "\($0.title), \(beatLabel($0))" }.joined(separator: ". "))
-            .accessibilityHint("Continues to what is next")
+            // With rows that open their shows, VoiceOver reaches each row; merged, it could not.
+            .accessibilityElement(children: onOpenBeat == nil ? .combine : .contain)
+            .accessibilityLabel(onOpenBeat == nil
+                                ? digest.beats.map { "\($0.title), \(beatLabel($0))" }.joined(separator: ". ")
+                                : headline)
+            .accessibilityHint(onOpenBeat == nil ? "Continues to what is next" : "")
         }
         .shadow(.art)
         .task(id: digest.beats.first?.cover) {
@@ -2424,35 +2930,30 @@ private struct RecapLine: View {
 /// The wordmark band. Its own view so that the dock (`scroll.heroCopyUnderBand`) invalidates
 /// this HStack and nothing else — the screen's body never reads it.
 private struct TodayHeaderBar: View {
-    let scroll: ScrollOffset
-    let carriesBase: Bool
-    let heroFranchise: Franchise?
     @Binding var showProfile: Bool
+    let scroll: ScrollOffset
+    let overArtwork: Bool
 
     @Environment(AuthManager.self) private var auth
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var carriesTitle: Bool { carriesBase && scroll.heroCopyUnderBand }
 
     var body: some View {
-        let docked = heroFranchise.flatMap { FranchiseDetailView.dockedName($0, budget: 28) }
         HStack(alignment: .center) {
+            // Over the art, the RIBBON alone: the full wordmark across a poster competes with its
+            // printed title and the faces under it, and the billboard is the one place the app
+            // steps out of the picture's way ("no longer feels cinematic", user, 23 Sep). Once
+            // the art has scrolled off the wordmark returns — CROSSFADED, not swapped (a hard
+            // swap at the threshold popped, review 23 Sep).
+            let overArt = overArtwork && scroll.y < 100
             ZStack(alignment: .leading) {
-                // Fit, shortened, or nothing — the wordmark stays (review i2).
                 Wordmark()
-                    .opacity(carriesTitle && docked != nil ? 0 : 1)
-                if let title = docked {
-                    Text(title)
-                        .type(ThemeType.showTitleM)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                        .shadow(.art)
-                        .opacity(carriesTitle ? 1 : 0)
-                        .accessibilityHidden(!carriesTitle)
-                }
+                    .opacity(overArt ? 0 : 1)
+                PreviouslyMark(width: 13)
+                    .shadow(.art)
+                    .opacity(overArt ? 1 : 0)
             }
-            .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: carriesTitle)
+            .animation(.easeInOut(duration: 0.22), value: overArt)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Previously")
             Spacer(minLength: ThemeSpace.x4)
             Button { showProfile = true } label: {
                 AccountDisc(identity: auth.identity, diameter: 34, quiet: true)
@@ -2464,7 +2965,11 @@ private struct TodayHeaderBar: View {
             .accessibilityLabel("Profile")
         }
         .padding(.leading, ThemeMetrics.gutter)
-        .padding(.trailing, ThemeSpace.x2)
+        // The disc's edge on the gutter: its 44-pt target is 5 pt wider than the 34-pt disc on
+        // each side, and x2 left it 13 pt from the edge (review, 23 Sep).
+        .padding(.trailing, ThemeMetrics.gutter - 5)
         .frame(height: TodayView.headerBand)
     }
 }
+
+

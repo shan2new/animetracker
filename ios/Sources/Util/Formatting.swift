@@ -130,7 +130,7 @@ enum Formatting {
     }
 
     /// Midnight-UTC ms-epoch for a bare (y, mo, d) triple — the day-key builder.
-    private static func utcTimestamp(y: Int, mo: Int, d: Int) -> Int64? {
+    static func utcTimestamp(y: Int, mo: Int, d: Int) -> Int64? {
         var c = DateComponents()
         c.year = y; c.month = mo; c.day = d
         guard let date = calendar(.utcDate).date(from: c) else { return nil }
@@ -200,6 +200,12 @@ enum Formatting {
         return symbols.indices.contains(wd) ? symbols[wd] : ""
     }
 
+    /// "W" for a Sunday-first weekday index — the locale's own one-letter form.
+    static func weekdayLetter(_ wd: Int) -> String {
+        let symbols = formatter("EEEE", .local).veryShortStandaloneWeekdaySymbols ?? []
+        return symbols.indices.contains(wd) ? symbols[wd] : ""
+    }
+
     /// "Wed" for a Monday-first column (the day strip's and the day header's calendar).
     static func weekdayShortMonFirst(_ col: Int) -> String { weekdayShort((col + 1) % 7) }
 
@@ -211,7 +217,7 @@ enum Formatting {
         return symbols.indices.contains(wd) ? symbols[wd] : ""
     }
 
-    private static func weekdayFull(_ wd: Int) -> String {
+    static func weekdayFull(_ wd: Int) -> String {
         let symbols = formatter("EEEE", .local).standaloneWeekdaySymbols ?? []
         return symbols.indices.contains(wd) ? symbols[wd] : ""
     }
@@ -253,7 +259,8 @@ enum Formatting {
         let m = s / minuteMs
         if m < 1 { return "just now" }
         if m < 60 { return "\(m)m ago" }
-        let h = m / 60
+        // Rounded, like `TemporalCopy.aired`: 1 h 55 min is "2h ago", not "1h ago".
+        let h = max(1, Int((Double(m) / 60).rounded()))
         if h < 24 { return "\(h)h ago" }
         return "\(h / 24)d ago"
     }
@@ -287,6 +294,9 @@ enum Formatting {
         if diff == 1 { return "Tomorrow" }
         if diff == -1 { return "Yesterday" }
         if diff > 1 && diff < 7 { return weekdayFull(localParts(ts, anchor: anchor).wd) }
+        // The past week by name too — "Aired Tuesday", "Since Monday", as the ladder documents:
+        // two days ago printed "Aired 22 Sep" (review i3). Messages dates the past week the same way.
+        if diff < -1 && diff > -7 { return weekdayFull(localParts(ts, anchor: anchor).wd) }
         return fmtMonthDay(ts, anchor: anchor)
     }
 
