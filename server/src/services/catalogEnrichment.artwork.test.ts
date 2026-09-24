@@ -28,10 +28,12 @@ vi.mock('../db/index.js', () => {
   }
 })
 
-vi.mock('../anilist/client.js', () => ({ fetchEnrichmentByIds: vi.fn() }))
-vi.mock('../tmdb/client.js', () => ({ getShow: h.getShow }))
-vi.mock('./recommendations.js', () => ({
+vi.mock('../anilist/client.js', () => ({ fetchEnrichmentByIds: vi.fn(), fetchRootNodes: vi.fn(async () => []) }))
+vi.mock('../tmdb/client.js', () => ({ getShow: h.getShow, tmdbEnabled: () => true }))
+// The edge writes live in `recommendationEdges.ts` since the recommendations pipeline landed.
+vi.mock('./recommendationEdges.js', () => ({
   syncRecommendationEdges: h.syncRecommendationEdges,
+  storedRoots: vi.fn(async () => []),
 }))
 
 const { refreshFranchiseEnrichment } = await import('./catalogEnrichment.js')
