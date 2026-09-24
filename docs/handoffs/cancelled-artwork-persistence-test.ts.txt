@@ -1,0 +1,121 @@
+// Archived scaffold from the cancelled server investigation; not an active test.
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ArtworkGallery } from '../types/api.js'
+
+const h = vi.hoisted(() => ({
+  rows: [] as unknown[],
+  writes: [] as Record<string, unknown>[],
+  getShow: vi.fn(),
+  syncRecommendations: vi.fn(),
+}))
+
+vi.mock('../db/index.js', () => ({
+  db: {
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => h.rows }) }),
+    }),
+    update: () => ({
+      set: (value: Record<string, unknown>) => ({
+        where: async () => { h.writes.push(value) },
+      }),
+    }),
+  },
+}))
+vi.mock('../tmdb/client.js', () => ({ getShow: h.getShow }))
+vi.mock('./recommendations.js', () => ({ syncRecommendationEdges: h.syncRecommendations }))
+
+const { refreshFranchiseEnrichment } = await import('./catalogEnrichment.js')
+
+const franchiseId = '1cff170d-c39c-4c11-b746-fdd6253a2c4c'
+const existingLogo = {
+  url: 'https://image.tmdb.org/t/p/w1280/existing-logo.png',
+  source: 'tmdb' as const, width: 1600, height: 400, language: 'en', score: 5,
+}
+const existingArtwork: ArtworkGallery = {
+  portraits: [], landscapes: [], logos: [existingLogo],
+}
+const show = {
+  id: 123, name: 'Show', genres: [], adult: false,
+  poster_path: '/poster.jpg', backdrop_path: '/backdrop.jpg',
+  images: {
+    posters: [{ file_path: '/poster.jpg', width: 2000, height: 3000, iso_639_1: 'en' }],
+    backdrops: [{ file_path: '/backdrop.jpg', width: 3840, height: 2160 }],
+    logos: [{ file_path: '/logo.png', width: 1800, height: 600, iso_639_1: 'en' }],
+  },
+  keywords: { results: [] },
+}
+
+beforeEach(() => {
+  h.rows = [{ id: franchiseId, source: 'tmdb', externalId: 123, artwork: null, enrichment: null }]
+  h.writes.length = 0
+  h.getShow.mockReset().mockResolvedValue(show)
+  h.syncRecommendations.mockReset().mockResolvedValue(undefined)
+})
+
+describe('TMDB catalogue artwork persistence', () => {
+  it('persists portrait, landscape and graphic-logo metadata from the enrichment response', async () => {
+    expect(await refreshFranchiseEnrichment(franchiseId)).toBe(true)
+    expect(h.getShow).toHaveBeenCalledWith(123, expect.objectContaining({ enrichment: true }))
+    expect(h.writes).toHaveLength(1)
+    const artwork = h.writes[0]!.artwork as ArtworkGallery
+    expect(artwork.portraits).toEqual([expect.objectContaining({
+      url: 'https://image.tmdb.org/t/p/w780/poster.jpg', width: 2000, height: 3000,
+    })])
+    expect(artwork.landscapes).toEqual([expect.objectContaining({
+      url: 'https://image.tmdb.org/t/p/w1280/backdrop.jpg', width: 3840, height: 2160,
+    })])
+    expect(artwork.logos).toEqual([expect.objectContaining({
+      url: 'https://image.tmdb.org/t/p/w1280/logo.png', width: 1800, height: 600, language: 'en',
+    })])
+    // An enrichment refresh must not change the selected cover/backdrop or catalogue identity.
+    for (const key of ['cover', 'banner', 'source', 'externalId']) {
+      expect(h.writes[0]).not.toHaveProperty(key)
+    }
+    expect(h.syncRecommendations).toHaveBeenCalledWith(franchiseId, [])
+  })
+
+  it('preserves existing artwork when the provider omits its images payload', async () => {
+    h.rows[0] = { ...h.rows[0] as object, artwork: existingArtwork }
+    h.getShow.mockResolvedValue({ ...show, images: undefined })
+    await refreshFranchiseEnrichment(franchiseId)
+    expect((h.writes[0]!.artwork as ArtworkGallery).logos).toEqual([existingLogo])
+  })
+
+  it('keeps ranked alternatives and upgrades duplicate URLs with fetched dimensions', async () => {
+    h.rows[0] = {
+      ...h.rows[0] as object,
+      artwork: {
+        ...existingArtwork,
+        landscapes: [{
+          url: 'https://image.tmdb.org/t/p/w1280/backdrop.jpg', source: 'tmdb',
+          width: null, height: null, language: null, score: null,
+        }],
+      },
+    }
+    await refreshFranchiseEnrichment(franchiseId)
+    const artwork = h.writes[0]!.artwork as ArtworkGallery
+    expect(artwork.landscapes).toHaveLength(1)
+    expect(artwork.landscapes[0]).toMatchObject({ width: 3840, height: 2160 })
+    expect(artwork.logos.map((image) => image.url)).toEqual([
+      'https://image.tmdb.org/t/p/w1280/logo.png', existingLogo.url,
+    ])
+  })
+
+  it('can explicitly repair a missing gallery even when metadata is still fresh', async () => {
+    h.rows[0] = {
+      ...h.rows[0] as object,
+      enrichment: { level: 'full', checkedAt: new Date().toISOString() },
+    }
+    expect(await refreshFranchiseEnrichment(franchiseId)).toBe(false)
+    expect(h.getShow).not.toHaveBeenCalled()
+    expect(await refreshFranchiseEnrichment(franchiseId, { force: true })).toBe(true)
+    expect((h.writes[0]!.artwork as ArtworkGallery).logos).toHaveLength(1)
+  })
+
+  it('does not replace a stored gallery when the provider no longer returns the show', async () => {
+    h.getShow.mockResolvedValue(null)
+    expect(await refreshFranchiseEnrichment(franchiseId, { force: true })).toBe(false)
+    expect(h.writes).toEqual([])
+    expect(h.syncRecommendations).not.toHaveBeenCalled()
+  })
+})

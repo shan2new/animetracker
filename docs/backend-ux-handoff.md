@@ -66,22 +66,12 @@ sheet without deriving history from notification text.
 
 ## 4. Explainable discovery
 
-`GET /me/discover?limit=20` returns source-native recommendations with:
-
-```jsonc
-{
-  "title": { "source": "anilist", "externalId": 123, "franchiseId": null,
-             "title": "…", "year": 2026, "images": { "portrait": "…", "landscape": "…" },
-             "score": 100 },
-  "because": { "franchiseId": "uuid", "title": "Bleach" },
-  "reason": "Because you completed Bleach",
-  "score": 125
-}
-```
-
-The backend excludes dropped sources and already-subscribed targets and caps one source franchise
-at three results. If `title.franchiseId` is null, call `POST /franchises/resolve` with its `source`
-and `externalId` only after selection; the response is a normal `FranchiseSummary`.
+Superseded (24 Sep 2026): `GET /me/discover` and `DiscoveryItem` are gone. Personal
+recommendations are `GET /me/recommendations` (ranked on the server, with an honest reason, a
+stable key and "Not interested" / "Mark as watched" feedback) — see **Recommended for you** in
+`docs/api-contract.md`. `POST /franchises/resolve` still turns a selected title with
+`franchiseId: null` into a normal `FranchiseSummary`, and now returns an existing show page without
+a provider call.
 
 ## 5. Franchise-first order and progress
 

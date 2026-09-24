@@ -49,7 +49,11 @@ landscape slot. The legacy `cover`/`banner` strings remain for older clients.
 `artwork` sits beside the best-pair `images` field on franchises, summaries and parts. It exposes
 ranked alternatives so iOS can choose portrait artwork for lists/share sheets and landscape art for
 hero, episode and horizontal-share layouts without URL guessing. Arrays are de-duplicated and
-capped at six; `logos` is populated when the linked catalogue has one.
+capped at six; `logos` is populated when the linked catalogue has one. Portrait and landscape
+galleries retain their highest-ranked textless candidate even when six higher-resolution titled
+images would otherwise crowd it out. A TMDB candidate with positive dimensions and a null
+language is textless key art; a URL-only legacy entry with missing dimensions/language is unknown,
+not a clean-art signal. Clients must not overlay another title onto an unclassified poster.
 
 ```jsonc
 {
@@ -291,20 +295,95 @@ AniList cannot be reached.
 }
 ```
 
-`GET /me/discover` wraps a related title with an auditable reason instead of a black-box label:
+A show page lists ten related titles ("More like this"). A `RelatedTitle` with `franchiseId: null`
+resolves through `POST /franchises/resolve` only after the user selects it. TMDB never lists
+Japanese animation there: AniList owns it, so its TMDB twin would be a second copy of an anime.
+
+### Recommended for you — `GET /me/recommendations`
+
+Personal, second-degree recommendations: the titles the catalogues' own "if you liked X" lists
+(AniList community recommendations, TMDB `/recommendations`) point at from the user's library,
+ranked on the server. Every show in the library casts one vote spread over its list, weighted by how
+engaged the user is with it (status, episodes watched, recency); several of the user's shows agreeing
+counts for more, then a Bayesian quality score, genre fit, a popularity damper and freshness apply.
+Ownership, progress and feedback are read live on every request.
 
 ```jsonc
+// GET /me/recommendations?limit=12   (1–30, default 12; anything else is a 400)
 {
-  "title": RelatedTitle,
-  "because": { "franchiseId": "uuid", "title": "Bleach" },
-  "reason": "Because you completed Bleach",
-  "score": 125
+  "items": [RecommendationItem],        // in shelf order — show them in this order
+  "generatedAt": 1790202494394          // ms epoch
+}
+
+// RecommendationItem
+{
+  "key": "anilist:20832",               // stable per series: `${source}:${externalId}`
+  "franchiseId": "uuid" | null,         // the show page when it exists (a tap opens it); see below
+  "source": "anilist" | "tmdb",
+  "externalId": 20832,                  // AniList: the series root (first season) media id · TMDB: show id
+  "title": "Overlord",                  // the series' name, never a "Season 4" title; shorten it like any title
+  "year": 2015 | null,
+  "images": { "portrait": "https://…" | null, "landscape": "https://…" | null },
+  "artwork": ArtworkGallery | null,     // the show page's gallery (logos, textless posters) when franchiseId != null
+  "format": "TV" | "ONA",               // series only: films, OVAs, specials, music and TV shorts are never served
+  "episodes": 95 | null,                // every main season once the show page exists, else the first season's
+  "airing": false,                      // a season is airing now
+  "genres": ["Action", "Fantasy"],      // up to four, catalogue-native names
+  "reason": {
+    "kind": "consensus" | "finished" | "watching" | "watched" | "planned" | "world",
+    "seeds": [{ "franchiseId": "uuid", "title": "That Time I Got Reincarnated as a Slime" }],
+    "count": 5                          // how many of the user's shows point at this title (>= seeds.length)
+  },
+  "score": 0.5747                       // relevance before diversification (debugging only; do not re-sort)
 }
 ```
 
-Dropped sources and already-subscribed targets are excluded. Results are capped at three per source
-franchise so one completed title cannot consume the whole feed. If `title.franchiseId` is null,
-send its `source` and `externalId` to `/franchises/resolve` only after the user selects it.
+- **Deterministic for (user, UTC calendar day).** The shelf rotates daily: a ±12% jitter reorders
+  near-ties, and the first four (visible) tiles are a seeded draw from the top eight in which
+  yesterday's four count ×0.6. The same user on the same UTC day always gets the same list.
+- **Never served:** anything the user owns — including other seasons of an owned franchise and
+  normalised-title twins across sources (the anime of a live-action show they have) — anything they
+  gave feedback on (matched by the key or by any id of the same series), films / OVAs / specials /
+  music / TV shorts, reality / talk / news / soap TV, unreleased or adult titles, and Japanese
+  animation from TMDB (AniList owns it).
+- **Shape of the shelf:** at most two titles whose main reason is the same show; at most one title
+  from the same universe as a show the user has (`world`); when the library has TV shows, a TV quota
+  (the library's TV share, clamped to 20–50%) with at least one TV title in the first four.
+- **Reasons.** `seeds` are the user's shows behind the title — display titles (the short form the
+  apps print: "Re:ZERO", never "Re:ZERO -Starting Life in Another World-") — strongest vote first.
+  A single-show reason (and `world`) carries one; a `consensus` (`count` ≥ 2) carries up to three,
+  so the client can choose which to name by Today's state (a Watching show on a new-episode day, a
+  finished one when caught up). A Planned show with no progress never comes first while another
+  show qualifies. The client writes the sentence:
+
+  | kind | copy |
+  |---|---|
+  | `consensus`, count ≥ 3 | "Like {A} and {count − 1} more of yours" |
+  | `consensus`, count 2 | "Like {A} and {B}" |
+  | `finished` | "Because you finished {A}" (the show is Watched) |
+  | `watching` | "Because you're watching {A}" (Watching, or Planned with real progress) |
+  | `watched` | "Because you watched {A}" (Paused/Planned, fully watched, not airing) |
+  | `planned` | "Like {A}, on your list" |
+  | `world` | "From the world of {A}" |
+- **`franchiseId: null`** means the show page is being built: every served title without one is
+  queued in the background, and a nightly job builds every user's top 12. A tap on such a tile may
+  call `POST /franchises/resolve { source, externalId }`, which returns an existing page at once and
+  otherwise groups it (3–15 s).
+- **Empty** `items` means there is nothing to recommend yet (an empty library, or lists still being
+  fetched for newly added shows). A `404` from an older server means the feature is absent: hide the
+  shelf.
+
+```jsonc
+// POST /me/recommendations/feedback   → 204   ("Not interested" / "Mark as watched")
+{ "key": "anilist:20832", "kind": "dismissed" | "seen" }
+// DELETE /me/recommendations/feedback → 204   (undo either)
+{ "key": "anilist:20832" }
+```
+
+Both verdicts hide the title (by its key or any id of its series) until undone. `seen` only hides
+it: to record the show as watched, also add it to the library. Three dismissals whose main reason is
+the same show halve that show's weight. The key must be `anilist:<id>` or `tmdb:<id>`; an unknown
+field, kind or key shape is a `400`. Feedback is user data and is erased by `DELETE /me`.
 
 - AniList tags marked as general spoilers, media spoilers, or adult are excluded. TMDB has no
   spoiler bit, so only genres and a conservative allow-list of broad keywords become themes.
@@ -419,7 +498,7 @@ Detail do a current bounded lookup. Use the batch endpoint to warm a visible she
 | GET | `/health` | — | `{ ok: true }` |
 | GET | `/franchises/trending?limit=30&country=IN` | — | `FranchiseListResponse`; supports the same `source`, `year`, `status`, `theme`, `providerId` filters as Search |
 | GET | `/search?q=&exact=1&source=anilist&year=2026&status=RELEASING&theme=Drama&providerId=8&country=IN` | — | `FranchiseListResponse` — empty `q` = trending. Indexed aliases include English, Romaji, native titles and synonyms. One- or two-character typeahead is local-only. A genuine miss gets one short AniList + TMDB fan-out and bounded materialization. Exact-title hits synchronously refresh immediate `upcoming`, trailer and regional facts, then queue richer research. `exact=1` disables spell correction. All filters are optional; `providerId` requires a query/saved country |
-| POST | `/franchises/resolve` | `{ source: "anilist" \| "tmdb", externalId }` | Materializes a `RelatedTitle` selected by the user and returns its `FranchiseSummary`; `422` when identity/source policy rejects it |
+| POST | `/franchises/resolve` | `{ source: "anilist" \| "tmdb", externalId }` | Returns the `FranchiseSummary` of a `RelatedTitle` / `RecommendationItem` the user selected: the existing show page at once when the title is already materialised (no provider call), else it materialises it; `422` when identity/source policy rejects it |
 | GET | `/franchises/:id?country=IN` | — | `Franchise`; `country` is optional/case-insensitive, falls back to saved preference, selects `audience.contentRating`, and attaches current `availability` |
 | GET | `/franchises/:id/announcements?limit=20` | — | `{ observations: AnnouncementObservation[] }` newest-first, with immutable evidence snapshots |
 | GET | `/franchises/:id/watch-providers?country=IN` | — | `WatchAvailability`; `country` is case-insensitive and may be omitted after saving a preference |
@@ -427,7 +506,9 @@ Detail do a current bounded lookup. Use the batch endpoint to warm a visible she
 | GET | `/me/preferences` | — | `{ country, language, providerIds, updatedAt }` |
 | PUT | `/me/preferences` | `{ country?: "IN" \| null, language?, providerIds? }` | Saved preference object; omitted fields are preserved |
 | GET | `/me/library?country=IN` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }`; country falls back to preferences and adds cached availability |
-| GET | `/me/discover?limit=20` | — | `{ items: DiscoveryItem[] }`; source-native recommendations with score plus `because`, `reason`, and optional materialized `franchiseId` |
+| GET | `/me/recommendations?limit=12` | — | `{ items: RecommendationItem[], generatedAt }` — see **Recommended for you**; `limit` 1–30 |
+| POST | `/me/recommendations/feedback` | `{ key, kind: "dismissed" \| "seen" }` | `204` |
+| DELETE | `/me/recommendations/feedback` | `{ key }` | `204` (undo) |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |
 | PATCH | `/me/subscriptions/:franchiseId` | `{ status }` | `{ ok: true }` |
 | DELETE | `/me/subscriptions/:franchiseId` | — | `{ ok: true }` |
@@ -444,7 +525,7 @@ Detail do a current bounded lookup. Use the batch endpoint to warm a visible she
 route in this API that cannot be undone, so its semantics are exact:
 
 - **Erased, not deactivated.** In one transaction: the caller's `notifications`, `subscriptions`,
-  `progress`, and `user_preferences` rows, then the `users` row itself. Every user-owned table is deleted explicitly
+  `progress`, `user_preferences` and `recommendation_feedback` rows, then the `users` row itself. Every user-owned table is deleted explicitly
   rather than left to the `ON DELETE CASCADE` each foreign key declares — the cascade is real and
   `me.account.test.ts` asserts it, but a database restored from a dump, or a table added later
   without one, must not be able to turn "delete my account" into "orphan my rows".
