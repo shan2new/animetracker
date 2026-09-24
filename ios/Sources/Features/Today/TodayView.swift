@@ -158,7 +158,11 @@ struct TodayView: View {
     var body: some View {
         GeometryReader { geo in
             let topInset = geo.safeAreaInsets.top
-            let screenH = geo.size.height + topInset + geo.safeAreaInsets.bottom
+            // The WINDOW's height, as Detail sizes its billboard — never the tab content's, which
+            // changes when the tab bar arrives at the end of the launch: the 0.72 hero then
+            // shrank by ~41 pt under the splash's dissolve and the capsule the user came for
+            // slid up into place (review, 25 Sep).
+            let screenH = ThemeMetrics.windowHeight
             ZStack(alignment: .top) {
                 ThemeColor.canvas.ignoresSafeArea()
                 // The ambient wash — the one root spec every tab draws. On a hero day the hero
