@@ -32,12 +32,16 @@ struct SignInView: View {
         ZStack {
             ThemeColor.canvas.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                Spacer(minLength: ThemeSpace.x8)
+            // The identity stands where the launch film lands (`LaunchLockup`, on the upper
+            // third), at every text size the app allows, so a signed-out launch hands the ribbon to
+            // this screen without a seam: only the line under the name and the button arrive.
+            GeometryReader { geo in
                 identity
-                // Two spacers below, one above: the identity lands on the upper third rather than
-                // dead centre. A title card is never centred on the frame.
-                Spacer(minLength: ThemeSpace.x8)
+                    .padding(.top, LaunchLockup.markFrame(in: geo.size).minY)
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            }
+            .ignoresSafeArea()
+            VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 action
             }
@@ -50,30 +54,19 @@ struct SignInView: View {
 
     private var identity: some View {
         VStack(spacing: 0) {
-            // The icon's ribbon, lit, then the name with its coral full stop.
-            PreviouslyMark(width: 56, lit: true)
-                .background {
-                    // The screen's one light source, centred on the one object it lights.
-                    RadialGradient(colors: [ThemeColor.accent.opacity(0.20),
-                                            ThemeColor.accent.opacity(0.05),
-                                            .clear],
-                                   center: .center, startRadius: 0, endRadius: 260)
-                        .frame(width: 520, height: 520)
-                        .blur(radius: 24)
-                        // Rasterised once: a blur left as a layer filter re-runs every frame.
-                        .drawingGroup()
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                }
-            BrandWord(style: ThemeType.displayXL)
-                .padding(.top, ThemeSpace.x5)
+            // The icon's ribbon, lit, under the screen's one light; then the name with its coral
+            // full stop. The same views the launch film lands on (`LaunchLockup`).
+            LaunchLockup.mark
+                .background { LaunchLockup.Bloom() }
+            LaunchLockup.name
+                .padding(.top, LaunchLockup.nameGap)
             Text("Know what changed. Record what you watched.")
                 .type(ThemeType.heroMeta)
                 .foregroundStyle(ThemeColor.textSecondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, ThemeMetrics.labelGap)
-                .padding(.horizontal, isAX ? 0 : ThemeSpace.x6)
+                .padding(.horizontal, isAX ? ThemeSpace.x6 : ThemeSpace.x6 * 2)
         }
         .frame(maxWidth: .infinity)
     }

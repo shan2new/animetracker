@@ -100,6 +100,9 @@ struct RibbonFill: View {
     /// Where that drawing light is along the ribbon (0 head → 1 foot), or `nil` for none.
     var light: Double? = nil
 
+    /// How much of the flat mark's shade the lit mark keeps.
+    private var shade: Double { 1 - 0.55 * material }
+
     var body: some View {
         RibbonShape()
             .fill(LinearGradient(stops: [
@@ -108,17 +111,20 @@ struct RibbonFill: View {
                 .init(color: MarkGeometry.rampFoot, location: 1),
             ], startPoint: .topLeading, endPoint: .bottomTrailing))
             .overlay {
+                // Lit (the launch, the gate), the shade stops lift: the mark is the subject there,
+                // lit like art, and at full shade it landed 17–26 % darker than the icon the user
+                // had just tapped — ochre and rust against gold and coral (review, 25 Sep).
                 RibbonShape().fill(LinearGradient(stops: [
                     .init(color: .white.opacity(0.09), location: 0),
                     .init(color: .clear, location: 0.35),
-                    .init(color: .black.opacity(0.22), location: 1),
+                    .init(color: .black.opacity(0.22 * shade), location: 1),
                 ], startPoint: .top, endPoint: .bottom))
             }
             .overlay {
                 RibbonShape().fill(LinearGradient(stops: [
-                    .init(color: .black.opacity(0.08), location: 0),
+                    .init(color: .black.opacity(0.08 * shade), location: 0),
                     .init(color: .white.opacity(0.09), location: 0.35),
-                    .init(color: .black.opacity(0.18), location: 1),
+                    .init(color: .black.opacity(0.18 * shade), location: 1),
                 ], startPoint: .leading, endPoint: .trailing))
             }
             .overlay {

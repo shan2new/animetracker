@@ -6,10 +6,10 @@ struct RootView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The cold launch: the icon's ribbon drawn by light, then the app coming through it.
+    /// The cold launch: a short brand film (`SplashView`), then the app.
     @State private var launch = LaunchHandoff()
     @State private var launchDone = false
-    /// The app has started emerging beneath the ident.
+    /// The app has started emerging beneath the splash.
     @State private var emerged = false
 
     var body: some View {
@@ -33,9 +33,13 @@ struct RootView: View {
             // No scale on the whole tree (review i5): 0.96 → 1 on `uiSettle` was a full-screen
             // offscreen pass started in the frame the ident began leaving, and it froze the exit
             // at 80 % for half a second. The ident's ground IS the reveal.
+            // Under the splash the app is built but not there: VoiceOver may not find it (the
+            // splash takes every touch, so a first activation would die silently).
+            .accessibilityHidden(!launchDone && !launch.emerging)
 
             if !launchDone {
-                LaunchIdent(
+                SplashView(
+                    signedIn: auth.isSignedIn,
                     onLeaving: {
                         // The surface is the user's to read from here: the page-in (rise only —
                         // this emergence is the fade), the tab bar and the recap clock.
@@ -285,6 +289,8 @@ struct MainTabView: View {
             // A tapped episode alert opens its show — on Today, above whatever was there.
             .onChange(of: appModel.pendingOpen, initial: true) { _, id in
                 guard let id else { return }
+                // Opened FOR this show: the launch film gives way at once.
+                if let launch, !launch.finished { launch.intent = true }
                 appModel.pendingOpen = nil
                 selectedTab = .today
                 paths[.today] = NavigationPath([DetailRoute(id: id, zoomID: "alert/\(id)")])

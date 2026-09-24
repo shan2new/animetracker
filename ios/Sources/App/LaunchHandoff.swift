@@ -15,6 +15,8 @@ final class LaunchHandoff {
     var phase: Phase = .holding
     /// Auth has answered (session or none), so the screen under the ident is the right one.
     var authReady = false
+    /// The launch was for somewhere — a tapped episode alert, a link: the film gives way at once.
+    var intent = false
     /// Today's billboard has its sharp picture (or there is none to wait for), so the app can
     /// emerge as television rather than as a colour.
     var artReady = false

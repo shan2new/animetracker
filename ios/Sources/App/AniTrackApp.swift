@@ -10,6 +10,7 @@ struct AniTrackApp: App {
     @State private var appModel: AppModel
 
     init() {
+        SplashTrace.mark("app-init")
         #if DEBUG
         // A regex that fails to compile fails loudly, not silently (review i3).
         assert(CatalogPerson(source: .tmdb, externalId: 0, name: "n", role: "A 'B' C", image: nil).displayRole == "A C")

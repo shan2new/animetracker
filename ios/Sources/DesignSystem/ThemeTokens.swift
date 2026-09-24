@@ -538,6 +538,9 @@ struct TypeToken {
 enum ThemeType {
     static let brandWordmark = TypeToken(font: .custom("Outfit-SemiBold", size: 20, relativeTo: .headline), tracking: -0.30)
     static let displayXL = TypeToken(font: .custom("Outfit-Bold", size: 34, relativeTo: .largeTitle), tracking: -0.80)
+    /// The name at display size, in the wordmark's own weight: where the brand is the subject (the
+    /// launch and the sign-in gate), "Previously." is SemiBold like the header's `Wordmark`.
+    static let brandDisplay = TypeToken(font: .custom("Outfit-SemiBold", size: 34, relativeTo: .largeTitle), tracking: -0.60)
     static let displayL = TypeToken(font: .custom("Outfit-Bold", size: 28, relativeTo: .title), tracking: -0.60)
     static let showTitleL = TypeToken(font: .custom("Outfit-SemiBold", size: 22, relativeTo: .title2), tracking: -0.35)
     static let showTitleM = TypeToken(font: .custom("Outfit-SemiBold", size: 17, relativeTo: .headline), tracking: -0.20)

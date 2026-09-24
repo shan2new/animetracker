@@ -824,67 +824,56 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   Sea"); `EpisodeStill` falls back still → landscape art → cover under the number. Every optimistic
   progress copy goes through `FranchisePart.withProgress` — the hand-built copy it replaced dropped
   `airings`, so one local mark took a show off the calendar until the next reload.
-- **The launch is the icon's ribbon, drawn by light, then the app coming through it (4 Sep
-  rebuild, settled 5 Sep).** The launch screen is the bare canvas (`UILaunchScreen` =
-  `LaunchBackground` = `ThemeColor.canvas`, no image: an asset-catalogue `UIImageName` still never
-  rendered on the iOS 27 sim, so nothing may depend on one). `App/LaunchIdent.swift` owns the
-  entrance: on the first live frame a travelling light draws the ribbon (120 pt, a third of the
-  screen, centre 0.44 × height, `PreviouslyMark`'s `lit` material — ramp, rim, near/far edges)
-  head to foot; its pool of warm light (`RibbonFill(castShadow:)`, a static blurred layer) arrives
-  as it completes; the coral full stop lands with one pulse; the composition HOLDS, COMPLETE AND
-  STILL; once `LaunchHandoff.authReady` the ident pushes through — the composition grows to 1.10
-  and dissolves over 0.22 s, the ground dissolving off the app beneath over 0.40 s. The app is
-  never scaled or faded (review i5): a transform or an opacity ramp over the whole tree is a
-  full-screen offscreen pass started in the frame the ident begins leaving, and it froze the exit
-  at 80 % for half a second — **the ident's GROUND is the reveal**, so its curve is a smoothstep,
-  never the ease-in the composition uses (an ease-in ground holds full canvas for two thirds of
-  its run and then drops, which is a CUT to the app with a smear on the front of it).
-  `phase == .leaving` sets `surfaceReady` (the
-  launch tab's page-in only rises — `pageInTransition(fadeIn: launch.finished)` — and the floating
-  tab bar, which the system composites above any overlay, waits on `launch.emerging`). Nothing
-  flies into the header; the header draws its own `Wordmark` from the first frame. No stage
-  light, tagline, flash, grain or haptic; the full stop is `ThemeColor.brandPeriod` everywhere the
-  name is set (`BrandWord`). **Every value is a pure function of live time** (`IdentClock`: frames
-  actually presented, stalls > 250 ms cut out — a merely slow frame is not, or the motion plays in
-  stepped slow motion; `IdentFrame`: the spring step-response, a smoothstep and an ease-in as
-  functions): an implicit animation started in `onAppear` is folded into the first frame and never
-  plays, and a `Task.sleep` counts wall time while the main thread is still busy. **But the cut is
-  BUDGETED at 0.40 s total (`stallBudget`, 7 Sep)** — the clock protects the MOTION from a stall,
-  it may not hold the PICTURE hostage to one. Unbudgeted, a launch whose first second is all
-  stall (the app builds its whole tree under the ident, which is what the hold is FOR) froze the
-  ribbon at nothing drawn and showed a bare canvas until the wall ceiling fired. Past the budget
-  wall time drives, so a starved launch plays the drawing in chunky steps instead of not playing.
-  **Nothing heavy runs per frame:** the ribbon is rasterised once (the reveal is a canvas-coloured
-  cover sliding off it, not a mask; the light is one gradient band), and every exit is a layer
-  opacity or a transform. **A blurred layer handed to `drawingGroup()` must be PADDED first**
-  (`.blur(r).padding(3r).drawingGroup().padding(-3r)`, `PreviouslyMark`): the group rasterises the
-  view's BOUNDS, so an unpadded blur is cut off square — the 5 Sep perf pass's shadow rule drew
-  the ribbon's pool of light as a rectangle of lifted canvas with visible edges and put a glowing
-  BOX behind the brand's full stop (seen at full resolution, 7 Sep; invisible in a thumbnail).
-  Beats (live s): preroll 0.14, draw 0.60 (ease-in-out), cast +0.45→0.85, stop at 0.52 (0.40/0.72)
-  with a 0.45 pulse, then `stillFor` 0.20 — **the hold is stated as `preroll + beadAt + bloomFor +
-  stillFor` (1.31) so the mark always stands FINISHED before anything moves**; review passes had
-  shaved it to 0.96, which is 140 ms before the pulse ends, and the exit read as a cut away from
-  something still arriving. `artGrace` 0.15 is all the extra the hero's picture gets (`artReady`
-  never lands inside a cold launch — the art is a network away — and a flat 1.6 s patience made
-  every warm launch 0.96 and every cold one 1.6, no two the same length). Exit 0.40 (composition
-  0.55 of it, ground lagging 0.06); `wallCeiling` 2.8. The in-app mark is the icon's own
-  geometry (`MarkGeometry`: 800/376 aspect, 0.40 notch, tangent-arc corners; header 11 pt,
-  colophon 9 pt, gate 56 pt lit); the old bookmark-with-slot, `finish: .hero`, the Metal shaders
-  and the flight-to-header (tried and retired the same day: a small object shrinking into a corner
-  reads as a window minimising) are gone. Reduce Motion: fade in, hold, crossfade, and NO art wait.
-  **The ident cannot be filmed (7 Sep).** `simctl io recordVideo` records a black screen through
-  the whole ident while the app's own clock reports a clean 60 fps draw — two instruments against
-  one, and the frame-identical black in the recording is the recorder, not the app; a screenshot
-  costs the app ~0.5 s of stall, so a burst photographs a launch it is itself deforming (that is
-  also why `capture.sh` was reporting a "black launch" this whole time). Photograph it instead:
-  `-identFreeze <seconds>` holds the clock at one moment of the ident (past the hold it clears the
-  ident to leave and stops a hair short of `.done`, so the exit stands still with the app emerging
-  beneath), `-identTrace 1` prints one line per presented frame (wall, gap, live t, reveal, the
-  gates) — and `scratchpad/launch/beats.py <name> <t,…>` is one cold launch per beat, one exact
-  frame each. `capture.sh` and the burst are kept only for what happens AFTER the ident.
-- Debug-only launch args: `-identTrace 1` / `-identFreeze <s>` instrument and photograph the launch
-  ident (see the launch bullet — it cannot be filmed); `-openDetail <franchiseId>` lands on a show page (the alert-tap route);
+- **The launch is a short film, "Align" (25 Sep).** The launch screen is the bare canvas
+  (`UILaunchScreen` = `LaunchBackground` = `ThemeColor.canvas`, no image). `SplashView`
+  (App/Splash/SplashStage.swift) mounts `SplashStageView` over the app from the first frame; the film
+  is `SplashAlignScript` + `SplashAlign.metal`, drawn by `SplashGlassRenderer` on a thread of its own
+  from a plain `CADisplayLink` — NOT `CAMetalDisplayLink`, which only fires while the window is being
+  composited for some other reason: on a signed-out launch (the app idle under the film) it fell
+  silent 0.4 s in, and the film froze and then jumped to its end. The film: five layers of coloured
+  glass in the mark's shape (gold, amber, coral, rose, violet) fanned in depth; one slow camera move
+  brings them into register, each gel's colour sliding into the icon's ramp; the registered sheet IS
+  the mark and crossfades into the sign-in gate's own lit mark; the gate's light comes up and
+  "Previously." (`ThemeType.brandDisplay`, SemiBold) surfaces. Lands at 1.90 s, the finished lockup
+  still from ~1.62 s. The only motion is the camera's. Rejected on the way, in the user's words: films
+  built on show art ("heavily centered on hero which we will not have most of the time"), a glossy
+  bead ("feels like something from 2004"), a soft glow ("utter trash"), random spectral bands (Silk:
+  "way too random… transitions to what?"), one silk ribbon on an S ("feels like a Snake"); brand
+  films "gimmicky and overboard"; Lens/Glass "boring". The rejected films are still in the tree
+  (`-splashDirection`) for comparison.
+  **One lockup for the launch and the gate (`LaunchLockup`):** the lit 56-pt mark, the name under it,
+  the bloom. The film lands on PICTURES rendered from the gate's own SwiftUI views
+  (`LaunchLockup.images`, redrawn as 8-bit premultiplied sRGB — `ImageRenderer` can hand back a
+  half-float picture Metal's texture loader refuses — and cached on disk per scale, text size and
+  build, so from the second launch they are in the first frame; bump `design` in the cache key when
+  any of those views changes) at `markFrame` (centre 0.36 × height signed out, where the gate draws
+  it; 0.42 signed in). A signed-out launch hands the mark to the gate with no seam — only the tagline
+  and the button arrive — at every text size (the gate uses the same geometry; the film's name is
+  capped at AX2 like the app). Shaders that imitate a SwiftUI `LinearGradient(.topLeading →
+  .bottomTrailing)` must lay it out in the shape's UNIT square, not in points (on the tall ribbon the
+  two differ by a third of the ramp).
+  **The hand-off:** the stage leaves only when the landing has been SEEN (on a device the renderer's
+  clock follows each drawable's presented handler and rewinds past a display stall; the simulator SDK
+  has no presented handler, so there GPU completion stands in and the rewind is off), never before
+  auth answers, at most 0.35 s past the landing for Today's art, ceiling 3.2 s. A tap skips once auth
+  has answered; a launch FOR a show (`LaunchHandoff.intent`, set on the pending-open route) gives way
+  at once. The exit is two-stage: inside the film the lockup goes to plain canvas (0.18 s), then the
+  canvas layer lifts off the app (0.08–0.38 s) — never scaled (scaled, its edges uncovered a
+  flickering rim of the app) and never printed over Today. The stage keeps its own canvas until the
+  film's first frame is on screen (clearing it at build flashed the gate for a frame). The app is
+  `accessibilityHidden` until it emerges; `finish()` posts `.screenChanged`. Under Reduce Motion,
+  with VoiceOver running, on a hot phone or without Metal, `SplashLockup` fades the cached lockup up,
+  holds 0.6 s and dissolves; Low Power Mode holds the film at 60 Hz. Every value is a pure function of
+  film time (live time from the link's target timestamps, stalls > 0.25 s cut out, 0.4 s in all).
+  **Today sizes its billboard from `ThemeMetrics.windowHeight`**, never the tab content's height:
+  that shrank when the tab bar arrived at the end of the launch and the 0.72 hero slid ~41 pt under
+  the dissolve. Films are explored in a macOS Metal harness (scratchpad) that renders the same shader
+  and script in seconds; the review rig films three simulators (SE / 14 Pro / Pro Max, signed in and
+  out) frame-exact with `-splashFilm 1` and live with `simctl io recordVideo`.
+- Debug-only launch args: `-splashTrace 1` (milestones since process start, one line per frame),
+  `-splashFreeze <s>`, `-splashFilm 1` (the film frame-exact at 30 fps to Documents/splash-film/),
+  `-splashReduceMotion 1` / `-splashVoiceOver 1` (force those paths), `-splashDumpPictures 1`
+  (the lockup's pictures to Documents/splash-pictures/) and `-splashDirection <name>`; `-openDetail <franchiseId>` lands on a show page (the alert-tap route);
   on it, `-detailAnchor trailers|people|related|watch` scrolls to a catalogue shelf,
   `-detailTrailer 1` opens the first trailer's sheet and `-detailOpenRelated N` opens the Nth
   related title — the way to photograph the show page when the simulator cannot be touched (on
