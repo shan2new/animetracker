@@ -502,6 +502,8 @@ enum DetailProgressRegression {
                 case .franchiseProgress(let id, _, _, _)?, .progress(let id, _, _)?, .status(let id, _)?,
                      .subscribe(let id, _, _)?, .unsubscribe(let id, _)?:
                     return id == untracked.id
+                case .comment(_, _, _, _, let franchiseId, _)?:
+                    return franchiseId == untracked.id
                 case nil:
                     return false
                 }

@@ -2,8 +2,8 @@
 """Film Search's focus transition and score it from the app's own clock.
 Usage: focus_film.py <tag> --scenario cycles|warm|cold [--args "..."] [--keep-frames]
   cycles   launch on Search, three focus / cancel cycles (the steady state)
-  warm     launch on Today, rest 4 s (the keyboard warm-up runs), Search tab, focus / cancel × 2
-  cold     launch on Today with the warm-up OFF, Search tab at once, focus / cancel × 2
+  warm     launch on Today (the feed), rest 4 s (the keyboard warm-up runs), Search tab, focus / cancel × 2
+  cold     launch on Today (the feed) with the warm-up OFF, Search tab at once, focus / cancel × 2
 
 Every tap is VERIFIED against the screen (the field's position says whether it is focused; the
 driver waits for the app before the first tap and never taps blind — an earlier version tapped a
@@ -74,18 +74,27 @@ def wait_ready(state, timeout=25):
         last[0] = im
         return stable
     return wait_for(ok, timeout, every=0.5, what=f'field {state}')
+def probe_marks(name):
+    """The probe's marks called `name` so far (perf.jsonl is flushed about once a second)."""
+    try:
+        with open(perf_path) as f:
+            return [json.loads(l) for l in f if l.strip() and f'"name":"{name}"' in l]
+    except (OSError, ValueError):
+        return []
 def wait_today(timeout=25):
-    """Today is up: a screen brighter than the ident's canvas, with the tab bar drawn, and stable
-    (the billboard's slow drift is under the threshold)."""
+    """Today is up: the feed's own `feed-ready` mark (FeedView.markArtReady — the first post's media
+    or avatar decoded, or the feed settled into a state with no post) is in the probe's log, then
+    the screen has stopped changing. The ident's canvas and the feed's are the same black, so the
+    old brightness heuristic could not tell a launch from a landed feed; the app's own mark can."""
+    ready = wait_for(lambda: bool(probe_marks('feed-ready')), timeout, every=0.25, what='the feed-ready mark')
+    if ready is None: return None
     last = [None]
-    def ok():
+    def stable():
         im = shot()
-        bright = ImageStat.Stat(im).mean[0] > 18
-        tabbar = mean(im, (40, 800, 353, 830)) > mean(im, (0, 760, 393, 780)) - 40   # the pill is not darker than the content above it
-        stable = last[0] is not None and ImageStat.Stat(ImageChops.difference(last[0], im)).mean[0] < 0.8
+        same = last[0] is not None and ImageStat.Stat(ImageChops.difference(last[0], im)).mean[0] < 0.8
         last[0] = im
-        return bright and tabbar and stable
-    return wait_for(ok, timeout, every=0.5, what='Today')
+        return same
+    return wait_for(stable, 6, every=0.4, what='the feed to settle')
 
 # ---- the run
 REANALYZE = '--reanalyze' in sys.argv

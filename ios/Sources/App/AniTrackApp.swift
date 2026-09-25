@@ -30,7 +30,11 @@ struct AniTrackApp: App {
         // Delegates must be installed before launch completes, or an alert arriving while the
         // app is open is dropped without ever being presented.
         EpisodeNotifications.shared.registerForegroundPresenter()
-        EpisodeNotifications.shared.onOpen = { [weak model] id in model?.pendingOpen = id }
+        // A show goes through `pendingOpen` (its handler is unchanged); a post or a thread — a
+        // feed reminder — through the typed `pendingRoute`.
+        EpisodeNotifications.shared.onOpen = { [weak model] route in
+            if case .show(let id) = route { model?.pendingOpen = id } else { model?.pendingRoute = route }
+        }
         #if DEBUG
         // `-openDetail <franchiseId>` (DEBUG, like `-openTab`): land on a show page for a capture,
         // through the same route a tapped episode alert takes.

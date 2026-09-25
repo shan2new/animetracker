@@ -133,6 +133,83 @@ enum TemporalCopy {
             : Formatting.fmtFullDate(ts, anchor: anchor)
     }
 
+    // MARK: - The feed
+
+    /// X's stamp on a post or a reply: "now", "5m", "2h", then "3d" for the past week, then the date
+    /// ("15 Jun"), with the year once it is not this one ("15 Jun 2025"). A DATE-ONLY fact never gets
+    /// minutes or hours (its clock is not a fact): "Today", then days, then the date, all read in its
+    /// own UTC day. Nothing is stamped in the FUTURE: news cannot have happened after now, so an
+    /// instant ahead of the device's clock (skew, or a publisher's day ahead of ours) is "now", and a
+    /// date-only fact dated ahead of today (a JST publisher's "tomorrow") is "Today" — never "-1d".
+    /// Words from `Copy.Feed`.
+    static func feedStamp(_ at: Int64, dateOnly: Bool, now: Int64) -> String {
+        let anchor: Formatting.TimeAnchor = dateOnly ? .utcDate : .local
+        if !dateOnly {
+            let minutes = max(0, now - at) / Formatting.minuteMs
+            if minutes < 1 { return Copy.Feed.stampNow }
+            if minutes < 60 { return Copy.Feed.stampMinutes(Int(minutes)) }
+            let hours = minutes / 60
+            if hours < 24 { return Copy.Feed.stampHours(Int(hours)) }
+        }
+        let days = Formatting.dayDiff(ts: at, now: now, anchor: anchor)
+        if days >= 0 { return Copy.Feed.stampToday }
+        if days > -7 { return Copy.Feed.stampDays(-days) }
+        return Formatting.formatted(at, skeleton: sameYear(at, now, anchor) ? "dMMM" : "dMMMyyyy", anchor: anchor)
+    }
+
+    /// The "when" inside a premiere headline, lower case where it is a word: "today", "tomorrow",
+    /// "this Friday" (2–6 days out), else the date with its weekday ("Friday 3 October", and the year
+    /// once it is not this one). Read in the premiere's own calendar (`FeedPremiere.anchor`), so a
+    /// date-only premiere never moves a day east of UTC+7.
+    ///
+    /// A premiere whose day has PASSED (`premiereHasPassed`) reads in the past, for
+    /// `Copy.Feed.headlinePremiered`: "yesterday", the weekday within the week ("Tuesday", the
+    /// `aired` ladder's), else the same dated form. The server drops a research post once its
+    /// installment airs, but its sync runs hourly and a saved or opened post composes by id — and
+    /// "premieres Wednesday 24 September" printed two days after it did was a lie.
+    static func premiereWhen(_ at: Int64, anchor: Formatting.TimeAnchor, now: Int64) -> String {
+        switch Formatting.dayDiff(ts: at, now: now, anchor: anchor) {
+        case 0: return Copy.Feed.premieresToday
+        case 1: return Copy.Feed.premieresTomorrow
+        case 2...6: return Copy.Feed.premieresThis(Formatting.fmtDayLong(ts: at, now: now, anchor: anchor))
+        case -1: return Copy.Feed.premieredYesterday
+        case -6 ... -2: return Formatting.fmtDayLong(ts: at, now: now, anchor: anchor)
+        default:
+            return Formatting.formatted(at, skeleton: sameYear(at, now, anchor) ? "EEEEdMMMM" : "EEEEdMMMMyyyy",
+                                        anchor: anchor)
+        }
+    }
+
+    /// The premiere's day is behind today (read in its own calendar): the headline says
+    /// "premiered", and no "Premieres …" line is added to a sentence.
+    static func premiereHasPassed(_ at: Int64, anchor: Formatting.TimeAnchor, now: Int64) -> Bool {
+        Formatting.dayDiff(ts: at, now: now, anchor: anchor) < 0
+    }
+
+    /// The previous visit as a phrase for "You’ve seen everything new since …": "this morning" /
+    /// "this afternoon" / "this evening" (the same day, by the hour the visit began), "yesterday",
+    /// the weekday within the week ("Tuesday"), else the date ("12 Sep", with the year once it is
+    /// not this one). A visit is a real instant, read in the device's calendar.
+    static func sinceVisit(_ at: Int64, now: Int64) -> String {
+        switch Formatting.dayDiff(ts: at, now: now, anchor: .local) {
+        case 0:
+            let hour = Formatting.localParts(at, anchor: .local).hour
+            if hour < 12 { return Copy.Feed.sinceMorning }
+            return hour < 17 ? Copy.Feed.sinceAfternoon : Copy.Feed.sinceEvening
+        case -1:
+            return Copy.Feed.sinceYesterday
+        case -6 ... -2:
+            return Formatting.formatted(at, skeleton: "EEEE", anchor: .local)
+        default:
+            return Formatting.formatted(at, skeleton: sameYear(at, now, .local) ? "dMMM" : "dMMMyyyy", anchor: .local)
+        }
+    }
+
+    /// Whether `ts` (read in `anchor`) falls in the device's current year.
+    private static func sameYear(_ ts: Int64, _ now: Int64, _ anchor: Formatting.TimeAnchor) -> Bool {
+        Formatting.localParts(ts, anchor: anchor).y == Formatting.localParts(now, anchor: .local).y
+    }
+
     /// A date range — "24 May – 29 Jul", "10 Dec 2024 – 3 Feb 2025". One formatter, so the two ends
     /// agree with each other and with `dateWord`, and the year is never implied away inside a form.
     ///

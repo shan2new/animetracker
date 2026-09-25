@@ -129,6 +129,11 @@ final class SyncCenter {
     /// every request fails — accepted: claiming the user is offline when they are not is the
     /// worse lie, and the server-side copy is the honest fallback.
     private(set) var isOnline: Bool = true
+    /// Low Data Mode is on for the current path. Story art and post media step down a size and
+    /// neighbour prefetch stops (iD9).
+    private(set) var isConstrained: Bool = false
+    /// The current path is expensive (cellular, a personal hotspot) — the same step down.
+    private(set) var isExpensive: Bool = false
 
     private let monitor = NWPathMonitor()
     private var monitoring = false
@@ -139,7 +144,15 @@ final class SyncCenter {
         monitoring = true
         monitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
-            Task { @MainActor in self?.isOnline = satisfied }
+            let constrained = path.isConstrained
+            let expensive = path.isExpensive
+            Task { @MainActor in
+                guard let self else { return }
+                // Written only when they change: every body that reads one re-evaluates.
+                if self.isOnline != satisfied { self.isOnline = satisfied }
+                if self.isConstrained != constrained { self.isConstrained = constrained }
+                if self.isExpensive != expensive { self.isExpensive = expensive }
+            }
         }
         monitor.start(queue: DispatchQueue(label: "previously.reachability"))
     }
@@ -163,6 +176,22 @@ final class SyncCenter {
     /// it weakly, so it is wiring (like `signals`), not session state.
     var replay: (@MainActor (WriteIntent) async -> Void)?
 
+    /// No failed change runs while set — not a Retry, not a restored intent, not the comment
+    /// gate's `replayProgress`: every row reads as having nothing to run (`effectiveRetry` → nil),
+    /// so the banner and Profile offer Discard only. Raised for an account deletion
+    /// (`AppModel.prepareForErasure`) and a suspension (iD14), where every replay would either
+    /// re-create an erased account's rows or answer 403 forever; lowered by `resumeReplay()` and
+    /// by `teardown()` (the next sign-in starts clean).
+    private(set) var replaySuspended = false
+
+    func suspendReplay() {
+        if !replaySuspended { replaySuspended = true }
+    }
+
+    func resumeReplay() {
+        if replaySuspended { replaySuspended = false }
+    }
+
     /// Keys the user has explicitly retried, and when. A re-record inside this window is a
     /// *directly* failed action and earns one `.directError`; an automatic failure is silent.
     private var userRetriedAt: [String: Int64] = [:]
@@ -177,7 +206,7 @@ final class SyncCenter {
     /// The local value is NOT rolled back for progress writes — the mark is a fact about the user.
     func record(command: String, title: String, reason: String, intent: WriteIntent? = nil,
                 retry: @escaping @MainActor () async -> Void) {
-        let key = FailedChange.key(command: command, title: title)
+        let key = FailedChange.key(command: command, title: title, intent: intent)
         let now: Int64 = .nowMs
         attempts[key] = (attempts[key] ?? 0) + 1
         // One row per (command, title): a repeatedly failing write is one problem, not a list.
@@ -254,6 +283,28 @@ final class SyncCenter {
         // The attempt counter belongs to a standing failure. With no row left, a later unrelated
         // failure must read "1st attempt", not inherit this key's history for the whole session.
         if !failedChanges.contains(where: { $0.key == key }) { attempts[key] = nil }
+    }
+
+    // MARK: - Progress failures (the episode rooms' gate)
+
+    /// A progress write for this part is standing in Sync status — the server has not got the
+    /// user's last mark, so an episode room's gate would still read the old value.
+    func hasFailedProgress(mediaId: Int) -> Bool {
+        failedChanges.contains { $0.holdsProgress(mediaId: mediaId) }
+    }
+
+    /// Replays that part's failed progress write now (the row leaves first, as `retry(_:)` does;
+    /// a write that fails again re-records itself) and answers whether the part is clear after it.
+    /// Silent: this is the model making way for a comment, not a Retry the user pressed.
+    @discardableResult
+    func replayProgress(mediaId: Int) async -> Bool {
+        guard let change = failedChanges.first(where: { $0.holdsProgress(mediaId: mediaId) }),
+              let run = change.effectiveRetry(self) else { return !hasFailedProgress(mediaId: mediaId) }
+        failedChanges.removeAll { $0.id == change.id }
+        persist()
+        await run()
+        if !failedChanges.contains(where: { $0.key == change.key }) { attempts[change.key] = nil }
+        return !hasFailedProgress(mediaId: mediaId)
     }
 
     func retryAll() {
@@ -358,6 +409,7 @@ final class SyncCenter {
         // Captures the model weakly and the root re-installs it on the next sign-in; dropping it
         // here guarantees nothing restored can replay into the account that follows this one.
         replay = nil
+        replaySuspended = false
         // The milestone ledger is per-account too: the next user's first season completion is
         // their own, not a token this one already spent.
         SeasonSweepLedger.reset()
@@ -368,13 +420,17 @@ final class SyncCenter {
 /// One write the server never accepted. `command` is a `Copy.Action` string, `reason` a
 /// `Copy.Notice.reason(_:)` string — never a status code.
 /// The write behind a failed change, in a form that survives a relaunch. Everything the app
-/// writes is one of these four; a change that carries one can be retried from any launch.
+/// writes that can fail into Sync status is one of these; a change that carries one can be
+/// retried from any launch.
 enum WriteIntent: Codable, Equatable, Sendable {
     case franchiseProgress(franchiseId: String, parts: [FranchiseProgressValue], status: WatchStatus?, removeMembership: Bool)
     case progress(franchiseId: String, mediaId: Int, episodes: Int)
     case status(franchiseId: String, status: String)
     case subscribe(franchiseId: String, title: String, status: String)
     case unsubscribe(franchiseId: String, title: String)
+    /// A reply that never reached the server, replayed with the SAME client id (the server upserts
+    /// on it, server §3.5). Rows stored before this case existed still decode.
+    case comment(id: String, subject: String, parentId: String?, body: String, franchiseId: String, title: String)
 }
 
 struct FailedChange: Identifiable {
@@ -389,15 +445,32 @@ struct FailedChange: Identifiable {
     /// `nil` for a change restored from a previous launch: the closure could not be encoded.
     let retry: (@MainActor () async -> Void)?
 
-    /// Identity for de-duplication: the same command on the same title is one problem.
-    var key: String { FailedChange.key(command: command, title: title) }
-    static func key(command: String, title: String) -> String { "\(command)\u{1F}\(title)" }
+    /// Identity for de-duplication: the same command on the same title is one problem — except a
+    /// per-part progress write, which is also keyed by its part: two seasons of one show that both
+    /// failed are two writes, and the second must not overwrite the first's intent (the episode
+    /// gate asks for each part by media id, `hasFailedProgress`).
+    var key: String { FailedChange.key(command: command, title: title, intent: intent) }
+    static func key(command: String, title: String, intent: WriteIntent? = nil) -> String {
+        if case .progress(_, let mediaId, _)? = intent { return "\(command)\u{1F}\(title)\u{1F}\(mediaId)" }
+        return "\(command)\u{1F}\(title)"
+    }
+
+    /// This row carries a progress write for that part — its own `.progress`, or a one-call
+    /// `.franchiseProgress` that includes it (the add-with-progress path).
+    func holdsProgress(mediaId: Int) -> Bool {
+        switch intent {
+        case .progress(_, let m, _)?: return m == mediaId
+        case .franchiseProgress(_, let parts, _, _)?: return parts.contains { $0.mediaId == mediaId }
+        default: return false
+        }
+    }
 
     /// The retry to actually run — the recorded closure, or the model replaying the stored
     /// intent for a restored row. `nil` when there is nothing to run: a missing retry must never
     /// be mistaken for a successful one, so there is deliberately no empty-closure fallback here.
     @MainActor
     func effectiveRetry(_ center: SyncCenter) -> (@MainActor () async -> Void)? {
+        guard !center.replaySuspended else { return nil }
         if let retry { return retry }
         guard let intent, let replay = center.replay else { return nil }
         return { await replay(intent) }

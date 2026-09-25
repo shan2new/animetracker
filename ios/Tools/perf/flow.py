@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """Drive the app through one scripted flow on the QA sim and score its frame pacing.
 
-Usage: flow.py <tag> [--no-stage] [--profile]
+Usage: flow.py <tag> [--no-stage] [--main-only] [--social] [--calibrate] [--profile] [--args "..."]
 Writes perf/<tag>/{steps.jsonl, perf.jsonl, cpu.jsonl, summary.json} and prints the table.
 The app must be built with the PerfProbe hooks and launched with -perfProbe 1 (done here).
+
+Today is the feed (25 Sep): the flow scrolls the feed and swipes its stories tray, opens Profile
+from the header's LEADING disc, and — in the anchored launches — lands on the Suggested module
+(`-feedAnchor suggested`) and rests in the story viewer (`-feedStory first`, clock frozen).
+`--social` adds a like tap on the first post and its undo (a real write, then its reversal, on
+the account the sim is signed in as — off by default). `--calibrate` measures the feed's
+positions through the accessibility tree once and saves them (see `fixed`).
 """
 import os, json, subprocess, sys, threading, time, shutil, re
 
@@ -25,6 +32,7 @@ no_stage = '--no-stage' in sys.argv
 profile = '--profile' in sys.argv
 extra_args = sys.argv[sys.argv.index('--args') + 1].split() if '--args' in sys.argv else []
 calibrate = '--calibrate' in sys.argv
+social = '--social' in sys.argv          # the like tap: a real write (and its reversal) on the account
 main_only = '--main-only' in sys.argv   # a Release build has no DEBUG launch arguments for the anchored sub-flows
 CAL_PATH = f'{P}/calibration.json'
 CAL = {} if calibrate else (json.load(open(CAL_PATH)) if os.path.exists(CAL_PATH) else {})
@@ -38,6 +46,20 @@ def pos(key, resolve):
         json.dump(CAL, open(CAL_PATH, 'w'))
         return v
     return CAL[key]
+def fixed(key, default, resolve):
+    """A FIXED position for a measured run: the calibration file's value, else `default` (read off
+    a QA 14 Pro screenshot). Only `--calibrate` asks the accessibility tree (`resolve`), on the
+    screen that is up when this is called, and saves what it found — a measured run never asks."""
+    if calibrate:
+        try: v = resolve()
+        except Exception as e: print(f'  calibrate {key}: {e!r}', flush=True); v = None
+        if v:
+            CAL[key] = list(v) if isinstance(v, (list, tuple)) else v
+            json.dump(CAL, open(CAL_PATH, 'w'))
+            print(f'  calibrated {key} = {v}', flush=True)
+            return tuple(v) if isinstance(v, (list, tuple)) else v
+    v = CAL.get(key, default)
+    return tuple(v) if isinstance(v, list) else v
 OUT = f'{P}/{tag}'
 os.makedirs(OUT, exist_ok=True)
 steps = []
@@ -142,12 +164,14 @@ def container_perf_path():
     return os.path.join(r.stdout.strip(), 'Documents', 'perf.jsonl')
 
 # ---------------------------------------------------------------- the flow
-# Positions are FIXED (read off screenshots of the anchored states, 5 Sep): a measured run never
-# asks the accessibility tree, which would switch accessibility on in the process.
-#   Today `-todayAnchor upnext`: the Up next card y 160-365, the Watching shelf y 480-630.
+# Positions are FIXED (read off screenshots of the anchored states): a measured run never asks the
+# accessibility tree, which would switch accessibility on in the process.
+#   Today (the feed, 25 Sep): the header's account disc is the LEADING 44-pt target of its first
+#     row (≈ 37,85 at 393 pt); the stories tray sits under the header's two rows (its top ≈ y 150,
+#     the bubbles ≈ y 155-222, so the swipes run at ≈ 190). `--calibrate` measures both.
 #   Library at rest: Returning shelf y 170-270, Watching shelf y 385-485 (first card at 103,435).
 #   Detail `-detailAnchor trailers`: Cast row y 280-390, More like this y 480-640.
-#   Search at rest: the field at (196,137); Cancel at (355,137) once focused. Today's avatar (363,85).
+#   Search at rest: the field at (196,137); Cancel at (355,137) once focused.
 perf_path = container_perf_path()
 if os.path.exists(perf_path): os.remove(perf_path)
 sampler = threading.Thread(target=cpu_sampler, daemon=True); sampler.start()
@@ -155,8 +179,26 @@ sampler = threading.Thread(target=cpu_sampler, daemon=True); sampler.start()
 def to_top(n=3):
     for _ in range(n): swipe(196, 200, 196, 780, 0.2); time.sleep(0.45)
 
+def centre(hit):
+    return (hit[0] + hit[2] // 2, hit[1] + hit[3] // 2) if hit else None
+
+def find_top(label_sub, max_y):
+    """The first element whose label contains `label_sub` above `max_y` (the feed's header)."""
+    for t, lab, x, y, w, h in describe():
+        if label_sub.lower() in lab.lower() and 0 <= y < max_y: return (x, y, w, h, lab)
+    return None
+
+def find_any(subs, min_y=0):
+    for t, lab, x, y, w, h in describe():
+        if y >= min_y and any(s.lower() in lab.lower() for s in subs) and y < 852: return (x, y, w, h, lab)
+    return None
+
 print(f'[{tag}] launch', flush=True)
 steps.append({'step': 'launch', 'start': now()}); launch(); time.sleep(11); steps[-1]['end'] = now(); save_steps()
+# Resolved BEFORE the timed steps (only `--calibrate` asks the tree, and its numbers are not scored).
+PROFILE_DISC = fixed('feed-profile-disc', (37, 85), lambda: centre(find_top('Profile', 140)))
+TRAY_Y = fixed('feed-tray-y', 190, lambda: (centre(find_any([' new episode', ', watched'], 120)) or (0, None))[1])
+LIKE = fixed('feed-first-like', None, lambda: centre(find_any(['Like'], 200))) if social else None
 tp = None
 if profile:
     pid = app_pid()
@@ -164,8 +206,19 @@ if profile:
                            '--attach', str(pid), '--time-limit', '75s', '--output', f'{OUT}/tp.trace'],
                           env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
-step('idle-today', lambda: time.sleep(4), settle=0)
-step('today-scroll', scrolls(5, 3))
+step('idle-feed', lambda: time.sleep(4), settle=0)
+# The tray first, while the feed is at its top (the tray scrolls away with the posts).
+step('feed-stories', shelf_swipes(TRAY_Y))
+step('feed-scroll', scrolls(5, 3))
+to_top(2)
+if social:
+    if LIKE:
+        # Like, then unlike: the account ends where it started (the toggles are newest-word-wins).
+        def like_twice():
+            tap(*LIKE); time.sleep(1.2); tap(*LIKE)
+        step('feed-like', like_twice, settle=1.2)
+    else:
+        print('  --social: no calibrated like position (run once with --calibrate --social)', flush=True)
 step('tab-schedule', lambda: tap(*TAB['schedule']), settle=1.6)
 step('schedule-scroll', scrolls(4, 3))
 step('tab-library', lambda: tap(*TAB['library']), settle=1.6)
@@ -184,16 +237,22 @@ step('search-type', search_type, settle=0.4)
 step('search-clear', lambda: tap(355, 137), settle=1.2)
 step('tab-today', lambda: tap(*TAB['today']), settle=1.6)
 to_top(2)
-step('profile-open', lambda: tap(363, 85), settle=2.2)
+step('profile-open', lambda: tap(*PROFILE_DISC), settle=2.2)
 step('profile-scroll', scrolls(3, 2))
 step('profile-close', lambda: swipe(196, 140, 196, 760, 0.3), settle=1.8)
 
-# The shelves, from anchored launches (a fresh process each: the launch is scored too).
+# The anchored launches (a fresh process each: the launch is scored too).
 if main_only: no_stage = True
-if not main_only: steps.append({'step': 'launch-upnext', 'start': now()}); launch('-todayAnchor', 'upnext'); time.sleep(12); steps[-1]['end'] = now(); save_steps()
 if not main_only:
-    step('today-shelf', shelf_swipes(260))
-    step('today-watching', shelf_swipes(550))
+    # The Suggested module (`-feedAnchor suggested`, 1.5 s after content): a vertical scroll
+    # through it and the posts around it — the rows its Add controls live on.
+    steps.append({'step': 'launch-suggested', 'start': now()}); launch('-feedAnchor', 'suggested'); time.sleep(12); steps[-1]['end'] = now(); save_steps()
+    step('feed-suggested', scrolls(2, 2))
+    # The story viewer at rest (§5.1's target: zero hitches), clock frozen by the capture flag,
+    # then closed with the pull the viewer answers to.
+    steps.append({'step': 'launch-story', 'start': now()}); launch('-feedStory', 'first'); time.sleep(12); steps[-1]['end'] = now(); save_steps()
+    step('story-idle', lambda: time.sleep(5), settle=0)
+    step('story-close', lambda: swipe(196, 300, 196, 780, 0.35), settle=1.8)
     steps.append({'step': 'launch-detail', 'start': now()}); launch('-openDetail', GOT, '-detailAnchor', 'trailers'); time.sleep(10); steps[-1]['end'] = now(); save_steps()
     step('detail-shelf', shelf_swipes(560))
     step('detail-cast', shelf_swipes(330))

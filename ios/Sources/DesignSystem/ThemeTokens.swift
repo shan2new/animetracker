@@ -44,8 +44,9 @@ enum ThemeColor {
     /// not amber (amber is a fact or a state) and it is not an action colour: it is the name's.
     static let brandPeriod = Color(hex: 0xF0563F)
     static let accentPressed = Color(hex: 0xD88D3B)
-    /// NEWS red — "NEW EPISODE", "NEW SEASON", "NEW SERIES" and the episode list's NEW tag, and
-    /// nothing else (24 Sep, owner: "New Episode is not standing out properly despite the shimmer
+    /// NEWS red — "NEW EPISODE", "NEW SEASON", "NEW SERIES", the episode list's NEW tag and the
+    /// Activity bell's unread dot (`ThemeColor.unreadDot`, FeedTokens.swift — the same "something
+    /// new"), and nothing else (24 Sep, owner: "New Episode is not standing out properly despite the shimmer
     /// … think of using a Netflix like red"). An amber tag over warm art, 40 pt above the amber
     /// capsule, was one more amber thing; the streaming apps flag what is NEW in red. White ink.
     static let news = Color(hex: 0xE5262D)
@@ -366,6 +367,24 @@ enum ThemeMetrics {
         }
         if value != 852 { cachedWindowHeight = value }
         return value
+    }
+
+    nonisolated(unsafe) private static var cachedPixel: CGFloat?
+
+    /// One physical pixel, in points (1/3 on a 3× phone). X draws every rule and every border at
+    /// this width; a 0.5-pt rule on a 3× screen is a pixel and a half, antialiased across two —
+    /// visibly heavier ("The separator and borders are thicker than X. Everywhere", owner, 25 Sep).
+    static var pixel: CGFloat {
+        if let cachedPixel { return cachedPixel }
+        guard Thread.isMainThread else { return 1.0 / 3.0 }
+        let measured = MainActor.assumeIsolated { () -> CGFloat? in
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+            let scale = scene?.traitCollection.displayScale ?? 0
+            return scale > 0 ? 1 / scale : nil
+        }
+        if let measured { cachedPixel = measured }
+        return measured ?? 1.0 / 3.0
     }
 
     nonisolated(unsafe) private static var cachedWindowWidth: CGFloat?

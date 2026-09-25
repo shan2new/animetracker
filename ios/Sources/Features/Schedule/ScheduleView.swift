@@ -659,12 +659,9 @@ struct ScheduleView: View {
         // carries. Drawn at a STATED height, bottom-aligned, so a short band never lets the feed
         // print through the status bar (6 Sep).
         .background(alignment: .bottom) {
-            ZStack(alignment: .top) {
-                ThemeColor.canvas
-                ArtBackdrop(url: washCover, tint: washCover == nil ? ThemeColor.accent : nil,
-                            height: max(chromeBottom, ThemeMetrics.topChromeHeight),
-                            intensity: ThemeMetrics.rootWashIntensity)
-            }
+            // The canvas alone, flush with the feed, as Today's bar is (25 Sep — the wash under it
+            // went with every root's).
+            ThemeColor.canvas
             .frame(height: max(chromeBottom, ThemeMetrics.topChromeHeight))
             .allowsHitTesting(false)
             .accessibilityHidden(true)

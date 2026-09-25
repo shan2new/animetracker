@@ -23,11 +23,11 @@ A/B switches (launch arguments, DEBUG): `-perfNoShelfMask 1`, `-perfNoMaterial 1
 
 ```bash
 Tools/perf/build.sh <tag> [Debug|Release|opt]   # build + install; "opt" = Debug config at -O whole-module
-Tools/perf/flow.py <tag> [--args "-perfNoX 1"] [--main-only] [--no-stage]   # the scripted flow, scored
+Tools/perf/flow.py <tag> [--args "-perfNoX 1"] [--main-only] [--no-stage] [--social] [--calibrate]   # the scripted flow, scored
 Tools/perf/compare.py <tagA> <tagB> [...]       # side by side (hitches / dropped / worst ms / >100 ms; CPU)
 Tools/perf/stalls.py <tag> --min 150 [--step tab-search]   # the sampled stacks per step, demangled
 Tools/perf/tapvideo.py <tag> [--args "..."]     # films a tab tap: the frame the highlight moves vs the frame content lands
-Tools/perf/hero_check.sh <dir>                  # photographs the billboards and films a Search query (12-fps contact sheet)
+Tools/perf/hero_check.sh <dir>                  # photographs the feed (both tabs, a story, a post) and the show pages' billboards, films a Search query
 Tools/perf/typing_test.py <tag> [--gap 0.16]   # types into Search at human speed: per-key latency on film + the stalls' stacks
 Tools/perf/typing_report.py <tag>              # scores a typing test: hitches against the keystrokes, each stall's frames
 Tools/perf/focus_test.py <tag>                 # (older) Search's transitions with blind taps — superseded by focus_film.py
@@ -38,14 +38,31 @@ Tools/perf/focus_film.py <tag> --scenario cycles|warm|cold [--args "-perfNoWarm 
 Tools/perf/film_events.py <film-dir>            # the transitions in any recorded film, found from the frames (runs + sheets)
 Tools/perf/simkit_shadow.sh                     # (re)build build/Xcode-shadow.app so idb finds SimulatorKit under Xcode-beta
 Tools/perf/warmup_check.py <tag> [--film]       # the keyboard warm-up must be UNSEEN: every frame of a launch scanned for a keyboard
-Tools/perf/hero_pairs.py <before> <after> <png> # before/after sheet of the billboards
+Tools/perf/hero_pairs.py <before> <after> <png> # before/after sheet of the feed, the story viewer and the billboards
 Tools/perf/sheet.py <capture-dir> [out.png]     # contact sheet of a capture set (the loop's capture_ios.sh names)
 ```
 
-The flow: launch → idle → scroll Today → Schedule → Library (shelf, scroll, a push, the show
-page, pop) → Search (scroll, type, clear) → Today → Profile (open, scroll, close); then anchored
-launches for the shelves (`-todayAnchor upnext`, `-openDetail … -detailAnchor trailers`) and
-the trailer stage. Positions are FIXED, read off screenshots of those states.
+The flow: launch → idle → the feed's stories tray (swipes) → scroll the feed → [`--social`: like
+the first post, then unlike it] → Schedule → Library (shelf, scroll, a push, the show page, pop) →
+Search (scroll, type, clear) → Today → Profile (open from the header's LEADING disc, scroll,
+close); then anchored launches: the feed's Suggested module (`-feedAnchor suggested`), the story
+viewer at rest (`-feedStory first`, its clock frozen), the show page's shelves (`-openDetail …
+-detailAnchor trailers`) and the trailer stage. The anchored launches use DEBUG capture flags, so
+a Release build runs `--main-only`.
+
+Positions are FIXED, read off screenshots of those states: the account disc ≈ (37, 85) and the
+tray's bubbles ≈ y 190 on the QA 14 Pro (393 pt). `--calibrate` measures the feed's positions
+(the disc, the tray, and with `--social` the first post's like) through the accessibility tree
+once and saves them to `calibration.json`; that run's numbers are not comparable (the tree
+switched accessibility on — see below), and every later run reads the file.
+
+Targets for the feed (ios-spec §5.1, sim, Debug): the feed's vertical scroll worst gap < 70 ms
+(`feed-scroll`, `feed-suggested`); a like tap no stall > 50 ms (`feed-like`); the story viewer
+at rest zero hitches (`story-idle`). Report numbers with the build they came from.
+
+`focus_film.py`'s `warm`/`cold` scenarios wait for the feed with the app's own `feed-ready` mark
+(FeedView, once the first post's art has decoded) — the ident and the feed share one black, so a
+brightness test cannot tell them apart.
 
 ## Driving the simulator (6 Sep)
 

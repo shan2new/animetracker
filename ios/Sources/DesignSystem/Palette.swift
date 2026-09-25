@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-// Art-adaptive tint for the Focus and Recap cards (spec board 10, "Palette"). Computed once per
-// artwork URL, off the main thread, never during scroll. The card ground is a derived colour —
+// Art-adaptive tint for the show page's grounds and the art cards (spec board 10, "Palette").
+// Computed once per artwork URL, off the main thread, never during scroll. The card ground is a derived colour —
 // related to the show, never hostage to its palette:
 //   downsample to 32×32 → ignore alpha < 0.8 and OKLab lightness < 0.08 or > 0.92 →
 //   highest-population non-neutral colour (chroma ≥ 0.035) → clamp L 0.24…0.38, C 0.04…0.12 →
@@ -198,6 +198,39 @@ final class PaletteCache {
         let g = -1.2684380046 * L + 2.6097574011 * M - 0.3413193965 * S
         let bb = -0.0041960863 * L - 0.7034186147 * M + 1.7076147010 * S
         return (min(max(gam(r), 0), 1), min(max(gam(g), 0), 1), min(max(gam(bb), 0), 1))
+    }
+}
+
+/// The last billboard's palette colour, kept across launches — the ground a show page's loading
+/// frame is painted in before its own artwork has resolved.
+///
+/// A loading frame has no artwork yet by definition, so it was a black rectangle. The colour of
+/// the last billboard a person looked at is the app's own atmosphere even when it is the wrong
+/// show's, and far better than an empty canvas. Today's billboard wrote it until the Today feed
+/// replaced it (25 Sep); the show page is the writer now (it resolves `heroTint` from its own
+/// billboard art) and still its only reader (iD18). The key keeps Today's old name so a value an
+/// earlier build stored carries over.
+enum RememberedTint {
+    private static let key = "today.heroTint"
+
+    /// The remembered colour, or nil on a fresh install (or after a value that did not decode).
+    static var color: Color? {
+        guard let c = UserDefaults.standard.array(forKey: key) as? [Double], c.count >= 3 else { return nil }
+        return Color(.sRGB, red: c[0], green: c[1], blue: c[2])
+    }
+
+    /// Stores `color` for the next loading frame. A nil colour (no art, a failed decode) is ignored:
+    /// the last real palette stays, rather than being forgotten because one show had none.
+    static func remember(_ color: Color?) {
+        guard let color else { return }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard UIColor(color).getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
+        let value = [Double(r), Double(g), Double(b)]
+        let d = UserDefaults.standard
+        // One write per new colour: a page re-resolving the same art must not touch the store.
+        if let old = d.array(forKey: key) as? [Double], old.count >= 3,
+           zip(old, value).allSatisfy({ abs($0 - $1) < 0.001 }) { return }
+        d.set(value, forKey: key)
     }
 }
 

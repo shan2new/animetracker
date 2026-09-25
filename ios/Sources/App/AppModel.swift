@@ -45,8 +45,9 @@ final class AppModel {
     /// id → position in `library`, so `franchise(id:)` is a lookup, not a scan: Search's grid
     /// asked it once per card per body (sampled under the field's focus, 5 Sep).
     @ObservationIgnored private var libraryIndex: [String: Int] = [:]
-    /// Bumped on every library write; the key the derived-feed caches (`scheduleDays`) hang off.
-    @ObservationIgnored private var libraryVersion = 0
+    /// Bumped on every library write; the key the derived-feed caches (`scheduleDays`, the Today
+    /// feed's rows and stories) hang off.
+    @ObservationIgnored private(set) var libraryVersion = 0
     private(set) var libraryIds: Set<String> = []
     // Ids optimistically added but not yet confirmed by a reload — isInLibrary includes them so
     // "+" buttons flip instantly instead of waiting a network round-trip.
@@ -82,6 +83,81 @@ final class AppModel {
     /// Show pages materialised for titles the list sent without one (key → franchise id), so a
     /// second tap opens at once and an added one reads as owned.
     var resolvedRecommendationIds: [String: String] = [:]
+
+    // ----- Today feed + social (`AppModel+Feed.swift`, `+Social.swift`, `+Activity.swift`) -----
+    /// One state per tab. `response` is the last one that arrived (or the offline copy, `fromCache`).
+    var feedTabs: [FeedTab: FeedTabState] = [:]
+    /// The tab the feed is showing — written by FeedView, read by foreground refresh.
+    var currentFeedTab: FeedTab = .following
+    var feedCapabilities = FeedCapabilities(comments: false)
+    /// Loaded post pages (`GET /feed/posts/:id`), keyed by the id asked for AND the canonical id. LRU 30.
+    var postDetails: [String: PostDetailState] = [:]
+    /// Server truth per subject/post id — likes, liked, saved, reminded, comments — from the latest
+    /// response that carried it. The UI reads it THROUGH the pending overlay (`isLiked`, `likeCount`…).
+    var socialBase: [String: SubjectSocial] = [:]
+    /// The newest word per toggle that the server has not confirmed (persisted, §4.3).
+    var socialPending: [SocialToggleKey: SocialToggleWrite] = [:]
+    var pendingRatings: [String: PendingRating] = [:]            // key "m:e"
+    var episodeRooms: [String: EpisodeRoom] = [:]                // key = ep: subject
+    var threads: [String: CommentThread] = [:]                   // key = subject
+    var pendingComments: [PendingComment] = []                   // persisted with the toggles
+    var socialProfile: SocialProfile?
+    /// Shows muted and posts hidden AS THE SERVER KNOWS THEM (`GET /me/hides`, the offline cache). The
+    /// UI reads the overlaid sets `mutedShowIds` / `hiddenPostIds` (computed in AppModel+Social: server ∪
+    /// pending ON − pending OFF).
+    var serverMutedShowIds: Set<String> = []
+    var serverHiddenPostIds: Set<String> = []
+    /// This session's "Thanks · Undo" rows, in place of the post they hid. Never persisted.
+    var feedFolds: [String: FeedFold] = [:]
+    /// Posts whose reminder was just set while notifications are not authorised: the post shows the
+    /// alerts primer line (§4.4). Session only.
+    var reminderPrimerPostId: String?
+    var reminderItems: [ReminderItem] = []                       // GET /me/reminders
+    var reminderFranchises: [String: FeedFranchise] = [:]
+    var activity: [NotificationItem] = []
+    var activityUnread = 0
+    var activityCursor: String?
+    var activityLoading = false
+    var activityFailed = false
+    /// Story reel id → the `latestAired` the viewer has seen (device-local convenience, in the feed cache).
+    var storyViewed: [String: Int64] = [:]
+    /// A feed cover or sheet is up (story, media, trailer, composer, activity, profile). KeyboardWarmup
+    /// and the notification route read it.
+    var feedOverlayOpen = false
+    var accountSuspended = false
+    /// An account deletion is under way (`prepareForErasure` → `DELETE /me` → `teardown`): no
+    /// request may go out, because the server upserts a user row for any valid JWT and one late
+    /// write would bring the erased account back. Lowered by `abortErasure()` and the next `start()`.
+    @ObservationIgnored var erasing = false
+    /// Bumped on every feed-shaping change (§1.6.3). OBSERVED, like `hidesVersion`: bumping it IS the
+    /// invalidation signal. The rows' memo is keyed on it and reads it on every path, so a body that
+    /// reads only `feedRows`/`freshPosts` redraws when a `.final` revert, a capabilities change or a
+    /// cached copy lands — observation-ignored, those waited for the next minute tick.
+    var feedVersion = 0
+    /// Bumped when `mutedShowIds`/`hiddenPostIds` change — by EVERY hides mutation (hide, mute,
+    /// unmute, a fold's Undo, a `.final` revert, a hides load, the pending file, the offline copy),
+    /// which is why the memo need not read the overlaid sets on a hit. OBSERVED: a mute made from a
+    /// story or Profile's Muted shows has no fold to invalidate the feed's body, and the rows are
+    /// keyed on it.
+    var hidesVersion = 0
+    @ObservationIgnored var feedSeq: [FeedTab: Int] = [:]
+    @ObservationIgnored var feedDerived = FeedDerivedCache()
+    @ObservationIgnored var socialLanes: [SocialToggleKey: Task<Void, Never>] = [:]
+    @ObservationIgnored var ratingLanes: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored var feedCacheWrite: Task<Void, Never>?
+    @ObservationIgnored var socialPersistWrite: Task<Void, Never>?
+    /// Bookkeeping the extensions need and nothing draws: when each post page last landed (its LRU
+    /// order), which responses have arrived LIVE this session (so the offline copy never overwrites
+    /// them), and a request token per comment thread and for Activity (a superseded answer is dropped).
+    @ObservationIgnored var postDetailLoadedAt: [String: Int64] = [:]
+    @ObservationIgnored var feedLiveLoaded: Set<String> = []
+    @ObservationIgnored var threadSeq: [String: Int] = [:]
+    @ObservationIgnored var activitySeq = 0
+    /// Comments with a send in flight — a flush never starts a second one for the same id.
+    @ObservationIgnored var commentsInFlight: Set<String> = []
+    /// People blocked on this device this session: their replies never come back into a loaded
+    /// thread, whatever a page that was already on its way carries.
+    @ObservationIgnored var blockedSessionIds: Set<String> = []
     /// Shows the user marked this session — the one they just caught up on keeps Today's stage
     /// rather than handing it to a recommendation 650 ms later (review i5, N2).
     @ObservationIgnored var markedThisSession: Set<String> = []
@@ -92,6 +168,9 @@ final class AppModel {
     /// ever a show that was not in the library (`markWatched`). Guards a second submission.
     private(set) var savingProgressFor: Set<String> = []
     @ObservationIgnored private var accountGeneration = 0
+    /// The account's generation, for the model's extensions: a response that lands after a
+    /// sign-out (the generation moved) is dropped, never applied to the next account.
+    var accountEpoch: Int { accountGeneration }
     /// One-call writes run one after another per show, in the order they were asked for — the
     /// Undo of a series mark waits for the mark itself (the per-part lanes' rule, for this call).
     @ObservationIgnored private var batchChain: [String: Task<Void, Never>] = [:]
@@ -101,7 +180,12 @@ final class AppModel {
     @ObservationIgnored private var batchesInFlight: [String: Int] = [:]
     /// What an isolated model filed instead of Sync status (see `fileFailure`).
     @ObservationIgnored private(set) var isolatedFailures: [WriteIntent?] = []
+    /// The previous visit — the anchor "new since you were last here" is measured from. Once
+    /// `POST /me/opened` has answered this session (`visitStamped`), no later response moves it
+    /// (server §5.4: a library or feed response read before the stamp orders against the visit
+    /// before last, so it is only ever a provisional value).
     var prevOpenedAt: Int64 = 0
+    @ObservationIgnored var visitStamped = false
     var loading = true
     /// Epoch-ms of the last library payload that actually arrived (freshness source for SyncCenter).
     var lastLoadedAt: Int64 = 0
@@ -208,6 +292,9 @@ final class AppModel {
     var onSessionExpired: (@MainActor () -> Void)?
     /// A show a tapped episode alert asks to open; `MainTabView` consumes it.
     var pendingOpen: String?
+    /// A post or a thread a tapped notification (a reminder, an Activity row) asks to open — the
+    /// typed sibling of `pendingOpen`. A `.show` route is always delivered through `pendingOpen`.
+    var pendingRoute: OpenRoute?
     /// A neutral toast (`showNotice`): a receipt, not an error and not an Undo.
     var notice: String?
     private var noticeTask: Task<Void, Never>?
@@ -234,9 +321,23 @@ final class AppModel {
     // MARK: - Lifecycle
 
     func start() {
+        // A new session: whatever an erasure held back belonged to the account it erased.
+        erasing = false
+        api.halted = false
         startClock()
         // A failed change restored from a previous launch retries by replaying its write here.
         SyncCenter.shared.replay = { [weak self] intent in await self?.replay(intent) }
+        // A suspension raised from ANY route (iD14), before the caller's `catch` runs — so no
+        // failure it causes is filed as a write to retry (`fileFailure`).
+        if !isolated {
+            api.onSuspended = { [weak self] in
+                guard let self, !self.accountSuspended else { return }
+                self.accountSuspended = true
+                // Every replay would answer 403 until sign-out (and all replay at once if the
+                // ban were lifted, unasked): Sync status holds its rows with Discard only.
+                SyncCenter.shared.suspendReplay()
+            }
+        }
         // The offline copy first: the last library this device saw, so a launch with no network
         // opens on the shows — stamped with their real age, so the stale strip and the inline
         // notice tell the truth — rather than on an error where the library was. The app had no
@@ -247,16 +348,32 @@ final class AppModel {
             // here held the main thread for the ident's first frames (sampled: `JSONDecoder`
             // under `start()`, ~300 ms on the simulator). The skeleton holds until it lands, and
             // a reload that lands first wins.
+            let epoch = accountEpoch
             Task { [weak self] in
                 let cached = await Task.detached(priority: .userInitiated) { Self.loadCachedLibrary() }.value
-                guard let self, let cached, self.library.isEmpty else { return }
+                // A sign-out while the copy decoded: it belongs to the account that just left.
+                guard let self, let cached, self.library.isEmpty, epoch == self.accountEpoch,
+                      !self.erasing else { return }
                 self.library = cached.response.franchises
-                self.prevOpenedAt = max(self.prevOpenedAt, cached.response.prevOpenedAt)
+                // Provisional only: the stamp, once it has answered, is the session's anchor.
+                if !self.visitStamped, cached.response.prevOpenedAt > 0 {
+                    self.prevOpenedAt = cached.response.prevOpenedAt
+                }
                 self.lastLoadedAt = cached.savedAt
             }
         }
         loadCachedRecommendations()
-        Task { await stampOpened() }
+        loadCachedFeed()                                   // AppModel+Feed
+        loadPendingSocial()                                // AppModel+Social
+        // The feed waits for the visit stamp (iD3): `fresh` is ordered against `prev_opened_at`,
+        // and a feed fetched before the stamp lands orders against the visit before last.
+        Task {
+            await stampOpened()
+            await loadFeed(.following, force: true)
+            await loadActivity(reset: true)
+            await loadReminders()
+            await loadHides()
+        }
         Task { await reload() }
     }
 
@@ -311,16 +428,27 @@ final class AppModel {
     }
 
     /// Records the previous-open timestamp (drives "since you were last here") and stamps now.
-    private func stampOpened() async {
+    /// Its answer is the session's anchor (server §5.4): from here no library or feed response
+    /// moves `prevOpenedAt`.
+    func stampOpened() async {
+        guard !erasing else { return }
+        let epoch = accountEpoch
         do {
             let res = try await api.markOpened()
+            guard epoch == accountEpoch else { return }
             prevOpenedAt = res.prevOpenedAt
+            visitStamped = true
         } catch {
-            // Non-fatal; "out now" falls back to a 3-day lookback.
+            guard epoch == accountEpoch else { return }
+            // Non-fatal; "out now" falls back to a 3-day lookback, and the next response's
+            // `prevOpenedAt` stands in provisionally.
+            visitStamped = false
+            if let api = error as? APIError, case .suspended = api { accountSuspended = true }
         }
     }
 
     func reload() async {
+        guard !erasing else { return }
         reloadSeq += 1
         let seq = reloadSeq
         loading = true
@@ -333,8 +461,9 @@ final class AppModel {
             settleCompletedSeries()
             resumeReturningSeries()
             pruneRecentFragments()
-            // Keep the larger of the two prevOpenedAt values we may have seen.
-            if res.prevOpenedAt > 0 { prevOpenedAt = max(prevOpenedAt, res.prevOpenedAt) }
+            // Provisional until the visit stamp answers; never moved after it (server §5.4 — the
+            // old `max` let a response read before the stamp overwrite the real previous visit).
+            if !visitStamped, res.prevOpenedAt > 0 { prevOpenedAt = res.prevOpenedAt }
             // Animated at the source: every screen's "couldn't refresh" footnote carries a fade
             // transition that never ran, because nothing put an animation in the transaction —
             // the line snapped in and shoved the queue under it 28 pt.
@@ -349,6 +478,11 @@ final class AppModel {
             // NOT a load failure: retrying can never fix a dead session, and "the server couldn't
             // be reached" would be a lie. Hand it to auth, which returns the user to sign-in.
             handleSessionExpired()
+        } catch APIError.suspended {
+            guard seq == reloadSeq else { return }
+            // A suspended account (iD14): not a failed load, and not a dead session either.
+            loading = false
+            accountSuspended = true
         } catch {
             guard seq == reloadSeq else { return }
             loading = false
@@ -361,10 +495,56 @@ final class AppModel {
     }
 
     /// The session is gone (401/403). Drop every trace of the signed-in account, then let the
-    /// auth layer surface the honest reason on the sign-in screen.
-    private func handleSessionExpired() {
+    /// auth layer surface the honest reason on the sign-in screen. Internal: the feed and social
+    /// calls route a surviving 401 through here, exactly as `reload()` does.
+    func handleSessionExpired() {
         teardown()
         onSessionExpired?()
+    }
+
+    // MARK: - Account erasure
+
+    /// How long writes already on the wire get to land BEFORE the `DELETE /me` goes out.
+    static let erasureDrain: Duration = .seconds(3)
+
+    /// Called before `DELETE /me` (Profile, the suspension screen). The server upserts a user row
+    /// for any valid JWT, and a Clerk JWT stays valid for about a minute after the erasure — so
+    /// nothing this app sends may reach the server after it: one late like, mark, reply or feed
+    /// read would bring the account back. New writes stop here (queued, not sent, so
+    /// `abortErasure` can still send them); SyncCenter stops replaying; writes already on the
+    /// wire get a bounded moment to land FIRST — a request abandoned by cancellation can still
+    /// reach the server after the DELETE, a finished one cannot — and then the transport refuses
+    /// everything (`APIClient.halted`). On success the caller runs `teardown()` BEFORE signing out.
+    func prepareForErasure() async {
+        guard !isolated else { return }
+        erasing = true
+        SyncCenter.shared.suspendReplay()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: Self.erasureDrain)
+        func writing() -> Bool {
+            !progressLane.isEmpty || !batchChain.isEmpty || !socialLanes.isEmpty
+                || !ratingLanes.isEmpty || !commentsInFlight.isEmpty
+        }
+        while writing(), clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        api.halted = true
+    }
+
+    /// The deletion did not happen: everything the erasure held back goes now.
+    func abortErasure() {
+        guard erasing else { return }
+        erasing = false
+        api.halted = false
+        if !accountSuspended { SyncCenter.shared.resumeReplay() }
+        for (mediaId, write) in progressQueued where progressLane[mediaId] == nil {
+            sendProgress(franchiseId: write.franchiseId, mediaId: mediaId, episodes: write.episodes,
+                         command: write.command)
+        }
+        flushSocial()
+        for comment in pendingComments where comment.state == .sending {
+            Task { _ = await retryComment(id: comment.id) }
+        }
     }
 
     /// Full account teardown, run on every sign-out (voluntary or expired). Anything that outlives
@@ -383,6 +563,12 @@ final class AppModel {
         // The next account inherits no "already moved back" memory (review i4).
         UserDefaults.standard.removeObject(forKey: Self.resumedPartsKey)
         clearRecommendations()
+        // The feed, the social queues and their offline copies belong to this account (spec §1.6.1).
+        clearFeedAndSocial()
+        // Discover's genre pages carry this viewer's `status` marks (the genre list stays).
+        DiscoverCatalog.shared.clear()
+        visitStamped = false
+        pendingRoute = nil
         recentFragmentsPruned = false
         RewatchStore.shared.reset()
         SeasonSweepLedger.reset()
@@ -444,13 +630,19 @@ final class AppModel {
     /// away-time is long enough to count as a new visit.
     func sceneBecameActive() {
         now = .nowMs
+        guard !erasing else { return }
         guard let bg = backgroundedAt else { return }  // launch activation — start() covers it
         backgroundedAt = nil
         let away = now - bg
         guard away >= AppModel.staleReloadAfter else { return }
         Task {
+            // A new visit stamps FIRST, so the feed that follows is ordered against the real
+            // previous visit (iD3).
             if away >= AppModel.newVisitAfter { await stampOpened() }
             await reload()
+            await loadFeed(currentFeedTab, force: true)
+            await loadActivity(reset: true)
+            flushSocial()
         }
     }
 
@@ -462,10 +654,11 @@ final class AppModel {
     }
 
     /// Push the current library into the ambient layers (pending episode notifications and the
-    /// airing Live Activity) after any confirmed server-side change.
-    private func syncAmbient() async {
+    /// airing Live Activity) after any confirmed server-side change. Internal: reminders re-arm
+    /// through it (`AppModel+Activity`).
+    func syncAmbient() async {
         guard !isolated else { return }
-        await EpisodeNotifications.shared.sync(library: library, now: .nowMs)
+        await EpisodeNotifications.shared.sync(library: library, reminders: reminderAlerts(now: .nowMs), now: .nowMs)
         AiringLiveActivityManager.shared.sync(library: library, now: .nowMs)
     }
 
@@ -1161,7 +1354,10 @@ final class AppModel {
     /// and could name a different count than the show page for an hour after a drop (review,
     /// 23 Sep).
     func catchUpTarget(_ part: FranchisePart) -> Int {
-        min(part.markTarget(now: now), part.progressCeiling)
+        // The part does not know its source; the show that holds it does (iD17: a releasing part
+        // is bounded by what has aired, read in its own calendar).
+        let anchor = library.first { $0.parts.contains { $0.mediaId == part.mediaId } }?.timeAnchor ?? .local
+        return min(part.markTarget(now: now), part.writeCeiling(now: .nowMs, anchor: anchor))
     }
 
     /// The long press's "Mark all N episodes as watched…", AFTER its confirmation — the show
@@ -1217,9 +1413,13 @@ final class AppModel {
         // screens call current — never a nil because the first guess was at its ceiling while the
         // lockup named another part (review i5, F1: One Piece's capsule did nothing).
         let candidates = [chosen, f.currentPart, f.resumePart, f.releasingPart].compactMap { $0 }
-        guard let part = candidates.first(where: { min($0.progress + 1, $0.progressCeiling) > $0.progress })
-        else { return nil }
-        let target = min(part.progress + 1, part.progressCeiling)
+        // A releasing part is bounded by what has aired by now (iD17) — the server clamps there.
+        let ceilingNow: Int64 = .nowMs
+        let anchor = f.timeAnchor
+        guard let part = candidates.first(where: {
+            min($0.progress + 1, $0.writeCeiling(now: ceilingNow, anchor: anchor)) > $0.progress
+        }) else { return nil }
+        let target = min(part.progress + 1, part.writeCeiling(now: ceilingNow, anchor: anchor))
         let prev = part.progress
         // A mark on a Planned show is watching it: the first one moves it to Watching, and says
         // so on its receipt. Marks never changed the status, so a show 56 episodes in stayed
@@ -1296,8 +1496,12 @@ final class AppModel {
     /// row survived a bad connection while the batch they confirmed above it vanished — two
     /// answers to one failure, on one screen.
     func setProgress(franchiseId: String, mediaId: Int, episodes: Int, haptic: Bool = true) {
-        let part = franchise(id: franchiseId)?.parts.first { $0.mediaId == mediaId }
-        let clamped = min(max(0, episodes), part?.progressCeiling ?? .max)
+        let owner = franchise(id: franchiseId)
+        let part = owner?.parts.first { $0.mediaId == mediaId }
+        // Only an increase is bounded (`writeCeiling`): an unmark on a row recorded above today's
+        // aired count must not be pulled DOWN to it.
+        let ceiling = part?.writeCeiling(now: .nowMs, anchor: owner?.timeAnchor ?? .local) ?? .max
+        let clamped = min(max(0, episodes), ceiling)
         let prev = part?.progress
         finishedByMark = nil
         applyLocalProgress(franchiseId: franchiseId, mediaId: mediaId, episodes: clamped)
@@ -1498,13 +1702,46 @@ final class AppModel {
         let title = franchise(id: franchiseId)?.title ?? ""
         progressQueued[mediaId] = ProgressWrite(franchiseId: franchiseId, episodes: episodes,
                                                 command: command, title: title)
-        guard progressLane[mediaId] == nil else { return }
+        // During an erasure the write waits in the queue, unsent (`abortErasure` sends it).
+        guard progressLane[mediaId] == nil, !erasing else { return }
         progressLane[mediaId] = Task { [weak self] in
-            while let next = self?.progressQueued.removeValue(forKey: mediaId) {
+            while self?.erasing == false, let next = self?.progressQueued.removeValue(forKey: mediaId) {
                 await self?.putProgress(next, mediaId: mediaId)
             }
             self?.progressLane[mediaId] = nil
         }
+    }
+
+    /// Waits until no progress PUT for `mediaId` is queued or in flight (the lane above). True
+    /// when the part's last write reached the server; false when a failed `.progress` intent for
+    /// this media id is standing in SyncCenter. An episode room's read and a comment's POST wait
+    /// here, so a mark made seconds ago has reached the server before its gate is asked.
+    func awaitProgressLane(mediaId: Int) async -> Bool {
+        // The show's one-call writes too (an add-with-progress, a series mark): the part's value
+        // rides them as well, and the gate reads it.
+        while let lane = progressLane[mediaId] ?? batchLane(containing: mediaId) { await lane.value }
+        return !SyncCenter.shared.hasFailedProgress(mediaId: mediaId)
+    }
+
+    /// The one-call write chain of the show that carries `mediaId`, when one is queued or running.
+    private func batchLane(containing mediaId: Int) -> Task<Void, Never>? {
+        guard !batchChain.isEmpty,
+              let f = library.first(where: { $0.parts.contains { $0.mediaId == mediaId } }) else { return nil }
+        return batchChain[f.id]
+    }
+
+    /// The same wait, bounded: a lane stuck on a slow connection must not hold a comment page's
+    /// first read for longer than `timeout`. Polls rather than awaiting the lane, because a task's
+    /// `value` cannot be abandoned — a race against a timer would still wait for the lane.
+    @discardableResult
+    func awaitProgressLane(mediaId: Int, timeout: Duration) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        func busy() -> Bool { progressLane[mediaId] != nil || batchLane(containing: mediaId) != nil }
+        while busy(), clock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return !busy() && !SyncCenter.shared.hasFailedProgress(mediaId: mediaId)
     }
 
     private func putProgress(_ write: ProgressWrite, mediaId: Int) async {
@@ -1515,6 +1752,19 @@ final class AppModel {
             // Teardown cancelled the lane, or a newer target is queued behind this one and will
             // decide the outcome — either way this attempt has nothing to report.
             guard !Task.isCancelled, progressQueued[mediaId] == nil else { return }
+            // Refused by an erasure's halt: back in the queue, unsent — `abortErasure` sends it,
+            // a completed erasure's teardown drops it.
+            if erasing {
+                progressQueued[mediaId] = write
+                return
+            }
+            // `404 media not found` is final (server §13.3): a part the server does not know can
+            // never take this mark, and a Retry would repeat the 404 forever. The next snapshot
+            // wins — the local mark retires as if the write had settled.
+            if let api = error as? APIError, case .http(404, _) = api {
+                settleLocalProgress(mediaId: mediaId, episodes: write.episodes)
+                return
+            }
             fileFailure(command: write.command, title: write.title,
                                      reason: Copy.Notice.reason(error),
                                      intent: .progress(franchiseId: write.franchiseId, mediaId: mediaId,
@@ -1558,6 +1808,9 @@ final class AppModel {
             addToLibrary(franchiseId: franchiseId, title: title, isReleasing: status == .watching)
         case .unsubscribe(let franchiseId, _):
             removeFromLibrary(franchiseId: franchiseId, haptic: false)
+        case .comment(let id, let subject, let parentId, let body, let franchiseId, let title):
+            await replayComment(id: id, subject: subject, parentId: parentId, body: body,
+                                franchiseId: franchiseId, title: title)
         }
     }
 
@@ -1596,6 +1849,12 @@ final class AppModel {
     func fileFailure(command: String, title: String, reason: String, intent: WriteIntent? = nil,
                      retry: @escaping @MainActor () async -> Void) {
         guard !isolated else { isolatedFailures.append(intent); return }
+        // Behind the suspension view every write answers 403 until sign-out; a row whose Retry
+        // repeats that forever is not a failed change (`APIClient.onSuspended` raised the flag
+        // before this `catch` ran).
+        guard !accountSuspended else { return }
+        // Nor is a write an account deletion held back: it is not a failure of the account's.
+        guard !erasing else { return }
         SyncCenter.shared.record(command: command, title: title, reason: reason, intent: intent, retry: retry)
     }
 

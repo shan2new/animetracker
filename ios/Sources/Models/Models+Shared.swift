@@ -101,14 +101,20 @@ struct WatchedBatch: Sendable {
 
     private init(franchise: Franchise, selected: [FranchisePart], includesFilms: Bool, now: Int64) {
         let seasons = franchise.seasonPartsInOrder
-        let changed = selected.filter { !$0.isUpcoming && min($0.markTarget(now: now), $0.progressCeiling) > $0.progress }
+        let anchor = franchise.timeAnchor
+        let changed = selected.filter {
+            !$0.isUpcoming && min($0.markTarget(now: now), $0.progressCeiling(now: now, anchor: anchor)) > $0.progress
+        }
         // "I've seen all of it" includes the story's films: marking the seasons alone filed Demon
         // Slayer as Watched over "NEXT UP · Movie 1: Mugen Train" (iteration 2).
         let films = !includesFilms ? [] : franchise.mainStoryMovies.filter {
             !$0.isUpcoming && $0.availableEpisodes() > $0.progress
         }
         let filmParts = films.map { FranchiseProgressValue(mediaId: $0.mediaId, episodes: max(1, $0.availableEpisodes())) }
-        let seasonParts = changed.map { FranchiseProgressValue(mediaId: $0.mediaId, episodes: min($0.markTarget(now: now), $0.progressCeiling)) }
+        let seasonParts = changed.map {
+            FranchiseProgressValue(mediaId: $0.mediaId,
+                                   episodes: min($0.markTarget(now: now), $0.progressCeiling(now: now, anchor: anchor)))
+        }
         parts = seasonParts + filmParts
         previous = changed.map { .init(mediaId: $0.mediaId, episodes: $0.progress) }
             + films.map { .init(mediaId: $0.mediaId, episodes: $0.progress) }

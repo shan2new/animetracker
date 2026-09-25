@@ -338,6 +338,8 @@ struct VideoSheet: View {
     var ambientArt: String? = nil
     /// The show's colour: the glow around the picture.
     var tint: Color? = nil
+    /// Seconds in: a trailer that was playing in its post picks up where it was.
+    var startAt: Int = 0
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -506,7 +508,7 @@ struct VideoSheet: View {
         let shape = RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous)
         return ZStack {
             Color.black
-            if let embed = video.embedURL {
+            if let embed = video.embedURL(startingAt: startAt) {
                 VideoEmbed(url: embed,
                            onEnterFullscreen: { enteredFullscreen = true },
                            onLeaveFullscreen: { dismiss() })

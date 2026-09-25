@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Before/after sheet of the heroes: <before-dir> <after-dir> <out.png>."""
+"""Before/after sheet of the heroes: <before-dir> <after-dir> <out.png>.
+Today has no billboard since the feed (25 Sep): its pair is the feed and the story viewer, the
+full-bleed art the feed does have; the show pages keep theirs."""
 import sys, os
 from PIL import Image, ImageDraw
 b, a, out = sys.argv[1:4]
-names = [('today', 'today'), ('detail-wed', 'detail-wed'), ('detail-got', 'detail-got'), ('detail-aot', 'detail-aot'), ('detail-slime', 'detail-slime')]
+names = [('feed', 'feed'), ('story', 'story'), ('detail-wed', 'detail-wed'), ('detail-got', 'detail-got'), ('detail-aot', 'detail-aot'), ('detail-slime', 'detail-slime')]
 tiles = []
 for nb, na in names:
     pb, pa = f'{b}/{nb}.png', f'{a}/{na}.png'

@@ -443,15 +443,53 @@ struct FranchisePart: Codable, Identifiable, Sendable {
         return airedEpisodes > 0 ? airedEpisodes : totalEpisodes
     }
 
-    /// Highest episode number that may be recorded as watched for this part — the season's SIZE.
-    /// A "+1" logging control with no ceiling will happily run progress past the end of a season
-    /// (a 10-episode season sat at 59/10 because every tap incremented and the progress ring
-    /// clamped its *visual* at 100%, so the overrun was invisible).
+    /// Highest episode number that may be recorded as watched for this part (iD17, server §4.1's
+    /// `clampProgressValue`, mirrored so the server never cuts a mark the client showed):
     ///
-    /// Deliberately the season size rather than `availableEpisodes()`: aired counts trail the
-    /// catalogue by up to an hour, and blocking a legitimate write on stale sync data is worse
-    /// than allowing a keen viewer to run a few episodes ahead. Unknown size (ongoing AniList
-    /// shows carry `episodes: null`) leaves it unbounded rather than guessing.
+    /// - NOT_YET_RELEASED → 0: a season that has not premiered cannot have been watched.
+    /// - RELEASING → what has aired BY NOW: `max(provenAiredCount(now:), airedByNow(now:anchor:))`,
+    ///   so a slot that struck since the hourly sync counts at once. The old ceiling, the season's
+    ///   size, let a 12-episode season with 5 aired be marked to 12, and the server now clamps that.
+    ///   When nothing at all is known — no aired count, no slot, no dated episode, no total — the
+    ///   server leaves the value unclamped, and so does this (`Int.max`).
+    /// - Otherwise the season's SIZE, as before: a "+1" control with no ceiling ran a 10-episode
+    ///   season to 59/10 behind a ring that clamped only its visual. Unknown size stays unbounded.
+    ///
+    /// Never above the server's: every aired count here is anchor-local, and the server admits a
+    /// date-only slot at the earliest zone on Earth (UTC+14), a timed one at its instant.
+    func progressCeiling(now: Int64, anchor: Formatting.TimeAnchor) -> Int {
+        if isUpcoming { return 0 }
+        guard isReleasing else {
+            let size = max(totalEpisodes, airedEpisodes)
+            return size > 0 ? size : Int.max
+        }
+        let aired = airedForGate(now: now, anchor: anchor)
+        let known = aired > 0 || nextAiringAt != nil || !airings.isEmpty
+            || episodes.contains { $0.airDate != nil } || totalEpisodes > 0
+        return known ? aired : Int.max
+    }
+
+    /// The ONE aired count a releasing part's write ceiling and its episode gate share (the server's
+    /// `airedCount` is one number for its clamp and its `episodeAccess`): the proven count or the
+    /// latest passed slot, whichever is ahead. A TMDB episode whose synthesised 17:00 UTC slot has
+    /// struck is markable AND its room opens — the gate used `airedByNow` alone and kept that room
+    /// "unaired" until the next local day. Still never laxer than the server (see `progressCeiling`).
+    func airedForGate(now: Int64, anchor: Formatting.TimeAnchor) -> Int {
+        max(provenAiredCount(now: now), airedByNow(now: now, anchor: anchor))
+    }
+
+    /// The ceiling a WRITE is bounded by: `progressCeiling`, but never below what is already
+    /// recorded — only an increase is bounded (the write rule: a progress mark never rolls back).
+    /// Rows written before iD17 can sit above the aired count (the old ceiling was the season's
+    /// size); bounded at the aired count, unmarking 12 → 11 on a five-aired season wrote 5, and a
+    /// batch to 14 wrote backwards. Mirrors the server's `clampProgressValue(row, v, now, current)`.
+    func writeCeiling(now: Int64, anchor: Formatting.TimeAnchor) -> Int {
+        max(progressCeiling(now: now, anchor: anchor), progress)
+    }
+
+    /// The season's SIZE (the pre-iD17 ceiling). A releasing part is bounded by what has aired —
+    /// read `progressCeiling(now:anchor:)`.
+    @available(*, deprecated, message: "Use progressCeiling(now:anchor:) — a releasing part is bounded by what has aired")
     var progressCeiling: Int {
         if isUpcoming { return 0 }
         let size = max(totalEpisodes, airedEpisodes)
@@ -495,7 +533,7 @@ struct Subscription: Codable, Sendable {
 /// prose filed every window under January of its year, so a shelf sorted "soonest first" put
 /// October 2026 ahead of an August 2026 premiere while its own caption read "Returns Oct 2026".
 /// Nothing here re-parses `release`; `sortKey` is the one order and `date` is the one date.
-struct ReleaseWindow: Codable, Sendable {
+struct ReleaseWindow: Codable, Sendable, Hashable {
     enum Precision: String, Codable, Sendable {
         /// `date` is exactly what was announced, to the day / to the month.
         case day, month

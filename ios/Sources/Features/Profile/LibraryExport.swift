@@ -2,37 +2,121 @@ import SwiftUI
 import CoreTransferable
 import UniformTypeIdentifiers
 
-/// The user's library as a file (board 15: export is always free). Titles, statuses and progress
-/// only — never account identifiers. The bytes are produced on the main actor when the export is
-/// created, so the transfer itself is plain data.
+/// The account as a file (board 15: export is always free).
+///
+/// **JSON is the account's own copy** (`GET /me/export`, server §7.3): the library, the replies,
+/// likes, saves, reminders, hides, ratings, blocks and reports — everything the server holds for
+/// this account, in the file the server names (`previously-export-<date>.json`). It is fetched when
+/// the person picks a destination, not when the screen opens: the route is rate limited to a few
+/// exports an hour, and a screen that merely opened must not spend one. It works while the account
+/// is suspended (server D12). A server that predates the route (404) gets the device's own library
+/// export instead, as before — titles, statuses and progress, never account identifiers.
+///
+/// **CSV is the library, made on this device**: one row per part, for spreadsheets.
 struct LibraryExport: Transferable {
     enum Format { case json, csv }
     let format: Format
-    let json: Data
-    let csv: Data
+    /// Where the account's copy comes from. Nil for a model with no server behind it.
+    let api: APIClient?
+    /// The device's copy of the library in `format` — the CSV itself, and the JSON the file falls
+    /// back to when the server has no export route.
+    let local: Data
 
     @MainActor
     init(appModel: AppModel, format: Format) {
         self.format = format
-        self.json = LibraryExport.makeJSON(appModel.library)
-        self.csv = LibraryExport.makeCSV(appModel.library)
+        self.api = appModel.isIsolated ? nil : appModel.api
+        // Only the format this row shares: the body that builds the row runs again on every change
+        // the sheet observes, and both encodings walk the whole library.
+        switch format {
+        case .json: self.local = LibraryExport.makeJSON(appModel.library)
+        case .csv: self.local = LibraryExport.makeCSV(appModel.library)
+        }
     }
 
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .json) { export in
-            try export.write(ext: "json", data: export.json)
+            try await export.accountFile()
         }
         .exportingCondition { $0.format == .json }
         FileRepresentation(exportedContentType: .commaSeparatedText) { export in
-            try export.write(ext: "csv", data: export.csv)
+            try export.write(name: "previously-library.csv", data: export.local)
         }
         .exportingCondition { $0.format == .csv }
     }
 
-    private func write(ext: String, data: Data) throws -> SentTransferredFile {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("previously-library.\(ext)")
+    /// Why the account's copy did not arrive, in the words a destination may show. Never a status
+    /// code (board 14).
+    enum Failure: LocalizedError {
+        case unreachable
+        case rateLimited
+        /// `404 {"error":"account not found"}`: a suspended identity whose account was already
+        /// erased (server §7.3 — the export only looks the account up, never re-creates it).
+        case nothingToExport
+
+        var errorDescription: String? {
+            switch self {
+            case .unreachable: return Copy.Account.exportFailed
+            case .rateLimited: return Copy.Account.exportRateLimited
+            case .nothingToExport: return Copy.Social.suspendedExportNothing
+            }
+        }
+    }
+
+    /// `404 account not found` — told apart from a server that has no export route (whose 404
+    /// names the route), which falls back to the device's library.
+    static func isAccountGone(_ error: APIError) -> Bool {
+        error.status == 404 && error.socialError?.error.lowercased() == "account not found"
+    }
+
+    /// The server's export, under the server's name. Only a 404 — the route does not exist on this
+    /// server — falls back to the device's library: any other failure is REPORTED, because a
+    /// library-only file handed over in place of "everything in your account" would be a quieter
+    /// version of the claim the row makes.
+    private func accountFile() async throws -> SentTransferredFile {
+        guard let api else { return try write(name: "previously-library.json", data: local) }
+        do {
+            let file = try await api.accountExportFile()
+            return try write(name: Self.fileName(suggested: file.suggestedFilename), data: file.data)
+        } catch let error as APIError {
+            if Self.isAccountGone(error) { throw Failure.nothingToExport }
+            if error.status == 404 { return try write(name: "previously-library.json", data: local) }
+            if case .rateLimited = error { throw Failure.rateLimited }
+            throw Failure.unreachable
+        } catch {
+            throw Failure.unreachable
+        }
+    }
+
+    /// The server's file name, reduced to a bare `.json` name (it arrives from a header, so it is
+    /// never trusted as a path); a dated default when the header named nothing usable.
+    static func fileName(suggested: String?) -> String {
+        let bare = (suggested ?? "")
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:"))
+            .last?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        if bare.hasSuffix(".json"), bare.count > 5, bare.count <= 96,
+           !bare.hasPrefix("."), bare.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
+            return bare
+        }
+        let day = Date().formatted(.iso8601.year().month().day())
+        return "previously-export-\(day).json"
+    }
+
+    private func write(name: String, data: Data) throws -> SentTransferredFile {
+        SentTransferredFile(try Self.temporaryFile(name: name, data: data))
+    }
+
+    static func temporaryFile(name: String, data: Data) throws -> URL {
+        // A folder of its own per export, so two shares in one session never race on one path and
+        // the server's dated name survives intact.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
         try data.write(to: url, options: .atomic)
-        return SentTransferredFile(url)
+        return url
     }
 
     private static func makeJSON(_ library: [Franchise]) -> Data {

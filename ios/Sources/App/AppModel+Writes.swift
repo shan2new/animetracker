@@ -120,7 +120,10 @@ extension AppModel {
         guard let f = franchise(id: franchiseId),
               let part = f.parts.first(where: { $0.mediaId == mediaId }) else { return nil }
         let prev = part.progress
-        let target = min(max(0, episode), part.progressCeiling)
+        // A releasing part is bounded by what has aired by now (iD17), read in its own calendar —
+        // an INCREASE only (`writeCeiling`): a batch to 14 over a row recorded at 12 with five
+        // aired must not write backwards to 5.
+        let target = min(max(0, episode), part.writeCeiling(now: .nowMs, anchor: f.timeAnchor))
         guard target != prev else { return nil }
         let shelvedAs = target > prev ? resumableStatus(f, part: part) : nil
 

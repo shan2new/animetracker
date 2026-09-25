@@ -82,8 +82,9 @@ struct ArtworkImage: Codable, Hashable, Sendable {
 }
 
 /// One element of a list decoded on its own, so a malformed entry drops itself instead of the
-/// whole array. `value` is nil for the entry that failed.
-private struct Lenient<T: Decodable>: Decodable {
+/// whole array. `value` is nil for the entry that failed. Shared by every lenient list in the
+/// models (the galleries here, the feed and social wire types in Models+Feed.swift).
+struct Lenient<T: Decodable>: Decodable {
     let value: T?
     init(from decoder: Decoder) { value = try? T(from: decoder) }
 }
@@ -189,12 +190,25 @@ struct WideArt: Hashable, Sendable {
         guard let url, url.contains("image.tmdb.org/t/p/w") else { return url }
         return url.replacingOccurrences(of: #"/t/p/w\d+/"#, with: "/t/p/original/", options: .regularExpression)
     }
+
+    /// A story frame is the whole screen: TMDB `w1280` (1280 px wide), or `w780` when the path is
+    /// constrained/expensive (Low Data Mode, cellular) — iD9. An `original` poster is several MB, and a
+    /// story tray prefetches its neighbours, so a frame never asks for one. Only TMDB paths are
+    /// rewritten (the `billboardResolution` rule); AniList's CDN has no size ladder. QA check (§6.4):
+    /// a poster path at `w1280` answers 200.
+    static func storyResolution(_ url: String?, constrained: Bool) -> String? {
+        guard let url, url.contains("image.tmdb.org/t/p/") else { return url }
+        let size = constrained ? "w780" : "w1280"
+        return url.replacingOccurrences(of: #"/t/p/(w\d+|original)/"#, with: "/t/p/\(size)/",
+                                        options: .regularExpression)
+    }
 }
 
 /// The legacy `banner` field, trusted only when it is a banner. Writers older than the explicit
 /// artwork set copied a portrait cover into `banner` when the catalogue had no landscape asset;
-/// exact URL equality is that copy, and it is a poster, not a banner.
-private func legacyBanner(_ banner: String?, cover: String?) -> String? {
+/// exact URL equality is that copy, and it is a poster, not a banner. Internal: the feed's wire
+/// types (`FeedPartRef`, `FeedFranchise`) answer the same art accessors in the same order.
+func legacyBanner(_ banner: String?, cover: String?) -> String? {
     guard let b = ArtworkSet.nonEmpty(banner), b != cover else { return nil }
     return b
 }
@@ -447,23 +461,30 @@ struct FranchiseVideo: Codable, Identifiable, Equatable, Sendable {
     /// The YouTube id when this is a YouTube video — the one provider the app plays in place.
     var youtubeID: String? { site == "youtube" ? id : nil }
 
-    /// Where the viewer goes to watch it outside the app: the catalogue's link, else the
-    /// provider's own page for the id.
+    /// Where the viewer goes to watch it outside the app: the catalogue's link — `https` with a
+    /// host only (`SafeURL`, brief §14: a `javascript:` or `myapp://` link is never opened, whatever
+    /// the server let through) — else the provider's own page for the id.
     var watchURL: URL? {
-        url.flatMap(URL.init(string:)) ?? youtubeID.flatMap { URL(string: "https://www.youtube.com/watch?v=\($0)") }
+        SafeURL.https(url) ?? youtubeID.flatMap { URL(string: "https://www.youtube.com/watch?v=\($0)") }
     }
 
     /// The in-app player page (YouTube only): autoplaying, no related-video wall. Not `playsinline`
     /// — the trailer cover hands playback to the system's full-screen player (`VideoEmbed`).
-    var embedURL: URL? {
+    var embedURL: URL? { embedURL(startingAt: 0) }
+
+    /// The same page, starting `seconds` in — the stage picking up where the post's inline trailer
+    /// had got to.
+    func embedURL(startingAt seconds: Int) -> URL? {
         youtubeID.flatMap {
-            URL(string: "https://www.youtube.com/embed/\($0)?autoplay=1&rel=0&modestbranding=1")
+            URL(string: "https://www.youtube.com/embed/\($0)?autoplay=1&rel=0&modestbranding=1"
+                + (seconds > 0 ? "&start=\(seconds)" : ""))
         }
     }
 
-    /// The still to draw the card with: the catalogue's, else the provider's own 16:9 frame.
+    /// The still to draw the card with: the catalogue's (`https` only, as `watchURL`), else the
+    /// provider's own 16:9 frame.
     var thumbnailURL: String? {
-        thumbnail ?? youtubeID.map { "https://i.ytimg.com/vi/\($0)/mqdefault.jpg" }
+        (SafeURL.https(thumbnail) != nil ? thumbnail : nil) ?? youtubeID.map { "https://i.ytimg.com/vi/\($0)/mqdefault.jpg" }
     }
 
     /// The card's name: the catalogue's title, else what kind of video it is.

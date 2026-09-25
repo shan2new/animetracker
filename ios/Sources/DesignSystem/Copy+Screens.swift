@@ -38,7 +38,6 @@ extension Copy {
 extension Copy.Action {
     /// The one spelling — Search's (`Copy.Search.addToLibrary`).
     static var addToLibrary: String { Copy.Search.addToLibrary }
-    static let dismissRecap = "Dismiss what you missed"
     static let revealEpisodeTitle = "Reveal episode title"
     static let hideEpisodeTitle = "Hide episode title"
     static let revealEpisodeTitlesAndStills = "Reveal episode titles and stills"
@@ -79,44 +78,18 @@ extension Copy.Confirm {
 }
 
 extension Copy {
-    /// Today is deliberately visual-first. These are the few short labels that survive on the
-    /// screen after the state is expressed by artwork, hierarchy and the watched control.
-    /// Today's own sentences. Everything else it says is the shared grammar — the show page's
-    /// badges and lines (`Copy.Progress`, `Copy.Label`), `Copy.Action.addAShow`,
-    /// `Copy.Search.trendingNow` — so one state never has two names a tab apart.
+    /// The Planned → Watching command, the one sentence of the retired Today billboard (25 Sep:
+    /// Today is the feed, `Copy.Feed`) that outlived it — the show page's lockup still says it.
+    /// Its recap (`Copy.Recap`) and empty-state lines went with the screen.
     enum Today {
-        static let buildYourToday = "Build your Today"
-        static let buildYourTodaySupporting = "Add shows to see new episodes the moment they arrive."
-        /// A Planned show's one step, on Today's billboard and on its own page alike.
+        /// A Planned show's one step, on its own page.
         static let startWatching = "Start watching"
-        /// The release deck's page control, spoken: "New release 1 of 3".
-        static func releasePosition(_ i: Int, _ n: Int) -> String { "New release \(i) of \(n)" }
         /// The same step for a Planned show already part-way through: "Start" over a show with 57
         /// of 63 episodes watched told the reader the app had forgotten them (review, 23 Sep).
         static let continueWatching = "Continue watching"
         /// The one Planned → Watching command, worded for where the reader is.
         static func startOrContinue(_ f: Franchise) -> String {
             f.parts.contains { $0.progress > 0 } ? continueWatching : startWatching
-        }
-    }
-
-    enum Recap {
-        static let whileYouWereAway = "While you were away"
-        /// The beats past the card's third row, NAMED (review i2: "and 1 more" hid the one dated
-        /// return behind a count): "Also Solo Leveling · Returns 3 Oct" for one, "Also Bleach and
-        /// Wistoria" for two, "Also Bleach, Wistoria and 2 more" past that.
-        static func also(_ names: [String], label: String?) -> String {
-            switch names.count {
-            case 0: return ""
-            case 1: return "Also \(names[0])" + (label.map { " \u{00B7} \($0)" } ?? "")
-            case 2: return "Also \(names[0]) and \(names[1])"
-            default: return "Also \(names[0]), \(names[1]) and \(names.count - 2) more"
-            }
-        }
-        /// "Since your last visit, 23 Jul" — the window always names its anchor.
-        static func sinceYourLastVisit(_ phrase: String) -> String {
-            let tail = phrase.hasPrefix("Since ") ? String(phrase.dropFirst(6)) : phrase
-            return "Since your last visit, \(tail)"
         }
     }
 
@@ -141,6 +114,45 @@ extension Copy {
         static func discardChangesTitle(_ n: Int) -> String { "Discard \(Copy.changes(n))?" }
         static let discardChangesMessage = "They were never saved to your account. Your library here stays as it is."
         static func discardChangesConfirm(_ n: Int) -> String { "Discard \(Copy.changes(n))" }
+
+        /// The sign-out confirmation's one sentence. `pending` failed changes earn a second clause,
+        /// because they carry a second fact: they stay on this device until the next sign-in.
+        static func signOutMessage(pending: Int) -> String {
+            guard pending > 0 else {
+                return "Your library stays in your account \u{2014} sign back in any time."
+            }
+            // "3 changes hasn't" — the one verb in the app that has to agree with its count.
+            let verb = pending == 1 ? "hasn\u{2019}t" : "haven\u{2019}t"
+            let pronoun = pending == 1 ? "it stays" : "they stay"
+            return "Your library stays in your account. \(Copy.changes(pending)) \(verb) synced yet \u{2014} "
+                + "\(pronoun) on this device and upload the next time you sign in."
+        }
+        /// The blast radius, in the user's own numbers. The strongest copy in the app; not shortened.
+        static func deleteMessage(titles: Int) -> String {
+            "This permanently deletes your account and everything in it"
+                + (titles > 0 ? " \u{2014} \(Copy.titles(titles)), all progress and watch history" : "")
+                + ". It can\u{2019}t be undone."
+        }
+        /// The suspended screen's command: it opens `deleteTitle`'s confirmation, so it carries the
+        /// ellipsis (Profile's row is a settings row, whose title is the destination's name).
+        static let deleteCommand = "Delete account\u{2026}"
+        /// The suspended screen's export: a suspended account may still download everything the
+        /// server holds about it (`GET /me/export`, server D12) — the share sheet with Profile's
+        /// JSON file.
+        static let exportCommand = "Export your data"
+        /// The share sheet's preview title for that file.
+        static let exportPreviewTitle = "Your Previously data"
+
+        /// Export. The JSON is the account's own copy from the server (`GET /me/export`: the library,
+        /// replies, likes, saves and everything else the account holds); the CSV is the library,
+        /// made on this device. Never "for re-import" — there is no import (B1).
+        static let exportJSONSubtitle = "Everything in your account, machine-readable"
+        static let exportFootnote =
+            "A copy is made when you choose a destination, and goes only where you share it."
+        /// The account's copy could not be fetched (offline, the server down). Nothing was shared.
+        static let exportFailed = "Your account\u{2019}s copy couldn\u{2019}t be downloaded. Check your connection and try again."
+        /// `429` on `/me/export` (a few exports an hour).
+        static let exportRateLimited = "You\u{2019}ve exported a few times already. Try again later."
     }
 }
 

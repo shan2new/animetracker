@@ -27,6 +27,9 @@ private enum Metrics {
     static let ownedRingOverArt: Double = 0.45
     /// The owned ring's alpha on a surface, where the `accentSoft` fill already carries the state.
     static let ownedRingOnSurface: Double = 0.35
+    /// X's Follow pill: 32 tall, and wide enough for "Added" so both states share one width.
+    static let pillHeight: CGFloat = 32
+    static let pillMinWidth: CGFloat = 78
 }
 
 // MARK: - Add / added
@@ -39,6 +42,9 @@ enum AddControlPlacement {
     case row
     /// Labeled action grouped with the facts on a scene card, never laid over poster lettering.
     case artwork
+    /// X's Follow pill at a result row's trailing edge (the X pass, 25 Sep): "Add" in ink on white
+    /// until the show is yours, then "Added" in an outline — the one-pixel ring, X's "Following".
+    case pill
 }
 
 /// The one add control.
@@ -90,6 +96,8 @@ struct AddControl<OwnedMenu: View>: View {
             control.menuStyle(.button).buttonStyle(MarkPressStyle())
         } else if placement == .artwork {
             control.menuStyle(.button).buttonStyle(ArtworkActionStyle(filled: false))
+        } else if placement == .pill {
+            control.menuStyle(.button).buttonStyle(FeedIconPressStyle())
         } else {
             control.menuStyle(.button).buttonStyle(CompactSquareStyle(owned: owned))
         }
@@ -141,7 +149,16 @@ private struct AddGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if placement == .artwork {
+        if placement == .pill {
+            Text(owned ? Copy.Search.added : (asks ? Copy.Search.addAsks : Copy.Search.add))
+                .type(ThemeType.feedNoteTitle)
+                .foregroundStyle(owned ? ThemeColor.feedText : ThemeColor.canvas)
+                .lineLimit(1)
+                .fixedSize()
+                .contentTransition(.opacity)
+                .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: owned)
+                .modifier(AddControlShape(placement: placement, owned: owned))
+        } else if placement == .artwork {
             // Labelled on the art (20 Sep); an owned show's check is amber — ownership is STATE.
             Label {
                 Text(owned ? Copy.Search.added : (asks ? Copy.Search.addAsks : Copy.Search.add))
@@ -192,6 +209,16 @@ private struct AddControlShape: ViewModifier {
                 .contentShape(Rectangle())
         case .artwork:
             content
+        case .pill:
+            // X's Follow pill: 32 tall, one width in both states (the column stays straight), in a
+            // 44-pt target.
+            content
+                .padding(.horizontal, ThemeSpace.x4)
+                .frame(minWidth: Metrics.pillMinWidth, minHeight: Metrics.pillHeight)
+                .background(owned ? Color.clear : ThemeColor.feedText, in: Capsule())
+                .overlay(Capsule().strokeBorder(owned ? ThemeColor.feedSeparator : .clear, lineWidth: FeedMetrics.hairline))
+                .frame(minHeight: Metrics.hitTarget)
+                .contentShape(Rectangle())
         }
     }
 }
@@ -333,5 +360,44 @@ struct RankGutter: View {
             .fixedSize(horizontal: true, vertical: false)
             .frame(width: lane, alignment: .leading)
             .accessibilityHidden(true)
+    }
+}
+
+// MARK: - The scope, at rest
+
+/// All · Anime · TV — the scope as a RESTING selector at the top of Discover's launchpad and of a
+/// genre page (brief §17: the chips filter every section — the top pick, Recommended, the genres
+/// and the chart). It replaces the removable token both surfaces drew only once a scope was
+/// already on, which left no way to choose one at rest: the system scope bar
+/// (`.searchScopes(.onTextEntry)`) exists only while there is text, and it still governs the
+/// results.
+///
+/// Bound to the app's one `mediaFilter`, so a genre page and the launchpad can never disagree.
+/// The selected chip is amber as STATE (the filter that is on — `ChipButtonStyle(selected:)`); the
+/// others are tone only. Choosing a scope is not a write, so it plays no haptic.
+struct ScopeChips: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let current = appModel.mediaFilter
+        HStack(spacing: ThemeSpace.x2) {
+            ForEach(MediaFilter.allCases, id: \.self) { filter in
+                let selected = filter == current
+                Button {
+                    guard !selected else { return }
+                    withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
+                        appModel.mediaFilter = filter
+                    }
+                } label: {
+                    Text(Copy.Search.scopeWord(filter))
+                        .lineLimit(1)
+                }
+                .buttonStyle(ChipButtonStyle(selected: selected))
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, ThemeMetrics.gutter)
     }
 }

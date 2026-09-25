@@ -6,14 +6,42 @@
 	  App privacy manifest (Apple's required-reason API + data-collection declaration).
 
 	  Every entry below is a claim about THIS app's behaviour, and each one is checkable against the
-	  code:
-	    • Email address + user id  — the Clerk session's identity, stored on the backend as
-	      `users.email` / `users.clerk_id` (server/src/db/schema.ts) so a library belongs to an
-	      account across devices. Linked to the user by definition; erased by `DELETE /me`.
-	    • Other user content       — the library itself: which shows are subscribed, their status,
-	      and per-episode progress (`subscriptions`, `progress`). User-authored, not analytics.
-	    • Nothing is collected for advertising, analytics or personalisation, and nothing is shared
-	      with a data broker — hence NSPrivacyTracking false and no tracking domains.
+	  code (server/src/db/schema.ts):
+	    • Email address            — the Clerk session's identity, `users.email`, so a library belongs
+	      to an account across devices. Never shown to anyone. Linked; erased by `DELETE /me`.
+	    • User ID                  — the Clerk id (`users.clerk_id`) AND, since the Today feed
+	      (25 Sep), the community HANDLE a person chooses at their first reply
+	      (`user_profiles.handle`, "@mira.k") — an identifier other users see. Linked; erased by
+	      `DELETE /me`.
+	    • Name                     — the community display name (`user_profiles.display_name`), chosen
+	      with the handle and shown beside it on every reply. Linked; erased by `DELETE /me`.
+	    • Other user content       — what a person makes: the library (`subscriptions`, `progress` —
+	      which shows, their status, per-episode progress), replies and episode-discussion comments
+	      (`comments`), episode ratings (`episode_ratings`), and the reports they file (`reports`).
+	      User-authored, not analytics.
+	    • Product interaction      — what a person does in the app, stored so the app can act on it:
+	      likes (`likes`, `comment_likes`), saves (`saves`), episode reminders (`reminders`), hidden
+	      posts and muted shows (`feed_hides`), blocks (`blocks`), "Not interested" on a
+	      recommendation (`recommendation_feedback`), and the visit stamps `POST /me/opened` keeps
+	      (`users.last_opened_at` / `prev_opened_at`) so the feed can say what is new since the last
+	      visit. Used for App Functionality only — never analytics, never advertising.
+
+	  WHAT OTHER PEOPLE SEE: the display name, the handle and the text of a person's replies are
+	  public to every signed-in user; like counts and rating averages are shown only as AGGREGATES
+	  (no one sees how anyone else rated; the one exception is that a reply's author is told who
+	  liked that reply, in Activity). Nothing else is visible to anyone. "Publicly
+	  visible" is not a manifest field — it is answered in App Store Connect (App Privacy, and the
+	  age rating's User-Generated Content question), per docs/beta-release.md.
+
+	  Everything above is erased by `DELETE /me` and returned by `GET /me/export`; the one record kept
+	  after erasure is a moderation ban (`moderation_bans`, keyed on the auth id), disclosed in the
+	  privacy policy. Nothing is collected for advertising or analytics, and nothing is shared with a
+	  data broker — hence NSPrivacyTracking false and no tracking domains. There is no push and no
+	  image upload; the community's avatars are monograms drawn on the device.
+
+	  App Store Connect's App Privacy answers must match this list: Email Address, User ID, Name,
+	  Other User Content and Product Interaction, each linked to the user, each App Functionality,
+	  none used for tracking.
 
 	  Keep this file honest: if a screen starts collecting something new, this manifest changes in
 	  the same commit. Apple diffs it against the App Privacy answers in App Store Connect.
@@ -50,7 +78,31 @@
 		</dict>
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeName</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
 			<string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
 			<key>NSPrivacyCollectedDataTypeLinked</key>
 			<true/>
 			<key>NSPrivacyCollectedDataTypeTracking</key>
@@ -64,8 +116,8 @@
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>
-			<!-- Theme/notification preferences, the sync queue and the debug launch flags all live in
-			     UserDefaults.standard, read and written only by this app. -->
+			<!-- Theme/notification preferences, the sync queue, the remembered billboard tint and the
+			     debug launch flags all live in UserDefaults.standard, read and written only by this app. -->
 			<key>NSPrivacyAccessedAPIType</key>
 			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
 			<key>NSPrivacyAccessedAPITypeReasons</key>

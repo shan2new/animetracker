@@ -205,6 +205,8 @@ enum Copy {
     /// One form per intent (board 09). A command that exists here must not be reworded at a call
     /// site, shortened to fit a control, or given a second form for a narrow layout.
     enum Action {
+        /// A page's own back arrow (X's post page), spoken.
+        static let back = "Back"
         static let readMore = "Read more"
         static let readLess = "Read less"
         static let markAsWatched = "Mark as watched"
@@ -316,6 +318,19 @@ enum Copy {
             Command(label: retry, opensConfirmation: false),
             Command(label: clear, opensConfirmation: false),
             Command(label: discard, opensConfirmation: true),
+            // The feed and the social layer (spec §1.9.5). Report, block and delete open a sheet or
+            // an alert; the post menu's items and the alert affordances act at once.
+            Command(label: Social.reportCommand, opensConfirmation: true),
+            Command(label: Social.blockCommand("dex"), opensConfirmation: true),
+            Command(label: Social.deleteCommand, opensConfirmation: true),
+            Command(label: Feed.notInterested, opensConfirmation: false),
+            Command(label: Feed.mute("One Piece"), opensConfirmation: false),
+            Command(label: Feed.unmute("One Piece"), opensConfirmation: false),
+            Command(label: Feed.copyText, opensConfirmation: false),
+            Command(label: Feed.alertsTurnOn, opensConfirmation: false),
+            Command(label: Stories.turnOnAlerts, opensConfirmation: false),
+            Command(label: Social.unblock, opensConfirmation: false),
+            Command(label: Social.removeFromSaved, opensConfirmation: false),
         ]
 
         /// True when the command with this exact label opens a confirmation. Unknown labels are
@@ -426,6 +441,9 @@ enum Copy {
         static let signedOut = "Signed out"
         static let timedOut = "Took too long"
         static let rateLimited = "Try again in a minute"
+        /// The server refused the account (`403 account_suspended`, iD14). `APIError.suspended`'s
+        /// `failureReason`, and Sync status's reason beside a write it refused.
+        static let suspended = "Account suspended"
         /// A related title the catalogue has not materialised yet, and a search could not find.
         static let notInCatalogue = "Not in the catalogue yet"
 
@@ -435,6 +453,8 @@ enum Copy {
             if let api = error as? APIError {
                 switch api {
                 case .unauthorized: return signedOut
+                case .rateLimited: return rateLimited
+                case .suspended: return suspended
                 case .http(let code, _): return code == 429 ? rateLimited : serverError
                 case .transport(let underlying): return transportReason(underlying)
                 default: return serverError
@@ -655,6 +675,7 @@ enum Copy {
         static let buttons: [String] = [
             batchMarkConfirm(18), resetSeasonConfirm(24), restartRewatchConfirm,
             deleteSessionConfirm, deleteHistoryConfirm, discardChangeConfirm, cancel,
+            Social.reportSend, Social.blockConfirm, Social.deleteConfirm,
         ]
     }
 
@@ -783,7 +804,7 @@ extension Copy {
             Notice.today, Notice.schedule, Notice.library, Notice.detailEpisodes,
             Notice.searchAnime, Notice.searchTV,
             Notice.noConnection, Notice.serverError, Notice.signedOut, Notice.timedOut,
-            Notice.rateLimited,
+            Notice.rateLimited, Notice.suspended,
             Progress.watchedOf(18, 24), Progress.episodeNext(19), Progress.behind(3),
             Progress.left(1), Progress.caughtUp, Progress.caughtUpAfterThisEpisode,
             Progress.lastEpisodeOfTheSeason, Progress.complete("Season 4"),
@@ -800,13 +821,20 @@ extension Copy {
             Accessibility.wordmarkLive(1), Accessibility.wordmarkLive(3),
         ]
         out += statusesInOrder
+        // The feed, stories, social layer and Discover (spec §1.9): each namespace lists one sample
+        // per constant and per function, and a package that adds a string adds its sample with it.
+        out += Feed.sampleStrings + Stories.sampleStrings + Social.sampleStrings + Discover.sampleStrings
         for copy in [EmptyStateCopy.emptyAccount, .emptyToday, .emptySchedule,
                      .noWatching, .offlineCached, .offlineNoData,
                      .searchFailed, .searchLaunchpad, .noSessions,
                      .serverNoCache, .noFilterMatches, .noScheduleMatches, .nothingScheduled, .everythingSynced,
                      .calmToday(title: "Frieren", when: "Returns tomorrow"),
                      .caughtUp(title: "Frieren", when: "Returns tomorrow"),
-                     .noSearchResults(query: "one pece")] {
+                     .noSearchResults(query: "one pece"),
+                     .feedServerNoCache, .feedOfflineNoData, .feedNoPosts,
+                     .feedPostGone, .feedPostGone(show: "One Piece"),
+                     .activityEmpty, .savedEmpty, .blockedEmpty, .mutedEmpty,
+                     .genreEmpty] {
             out.append(copy.title)
             if let s = copy.supporting { out.append(s) }
             if let s = copy.primaryLabel { out.append(s) }

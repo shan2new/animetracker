@@ -5,10 +5,11 @@ import SwiftUI
 // The transient confirmation, rebuilt from the toast. A receipt is drawn in ONE of two places,
 // decided at the write:
 //
-//   • IN PLACE — under a compact ring whose result cannot carry its own wording (Schedule and
-//     Up next). One quiet line, "✓ Episode 19 watched · Undo", for the undo window. Hero
-//     capsules do not use it: their drawn check and "Episode N watched" label are already the
-//     complete receipt, and repeating the same fact underneath is jarring.
+//   • IN PLACE — under a compact ring whose result cannot carry its own wording (Schedule's rows,
+//     the story viewer's mark — `ReceiptHost.story`, Receipts+Feed.swift). One quiet line,
+//     "✓ Episode 19 watched · Undo", for the undo window. Hero capsules do not use it: their
+//     drawn check and "Episode N watched" label are already the complete receipt, and repeating
+//     the same fact underneath is jarring.
 //   • THE LANE — the tab bar's bottom accessory (iOS 26.1, the lane Music's mini player lives
 //     in, which folds into the bar when it minimises; below 26.1 the same lane sits attached
 //     above the bar): the poster, the fact, the show, Undo. For everything whose object LEFT the
@@ -29,7 +30,6 @@ enum ReceiptPlacement: Hashable {
 
 /// The in-place hosts' names — one spelling per surface, so the write and the view agree.
 enum ReceiptHost {
-    static func todayQueue(_ franchiseId: String) -> String { "today.queue/\(franchiseId)" }
     static func episodes(_ mediaId: Int) -> String { "episodes/\(mediaId)" }
     static func schedule(_ mediaId: Int, _ episode: Int) -> String { "schedule/\(mediaId)/\(episode)" }
 }
@@ -261,10 +261,10 @@ struct LaneFallback: View {
 }
 
 #if DEBUG
-/// `-toastDemo mark|lane|notice|upnext`: a receipt that writes nothing, once the library has
-/// loaded — the only way to photograph one without moving the test account's progress. `mark` and
-/// `lane` use the bottom lane; `notice` is "Episode alerts on"; `upnext` is the in-place receipt
-/// on Today's Up next card for `-toastDemoFranchise` (it takes the card's caption line).
+/// `-toastDemo mark|lane|notice`: a receipt that writes nothing, once the library has loaded —
+/// the only way to photograph one without moving the test account's progress. `mark` and `lane`
+/// use the bottom lane; `notice` is "Episode alerts on". (`upnext`, the in-place receipt on
+/// Today's Up next card, went with that card when Today became the feed, 25 Sep.)
 @MainActor
 enum ToastDemo {
     static func arm(_ appModel: AppModel) {
@@ -283,11 +283,6 @@ enum ToastDemo {
                                                episode: 0, removed: true, removedFranchise: f, undoAction: {}))
             case "notice":
                 appModel.showNotice(Copy.Toast.alertsOn)
-            case "upnext":
-                let episode = (f.resumePart?.progress ?? 0) + 1
-                appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: episode - 1,
-                                               title: f.title, episode: episode, undoAction: {})
-                    .placed(at: ReceiptHost.todayQueue(f.id)))
             default:
                 appModel.presentUndo(UndoState(mediaId: nil, franchiseId: f.id, prevProgress: 18,
                                                title: f.title, episode: 19, undoAction: {}))

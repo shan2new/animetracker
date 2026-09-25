@@ -1,6 +1,8 @@
 #!/bin/bash
-# Photograph the billboards (Today + five show pages) and FILM a Search query (simctl recordVideo +
-# idb text), then lay the film out as a 12-fps contact sheet — how a "glitch" is diagnosed.
+# Photograph Today (the feed, both tabs, a story and a post page — 25 Sep: the feed replaced
+# Today's billboard) and the billboards (five show pages), and FILM a Search query (simctl
+# recordVideo + idb text), then lay the film out as a 12-fps contact sheet — how a "glitch" is
+# diagnosed. The feed shots use the DEBUG capture flags (FeedCapture): a Debug build.
 # Usage: hero_check.sh <out-dir>   (compare two dirs with hero_pairs.py)
 set -u
 # idb needs SimulatorKit under a developer dir (simkit_shadow.sh builds the shadow bundle); xcrun is fine with it too.
@@ -9,7 +11,10 @@ IDB="${IDB:-$HOME/Library/Python/3.9/bin/idb}"; U="${PERF_UDID:-C2AED006-C1A7-49
 SL=03ded211-224c-4e83-9815-5a7fec3caacc; GOT=c101456a-89e6-45e4-8842-4e4b07894b32; AOT=578f9465-c44c-4ac6-a622-7b78082149aa; WED=1820ef11-5175-4155-b2c6-544469358e2c; REZ=faa8903d-3b27-4c26-8924-7e89f937b370
 shot() { xcrun simctl io $U screenshot "$D/$1.png" >/dev/null 2>&1; echo "shot $1"; }
 launch() { xcrun simctl terminate $U $B 2>/dev/null; sleep 0.5; xcrun simctl launch $U $B "$@" >/dev/null 2>&1; }
-launch; sleep 10; shot today
+launch; sleep 10; shot feed
+launch -feedTab foryou; sleep 10; shot feed-foryou
+launch -feedStory first; sleep 10; shot story
+launch -feedThread first; sleep 10; shot post
 for pair in "wed:$WED" "got:$GOT" "aot:$AOT" "slime:$SL" "rezero:$REZ"; do n=${pair%%:*}; id=${pair##*:}; launch -openDetail $id; sleep 8; shot detail-$n; done
 # Search: film the typing.
 launch -openTab discover; sleep 8

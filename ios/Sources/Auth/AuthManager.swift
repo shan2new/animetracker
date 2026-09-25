@@ -114,6 +114,16 @@ final class AuthManager: TokenProvider {
         }
     }
 
+    /// The account was erased (`DELETE /me` confirmed it). The session ends HERE whatever Clerk
+    /// answers: a Clerk sign-out that fails (the identity it names is being deleted, or the
+    /// connection dropped) must not leave the app signed in to an account that no longer exists.
+    /// No `lastError` — nothing went wrong.
+    func accountErased() async {
+        _ = await signOut()
+        isSignedIn = false
+        lastError = nil
+    }
+
     /// The backend rejected our credentials with a **401 that survived a forced token refresh**.
     /// That, and only that, ends a session.
     ///

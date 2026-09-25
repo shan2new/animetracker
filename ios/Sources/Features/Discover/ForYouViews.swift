@@ -190,7 +190,7 @@ struct TileAddDisc: View {
         Button(action: action) {
             ZStack {
                 Circle().fill(ThemeColor.scrimStrong)
-                Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: 1)
+                Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: FeedMetrics.hairline)
                 Image(systemName: "plus")
                     .font(.system(size: disc * 0.46, weight: .bold))
                     .foregroundStyle(ThemeColor.textPrimary)

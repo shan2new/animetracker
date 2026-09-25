@@ -76,15 +76,8 @@ struct LibraryView: View {
         let heroItems = appModel.watchingShelf.filter { $0.resumePart != nil }
         let ambientArtwork = washArtwork(sections, heroItems: heroItems)
         return ZStack(alignment: .top) {
+            // Flat, as Today is: no wash behind the title (25 Sep, `flushTopBar`).
             ThemeColor.canvas.ignoresSafeArea()
-            // The wash runs to the very top of the screen, status bar included; the soft top veil
-            // only settles it under the title. With no artwork in the library there is nothing for
-            // it to be ABOUT, so first run gets the app's own colour.
-            ArtBackdrop(url: ambientArtwork,
-                        tint: ambientArtwork == nil ? ThemeColor.accent : nil,
-                        height: ThemeMetrics.rootWashHeight,
-                        intensity: ThemeMetrics.rootWashIntensity)
-                .ignoresSafeArea(edges: .top)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     // The refresh indicator and the stale strip, composed by the shared modifier
@@ -142,9 +135,9 @@ struct LibraryView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             .previouslyRefreshable { await appModel.reload() }
         }
-        // BOTTOM only for ours; the TOP is the bar's own veil over the wash.
-        .scrollEdgeChromeBody(top: true, bottom: true, softTop: true, topRaised: raisedTop,
-                              topHold: ThemeMetrics.inlineBarBottom)
+        // BOTTOM only for ours; the TOP is Today's flush bar.
+        .scrollEdgeChromeBody(top: false, bottom: true)
+        .flushTopBar(ThemeMetrics.inlineBarBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
         .navigationTitle(Copy.Library.title)
@@ -845,21 +838,10 @@ struct LibraryAllView: View {
             guard let key else { return }
             proxy.scrollTo("sec-\(key)", anchor: .top)
         }
-        // The same wash the root carries, so the push does not change the room's light.
-        .background(alignment: .top) {
-            ZStack(alignment: .top) {
-                ThemeColor.canvas
-                ArtBackdrop(url: washArt ?? results.first?.portraitArt ?? appModel.library.first?.portraitArt,
-                            height: ThemeMetrics.rootWashHeight,
-                            intensity: ThemeMetrics.rootWashIntensity)
-                    .frame(maxWidth: .infinity, alignment: .top)
-            }
-            .ignoresSafeArea()
-        }
-        .scrollEdgeChromeBody(top: true, bottom: true,
-                              topHeight: ThemeMetrics.topSafeInset + ThemeMetrics.searchDrawerHeight,
-                              softTop: true, topRaised: raisedTop,
-                              topHold: searchChromeBottom)
+        // Flat, as the root and Today are (25 Sep, `flushTopBar`).
+        .background(ThemeColor.canvas.ignoresSafeArea())
+        .scrollEdgeChromeBody(top: false, bottom: true)
+        .flushTopBar(searchChromeBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
         .laneClearance(appModel, base: ThemeMetrics.tabBarClearance)

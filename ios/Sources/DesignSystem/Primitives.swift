@@ -1403,6 +1403,23 @@ struct ChromeGlassBox<S: Shape, Content: View>: View {
 }
 
 extension View {
+    /// Today's bar on a root (25 Sep: "remove the header gradient from every other screen (except
+    /// details) to remain visually consistent with today", owner): the canvas itself from the
+    /// screen's top edge down to the bar's bottom (`hold`: status band + title bar, plus a search
+    /// drawer where there is one) — flush with the page, no wash under it, no ramp out of it, no
+    /// material in it. Content scrolls under it and is simply gone, as it is under the feed's
+    /// header. The show page keeps its tinted glass.
+    func flushTopBar(_ hold: CGFloat) -> some View {
+        overlay(alignment: .top) {
+            ThemeColor.canvas
+                .frame(height: hold)
+                .frame(maxWidth: .infinity)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
     /// Give a scrolling root screen its status-bar and tab-bar edges. Every root screen gets this;
     /// a pushed screen with a real navigation bar does not need it.
         /// Our edge chrome replaces the system scroll-edge effect; both together dim the last ~190 pt
@@ -2107,6 +2124,8 @@ struct LandscapeArt: View {
     var ultraWide: Bool = false
     /// Where a banner's crop anchors.
     var alignment: Alignment = .top
+    /// The sharp picture is on screen (the feed's launch hands off on its first post's art).
+    var onLoaded: (() -> Void)? = nil
 
     var body: some View {
         if portraitSource {
@@ -2121,12 +2140,13 @@ struct LandscapeArt: View {
                 // the fitted picture (`fitShadow`), not by `.shadow` on the image layer.
                 RemoteImageView(url: url, contentMode: .fit, maxPixel: maxPixel,
                                 alignment: .center, placeholderHidden: true,
-                                fitShadow: ShadowToken(color: .black.opacity(0.45), radius: 8, y: 4))
+                                fitShadow: ShadowToken(color: .black.opacity(0.45), radius: 8, y: 4),
+                                onLoaded: onLoaded)
                     .padding(.vertical, ThemeSpace.x2)
             }
         } else {
             RemoteImageView(url: url, contentMode: .fill, maxPixel: ultraWide ? max(maxPixel, 1900) : maxPixel,
-                            alignment: alignment, placeholderHidden: true)
+                            alignment: alignment, placeholderHidden: true, onLoaded: onLoaded)
         }
     }
 }

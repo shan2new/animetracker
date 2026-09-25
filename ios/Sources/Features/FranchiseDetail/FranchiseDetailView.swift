@@ -476,6 +476,9 @@ struct FranchiseDetailView: View {
         .task(id: heroArt(f).url) {
             heroTint = await PaletteCache.shared.resolve(url: heroArt(f).url, maxPixel: 420)
             heroLightness = PaletteCache.shared.lightness(for: heroArt(f).url)
+            // The next loading frame's ground (iD18). `tint(for:)`, not the resolved value: it is
+            // nil when the art could not be analysed, so the neutral fallback is never remembered.
+            RememberedTint.remember(PaletteCache.shared.tint(for: heroArt(f).url))
         }
     }
 
@@ -751,7 +754,7 @@ struct FranchiseDetailView: View {
             // the Episodes header and its 120×68 rows (review i5: the skeleton promised a state
             // card the page dropped on 5 Sep and 60×90 rows it never draws).
             ZStack(alignment: .bottom) {
-                (tint ?? TodayView.rememberedTint ?? ThemeColor.ambientBackdropFallback)
+                (tint ?? RememberedTint.color ?? ThemeColor.ambientBackdropFallback)
                 VStack(alignment: .center, spacing: 8) {
                     SkeletonBlock(width: 88, height: 20, radius: 4)
                     SkeletonLine(width: 250, height: 26)

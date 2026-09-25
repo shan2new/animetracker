@@ -24,6 +24,7 @@ npm run db:migrate     # apply migrations to DATABASE_URL
 npm run seed -- 60     # seed N trending franchises (hits AniList + LLM)
 npm run group -- 16498 # group one franchise by AniList media id
 npm run tv -- 95396    # materialize one TV franchise by TMDB show id (needs TMDB_ACCESS_TOKEN)
+npm run moderation -- list   # the report queue; `-- help` for show/hide/restore/dismiss/ban/unban/reset-identity/clerk-delete
 ```
 
 iOS has no CLI test/build flow here — after editing `project.yml` run `cd ios && xcodegen generate`,
@@ -87,7 +88,52 @@ grouping. The LLM is only worth spending on when a `SIDE_STORY` might actually b
 
 `startCron()` (`sync/cron.ts`) is started in `index.ts` at boot: hourly `refreshAiring` (airing
 schedules / "out now"), daily 03:30 `seedTrending` + `attachNewSeasons`. It runs in-process — there
-is no separate worker. A restart re-arms the schedules; it does not replay missed runs.
+is no separate worker. A restart re-arms the schedules; it does not replay missed runs. The social
+layer adds two, each on its own schedule and catch: hourly at :20 `alertStaleReports` (a report
+waiting > 12 h nudges the operator's webhook) and daily 03:10 `purgeCommentTombstones` (comments
+their authors deleted more than 30 days ago).
+
+## Today feed + social (server, 25 Sep)
+
+The Today tab is a feed composed ON THE SERVER (`GET /me/feed?tab=following|foryou`: pure rules in
+`feed/compose.ts`, IO in `feed/service.ts`); the client renders the words from structured facts and
+never parses `release`. Post ids are stable: `news:<announcements.id>`, `catalog:<mediaId>` (re-keyed
+to `news:` with every social row, in one transaction, when research adopts the part —
+`feed/adopt.ts`) and `trailer:<fid>:<site>:<videoId>`; an episode room is `ep:<mediaId>:<n>`
+(`social/subjects.ts` is the one grammar).
+- **"New" is `discoveredAt > prev_opened_at`, and `POST /me/opened` SHIFTS last → prev atomically**
+  (it used to echo the stamp it had just written, so "since your last visit" meant "since now").
+  Fresh posts come first, each block by `time.at` desc then id; the server sets `post.fresh`.
+- **Episode discussions are spoiler-gated here** (`services/episodeGate.ts`): read or post in
+  `ep:m:n` only when the caller's progress for m ≥ n AND episode n has aired by now
+  (`services/aired.ts`, anchor-aware) — the same count that clamps `setProgress`, so a RELEASING
+  season cannot be marked past what has aired, and an unknown mediaId is refused.
+- **Comments sit behind `SOCIAL_COMMENTS_ENABLED`** (default OFF; only `.env.example` says 1, for
+  local work). Off, every `/social/comments*` route answers `404 { error: 'comments disabled' }` and
+  `/me/feed` says `capabilities.comments: false`; likes, saves, reminders, hides, ratings, blocks and
+  the profile keep working. Production stays off until the Terms' UGC clause and the production
+  Clerk instance ship (`docs/beta-release.md` has the order).
+- **UGC compliance (App Review 1.2)**: terms acceptance (`SOCIAL_TERMS_VERSION` — bump it whenever the
+  rules change), a handle + display name chosen at the first reply (never the email), a word-list +
+  no-links content filter (`social/contentFilter.ts`), per-user rate limits (`util/rateLimit.ts`, 429
+  + `Retry-After`), auto-hide after `SOCIAL_AUTO_HIDE_REPORTS` reports, blocks filtered in both
+  directions (counts stay global), the operator CLI (`npm run moderation -- …`) and a ban list keyed
+  on `clerk_id` that `authenticate` checks BEFORE the upsert: a banned account gets
+  `403 { error: 'account_suspended' }` on everything but `DELETE /me` and `GET /me/export`. That is
+  the only app-level 403 — every other refusal is 409/410/422 with a machine code, because the app
+  reads a bare 403 as infrastructure (a WAF), never as the account.
+- **Every user-owned social table is erased by `DELETE /me`** (in `accountOwnedTableNames` order;
+  `me.account.test.ts` catches an FK to `users` under another name) — the ban row is the one
+  disclosed exception — and the Clerk identity is deleted after the commit (`services/erasure.ts`;
+  needs `CLERK_SECRET_KEY`, else `clerk: skipped`).
+- Toggles are idempotent set-state `PUT`/`DELETE`; a comment `POST` carries the client's uuid (a
+  retry cannot double-post, and an own delete is a tombstone so a replay cannot resurrect it).
+  Comment length is Unicode code points on both sides (≤ 280). Keyset pagination for threads and
+  notifications. No push: Activity (`GET /me/notifications`, now with `reply` / `like_comment`) is
+  polled by the app.
+- For you composes the top trending franchises once per 10 minutes per process, filtered per user;
+  `/me/feed` never enqueues research (the agent runs on a personal subscription). Discover's
+  genres: `GET /discover/genres`, `/discover/genres/:key` (cursor-paginated, owned titles marked).
 
 ## iOS conventions
 
@@ -111,6 +157,156 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `releaseSortKey`, `isFutureInstallment`, sort keys like `nextAiringSortKey`/`lastAiredSortKey`)
   from the raw API status/release fields. Keep this logic in the model layer, not the views, and
   reuse the existing sort-key accessors instead of re-inlining `?? .max` / `?? 0` sentinels.
+- **Today is the feed (25 Sep — the build brief's decisions are final; ios-spec's iD1–iD21 are the
+  ones this build added).** `FeedView` (Features/Feed) is the Today root: `FeedHeader` (the leading
+  account disc → the Profile sheet, which is the ONLY way into Profile — settings, sign-out and
+  account deletion live there; the centred wordmark → scroll to top; the bell → `ActivitySheet`),
+  the Following / For you tabs, the stories tray, then the server's posts (`GET /me/feed`) with
+  Suggested, `CaughtUpMarker` and Trending inserted by RULE in the memoised composer
+  (`FeedComposer`, `AppModel.feedRows` / `feedPhase` / `freshPosts` / `storyReels` — never composed
+  in a body). TodayView, `RecapDigest` and the Recap, the billboard hero, the Up next shelf and the
+  calm / trending openings are DELETED (git keeps them); `ForYouViews` moved to Discover, now its
+  own tab ("Discover", `sparkle.magnifyingglass`: the field, Top pick, Recommended, Browse by
+  genre, Trending). What holds it together:
+  - **Posts are the server's**; the client renders the words from structured facts (`kind`, the
+    installment, `premiere {at, precision}`, `window`, `time` + `dateOnly`, `discoveredAt`) through
+    `Copy.Feed` and `TemporalCopy.feedStamp`, never parses `release`, and never fabricates a count, a
+    fresh mark or a social row. The gold check only on an OFFICIAL lead source (`isOfficial`); the
+    client opens https links only.
+  - **"New since your last visit" is the REAL previous visit** (iD3): at launch the feed waits for
+    `POST /me/opened` (the server shifts last → prev; `visitStamped`), and no later response moves
+    `prevOpenedAt`. "New" = `post.fresh` from a LIVE response; the offline copy
+    (`feed-cache.json`) has none (iD2) — no pill and no CaughtUpMarker from a cache.
+  - **Stories stay client-derived** (`StoryReel.build`, from the library's `airings` — time-zone
+    dependent). Marking in a story is the REAL progress write (`markNext`; further ahead the
+    exact-count confirmation, then `markThrough(present: false)`), its receipt IN the viewer
+    (`ReceiptHost.story`) and handed to the lane if the viewer closes with it live. `StoryClock`
+    never ticks a body: only the segment bar's `TimelineView` reads progress, and advancing is one
+    sleeping task per frame. Stories never advance under VoiceOver or Switch Control.
+  - **The episode gate is one rule in two places** (iD16): progress ≥ n AND episode n aired by now,
+    anchor-aware. The server decides (a room answers `access: open | unwatched | unaired`);
+    `clientEpisodeAccess` mirrors it and may only unlock LATER than the server, never earlier. A
+    RELEASING part's ceiling is what has aired by now (`progressCeiling(now:anchor:)`, iD17).
+  - **Social writes** (`AppModel+Social`): like / save / remind / hide / mute / comment-like / block
+    are optimistic, with a persisted newest-word-wins queue (`social-pending.json`, one lane per key,
+    `flushSocial()` on reconnect and after every feed load), and fire `.selection` on the way ON only,
+    from the model — a view never adds a haptic (iD21). A reply is CONTENT: a pending row plus
+    `WriteIntent.comment`, replayed after progress (a reply in a room you just unlocked lands after
+    the mark); the composer waits ≤ 1.5 s, then hands off to the pending row (iD5).
+  - **`capabilities.comments == false`** — production, until the Terms' UGC clause and the Clerk
+    production instance ship: no reply affordance anywhere (action bar, thread page, stories,
+    discussions); likes, saves, reminders, hides and ratings stay, and so does Profile's Community
+    group (Saved, Name and username, Blocked accounts, Muted shows, Community rules — iD13).
+  - **Suspended** (`403 account_suspended`, iD14): `AppModel.accountSuspended` covers the app with
+    `AccountSuspendedView` — Sign out and Delete account… are all it offers, because `DELETE /me` and
+    `GET /me/export` are the only routes a banned account keeps. Profile → Export library → JSON is
+    that export (`LibraryExport`; a server without it gets the device's library file).
+  - **A reminder is real before it is promised** (§4.4): on a dated post it is a local notification
+    at the premiere (anime at the air minute, TMDB at 9 AM local on the UTC date) armed through
+    `EpisodeNotifications.sync` inside its 48-request budget (`reminder-<postId>`, never duplicating
+    a `premiere-<mediaId>`); the tap never raises the system prompt — the primer line does. An
+    undated post's reminder is the server's. No push: Activity is polled on feed load, foreground,
+    the bell and pull-to-refresh (iD19).
+  - Routes: a tapped alert is typed (`OpenRoute` in `userInfo["route"]`) — `pendingOpen` (a show)
+    or `pendingRoute` (a post, an `ep:` thread); RootView closes every feed cover first
+    (`feedDismissals`), then pushes. Feed pages are path VALUES (`FeedRoute`, `DiscoverRoute`) so a
+    re-tap of Today and the alert route clear them (iD12); a sheet opens a feed page through
+    `\.openFeedRoute` (Profile → Saved → a post).
+  - The splash's `LaunchHandoff.artReady` is `FeedView.markArtReady()` (the first post's art, a
+    settled no-post state, or 0.35 s), which also marks PerfProbe's `feed-ready`. The show page now
+    writes the loading frame's remembered tint (`RememberedTint`, Palette.swift — the key stays
+    `"today.heroTint"` so the stored value carries over, iD18).
+  - Sign-out (`clearFeedAndSocial`) deletes `feed-cache.json`, `social-pending.json`, the persisted
+    focal rects (`subject-focus-v1.json`) and the retired recap's two `UserDefaults` keys.
+  - Capture flags (DEBUG, read once per screen in `Features/Feed/FeedCapture.swift`): `-feedTab
+    foryou`, `-feedAnchor top|stories|suggested|caughtup|trending|<post id prefix>`, `-feedSkeleton 1`,
+    `-feedPinHeader 1`, `-feedStory first|<franchiseId>` + `-feedStoryFrame N` (clock frozen),
+    `-feedMedia first`, `-feedThread first|<postId>` + `-feedThreadAnchor replies|sources`,
+    `-feedCompose "<text>"` (never sends), `-feedActivity 1`, `-feedConstrained 1` (the Low Data
+    path), `-openProfile 1`, `-openSaved 1`, `-discoverGenre <key>` (with `-openTab discover`),
+    `-dumpAlerts 1`, and `-verifyFeed 1` (`FeedRegression`, prints `FEED_VERIFY_PASS`). A flag may
+    select, open, anchor or freeze — never fabricate. `-todayDemo` still shapes the library in
+    `DemoLibrary` (useful for stories); `-todayAnchor`, `-calmDemo`, `-recapDemo`, `-deckPage`,
+    `-forYouStage` and `-toastDemo upnext` went with TodayView. `Tools/perf/flow.py` drives the feed
+    (the tray, the scroll, the Suggested anchor, the story viewer at rest).
+  - **The X pass (25 Sep, after the owner used the build: "the battle tested UX of X is not
+    replicated properly"; X was explored on the owner's iPhone).** Following / For you are PAGES of
+    a real pager (a horizontal paging `ScrollView` of two vertical feeds, `.ignoresSafeArea` on the
+    pager and `safeAreaPadding` per page): each keeps its place, the tab underline and ink ride
+    `FeedChromeState.pageProgress` while the finger drags (`FeedTabsRow`, the only reader), For you
+    prefetches 1.2 s after Following has content, and `scrollPosition(id:)` does NOT place a pager
+    on its first layout — a launch on For you is scrolled there by hand. Trailers PLAY IN THE POST
+    (`InlineTrailer.swift`: `FeedAutoplay` picks the one ≥ 60 % on screen at scroll rest and stops
+    it under 25 %; YouTube's IFrame API in a page of our own with the player THREE FRAMES TALL so
+    its title bar, logo and "more videos" card fall outside the frame; the still stays up until
+    0.4 s of play; muted, X's time chip and sound disc, "Watch again"; never with Auto-Play Video
+    Previews off, Low Data, Low Power, a cover, a push or the background; the stage picks up at the
+    inline position via `embedURL(startingAt:)`). News that carries its own trailer shows the
+    trailer, not the key art. The post page's reply bar OPENS IN PLACE (`InlineReplyComposer`, the
+    sheet's gate and send policy — `ReplySend`); a reply to a reply opens it on that person; the
+    full composer quotes what you answer with X's thread rule (`ReplyContextBlock`). Post page:
+    Add pill for an unowned show (X's Follow), "2:19 PM · 24 Sep 2026 · via …", the bar between
+    two rules, "How this story got here ›" on the sort row (X's "View quotes ›"). Two identity
+    traps found on the way: an `if` around `content` in a modifier (`SoundAction`,
+    `OptionalAction`) rebuilt the media when a trailer started and tore its player down — keep the
+    condition inside `accessibilityActions { }`; and a lazy stack DROPS a duplicate `.id` — the
+    post page's rule and the thread's sort row were both "replies", so the thread never loaded.
+    The floating tab bar still never hides (the owner's rule), unlike X's. **The feed's bars are
+    FLUSH** — the header (`FeedHeaderGround`) and the post page's reply bar are opaque canvas, the
+    one exception to "bars are material": a material under canvas at 0.74 read as a lighter band
+    over the canvas with nothing under it ("the header area in both X and Instagram is flush",
+    owner). The story ring is Instagram's, measured off the owner's screenshot: 92 pt, a 3.4-pt
+    stroke, a 2.4-pt gap, an 80-pt photo (`FeedAvatar.ringWidth/ringGap`). **Every rule and
+    border in the feed's surfaces is ONE PHYSICAL PIXEL** (`FeedMetrics.hairline` =
+    `ThemeMetrics.pixel`; "The separator and borders are thicker than X. Everywhere") — 0.5 pt is a
+    pixel and a half on a 3× phone, antialiased across two; the Instagram-styled story pieces keep
+    their own. **An X post is ONE body in one style:** the post page sets the sentence and the
+    research note as two paragraphs of the same 17-pt text (grey 15-pt under white 17-pt read as
+    "two different fonts"). **A poster is a tall picture:** 4:5 around its faces in the feed, whole
+    at 2:3 on the post page (`PostMedia.posterAspect`, `PostPoster`); 16:9 is for stills and true
+    landscapes — the poster composited small on its blurred ground is gone from the feed. The post
+    page's bar is X's (`XPageTitle`: a plain arrow, "Post" beside it) with the system back button
+    hidden, so `SwipeBackKeeper` hands both pop gestures (the edge pan, and iOS 26's content swipe —
+    the one that actually fired) a delegate while the page is in front. **A story is Instagram's**
+    ("The Story experience is utterly trashy!", owner): a 9:16 CARD under the status band
+    (`StoryCard`, 10-pt corner), the picture WHOLE on a wash of its own tint (`StoryArt`: fit, no
+    zoom, no drift — the old frame zoomed a 460-px cover 1.34× and a banner 1.9× to fill the glass),
+    2-pt segments and the header on the card, ONE caption (the episode, when) and ONE sticker at its
+    foot — the mark as Instagram's white link tag, then the emoji slider; the next episode's
+    countdown sticker with its alert — and the reply row (field, heart once watched, send) under the
+    card on black. No badge, no 34-pt title, no amber capsule, no lock sentence, no "Show page" hint
+    (the lift still opens the show). The tray's rings carry Instagram's LIVE tag as **NEW / 2 NEW**
+    (`StoryRingTag`, `Copy.Stories.ringTag`) while the show has an aired episode you have not
+    watched — independent of the ring's seen state — because a ring alone "doesn't feel like a new
+    episode is out" (owner); never "EP 18" (the copy audit bans the abbreviation). **The roots are FLAT like Today** ("remove the header gradient
+    from every other screen (except details)", owner): Schedule, Library, All titles, Discover and
+    the Profile sheet carry no `ArtBackdrop`/`ProfileWash` any more, and their top chrome is
+    `flushTopBar(hold)` — opaque canvas to the bar's bottom, no soft veil, no ramp, no material —
+    in place of `scrollEdgeChromeBody(top: true, softTop:…)`. The show page and its own pushes
+    (season list, watch history) keep their tinted washes and glass; the `rootWash*` tokens now
+    serve only them. **Discover is X's and Instagram's Explore** ("Discover UX needs an overhaul to
+    match this new awesome Today UX", owner — `DiscoverExplore.swift`): the system field under the
+    title stays; under it X's tabs For you · Trending · Genres (`ExploreTabs`, Today's underline
+    numbers, a real pager, `PagerProgress` read only by the row); For you is Instagram's Explore
+    wall (`ExploreGrid`: three columns 2 pt apart, edge to edge, 2:3 cells, a two-by-two feature
+    tile every other block carrying the recommendation's reason, trending filling the wall); Trending
+    is X's list (`TrendRow`: "1 · Anime · Trending", bold title, one fact, a small poster); Genres is
+    every genre tile (`DiscoverGenres(limit: nil, header: false)`). The scope is the bar's menu
+    (`scopeMenu`); the explore stays MOUNTED under the search surface (recents / results), which
+    only fades it. The billboard top pick, the shelves and the resting scope chips are gone from
+    Discover (their views still serve other screens). Search's results are X's account rows
+    (`mediaRow`: the show's face in a 48-pt `ShowAvatar`, bold name, one grey `FactLine` with the
+    amber airing lead, X's Follow pill as `AddControlPlacement.pill` — "Add" on white, "Added" in
+    a one-pixel outline that opens the status menu), recents the same row without the pill; the
+    landscape scene card per result is gone. Wall tiles draw the show's LOGO over a textless
+    poster (`ExploreTile`, `ArtworkLogo`) — and the LOCAL server has no logos at all: every logo,
+    textless poster and backdrop comes from TMDB enrichment, and `TMDB_ACCESS_TOKEN` is unset in
+    `server/.env`, so a build pointed at localhost shows every poster bare (production has them).
+  - **Android has not mirrored the feed yet** (brief §15): no feed, no social layer, no Discover
+    genres there. Where the bullets below say "Android mirrors this", they predate the feed.
+  The bullets below that describe Today's billboard, its Up next shelf or its recap are the history
+  of a retired screen; their rules still bind where the same view lives on (Detail's billboard and
+  `HeroLockup`, `HeroBadge` on a story frame, `ProgressBanner` in Library).
 - **Cohesion rules (2026-08-30 pass, header/hero/veil rules revised 2026-09-02):** one ambient-wash
   spec app-wide (`ThemeMetrics.rootWashHeight/rootWashIntensity` — never a private height/intensity
   pair); **one section-header family: `SectionHeaderRow`** — `ThemeType.sectionTitle` (Outfit
@@ -143,8 +339,8 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   **Landscape frames never `.fill` a portrait cover**: pass
   `portraitSource:` (`BannerCard`, `LandscapeArt` in the Search tiles) so a show with no banner is
   composited whole on its own blurred ground. One brand lockup (`Wordmark`, period in text ink —
-  Profile's colophon uses `Wordmark(colophon: true)`). **One billboard hero grammar** on Today AND
-  Detail: `ArtHeader(portraitSource:)` on `billboardArt` (portrait-first — see the artwork bullet) at 0.68–0.72 × screen, `HeroTopVeil` over the
+  Profile's colophon uses `Wordmark(colophon: true)`). **One billboard hero grammar** — Detail's (Today's billboard
+  went with TodayView, 25 Sep): `ArtHeader(portraitSource:)` on `billboardArt` (portrait-first — see the artwork bullet) at 0.68–0.72 × screen, `HeroTopVeil` over the
   chrome band, `HeroCopyScrim` sized to the measured copy (no fractional `ArtScrim` on a billboard),
   title + one identity line ("Anime · 2018 · Action · Adventure") over the foot; Detail docks the
   title into the bar from a `.principal` toolbar item once `scrolledUnderBar`, and its state block
@@ -155,8 +351,9 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `ThemeMetrics.chromeBarOpacity` (0.74) canvas over the full-strength blur, NEVER opaque canvas
   (only Reduce Transparency, which has no blur, gets the opaque bar): at 1.0 the top ~100 pt of
   every scrolled screen was a flat #09090B slab ("pure black", 3 Sep) with the material under it
-  painted for nothing. Today's wordmark band and Detail's floating toolbar hold through their own
-  band the same way, and Detail hardens — and docks its title — the moment the hero's COPY reaches
+  painted for nothing. Detail's floating toolbar holds through its own
+  band the same way (the feed's header is its own `FeedHeaderGround`: material + canvas at
+  `chromeBarOpacity`), and Detail hardens — and docks its title — the moment the hero's COPY reaches
   the toolbar's bottom edge (`copyTop − band` in the scroll probe, not a flat 130 pt: the title
   used to slide half-lit under the glass capsules for ~80 pt before the bar caught it). **Detail's hardened bar is the show's GLASS, not canvas (4 Sep):**
   `DetailVeils` passes `DetailTint.chrome(heroTint ?? tint)` — the art colour kept as a hue, OKLab
@@ -190,13 +387,10 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   (`PlistBuddy -c "Print :APIBaseURL" -c "Print :ClerkPublishableKey"`) — a build came out with
   `localhost:8787` + `REPLACE_ME` on 5 Sep and the sim quietly opened a developer session. Scroll probes are
   `Color.clear.onGeometryChange` on the scroll content, because `onScrollGeometryChange` never fires
-  on the iOS 27 sim (Today, Detail, Library, Search all use the probe). **Prose is rationed
+  on the iOS 27 sim (the feed, Detail, Library, Search all use the probe). **Prose is rationed
   (2026-09-02):** a hero says the state (eyebrow), the episode (fact) and at most one more thing;
   where-you-are is a `ProgressBar` (`MediaRow(progress:)`, the season header), never "11 of 24
-  watched" in words; a finished thing is a tick, not "Watched". **Today is never without a
-  billboard:** on a calm day the hero is `nextUp` (else the first Watching show) in the waiting
-  grammar — no action row, tap opens — over up to three Upcoming rows; there is no headline-only
-  calm state. **Episodes are ON the show page** (Apple TV / Netflix), in the streaming apps'
+  watched" in words; a finished thing is a tick, not "Watched". **Episodes are ON the show page** (Apple TV / Netflix), in the streaming apps'
   grammar (4 Sep, "the seasons section is utterly confusing" — the user picked "Episodes + season
   pill" over season chips and a repaired title-as-picker): the section title is "Episodes"
   (`episodesHeader`), the season is a trailing `SeasonPill` capsule menu ("Season 4 ⌄", the bar's
@@ -299,7 +493,8 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   refuse / slow / empty / searcherr / detailfail / writefail); never capture while xcodebuild is
   running — a CPU-starved sim shows a black launch screen for 10 s and it looks like a hang (the
   same happens on the first launch after a reinstall at an accessibility text size; wait 12 s).
-  Today's hero carries ONE action — the mark capsule; the block itself opens the show. **The
+  (Until 25 Sep Today's hero carried ONE action — the mark capsule; the block itself opened the
+  show. The story viewer's mark is home's one-tap mark now.) **The
   hero is a billboard LOCKUP (4 Sep — the 2–3 Sep "slate" with its capsule pill and 34-pt amber
   clock read "like a 3rd grade app" on the device):** state → show → moment → episode, top to
   bottom, in THREE rows (direction B of three photographed side by side, picked 4 Sep after the
@@ -340,9 +535,10 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   BILLBOARD stays soft because AniList's `/cover/large/` is 460×639 px (measured 4 Sep) drawn at
   1179 px wide; TMDB posters are 2000×3000 — the fix is server-side art enrichment from the TMDB
   twin, not the client.
-  **The scroll offset is never screen state.** Today and Detail hold a `ScrollOffset`
-  (`@Observable`, Primitives.swift) in `@State` and only their small veil views (`TodayVeils`,
-  `DetailVeils`) and `StretchingHeroArt` read `.y` in a body — so a scroll frame invalidates those
+  **The scroll offset is never screen state.** Detail and Profile hold a `ScrollOffset`
+  (`@Observable`, Primitives.swift) in `@State` and only their small views (`DetailVeils`,
+  `ProfileWashTravel`) read `.y` in a body; the feed's `FeedChromeState` is the same rule (the
+  probe writes it, only `FeedHeader` and `FeedPillSlot` read it) — so a scroll frame invalidates those
   views, never the screen. `set` clamps through `ThemeMetrics.scrollSample` and de-duplicates.
   Bool probes (`raisedTop`, `scrolledUnderBar`) are guarded with `if new != old`. Today has NO
   mask on its scroll view any more (an offscreen pass per frame); the opaque bar covers what
@@ -396,7 +592,8 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   re-selecting the active tab pops to root — Library also drops its All-titles item destination
   (`LibraryView.popSignal`). A tapped episode alert opens its show: `EpisodeNotifications.onOpen`
   → `AppModel.pendingOpen` → `MainTabView` selects Today and pushes `DetailRoute` (verified with
-  `xcrun simctl push` + a banner tap). Alerts: three per watching anime show from `part.airings`,
+  `xcrun simctl push` + a banner tap); a reply or reminder alert carries a typed route
+  (`pendingRoute` → `FeedRoute`, see "Today is the feed"). Alerts: three per watching anime show from `part.airings`,
   round-robin so every show keeps its soonest before any gets its second, armed the moment the
   primer's Allow lands (`alertsWereAllowed`). A Schedule-routed `focus` pushes the season list
   once (`focusConsumed`) — it used to re-push on every pop and trap the user. **The tab bar is STATIC** (8 Sep):
@@ -412,7 +609,7 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   live "Announced" header. So the BOTTOM edge is the SYSTEM's from 26
   (`ScrollEdgeChrome.systemOwnsBottom`: our band draws only where there is no system effect, i.e. on
   the iOS 18 floor, `chromeScrollEdgeHidden(.top)` is the only edge a root suppresses — the top band
-  is a BAR, not a blur, and stays ours — and a pushed screen suppresses nothing). Docked bar titles (Today, Detail,
+  is a BAR, not a blur, and stays ours — and a pushed screen suppresses nothing). Docked bar titles (Detail,
   Season, History) use `displayTitle`. Watch sessions live in `RewatchStore` (device-local JSON).
 - **Auth hand-off:** `AuthManager.bootstrap()` waits (≤3 s) for `Clerk.shared.isLoaded`, then
   follows `Clerk.shared.auth.events` for session changes; the splash leaves only when both its
@@ -593,7 +790,9 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   The curated `FranchiseUpcoming` note goes stale the same way (its `checked` date is weeks old):
   a day-dated release that has passed (`hasArrived(now:)`) no longer files a show under the
   Library's Returning shelf — Mushoku Tensei read "Returns today" two months into its season.
-- **First contact (2 Sep, evening pass).** The hero names the show by `displayTitle` ("Re:ZERO"),
+- **First contact (2 Sep, evening pass; Today's half retired 25 Sep — an empty account now opens
+  on the feed's `EmptyState(.emptyToday)` over the Trending module, and the drift lives on in
+  Detail's billboard and the story art).** The hero names the show by `displayTitle` ("Re:ZERO"),
   as every row and shelf does; the full title is Detail's. Where-you-are on the hero is the one
   `ProgressBar` under the fact (watched ÷ aired-by-now for a fresh drop, ÷ available for a
   backlog; VoiceOver reads the count) — "4 episodes behind" in words only when nothing is watched
@@ -785,9 +984,10 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   four directions photographed on the sim, B + C chosen).** A transient confirmation is drawn in
   ONE of two places, decided at the WRITE (`UndoState.placement`, `ReceiptPlacement`, `Receipts.swift`):
   **IN PLACE** — `ReceiptLine`, one quiet line "✓ Episode 19 watched · Undo" under the control that
-  was pressed, when that control stays on screen: Today's hero capsule (`ReceiptHost.todayHero`),
-  the Up next cards' rings (`todayQueue`), the show page's capsule (`detailHero`), Schedule's cards (`schedule(mediaId,
-  episode)`, under the caption) — the write site calls `.placed(at:)` (`presentUndo(_:host:)` on
+  was pressed, when that control stays on screen: the story viewer's mark (`ReceiptHost.story`,
+  which hands a live Undo to the lane when the viewer closes) and Schedule's rows (`schedule(mediaId,
+  episode)`, under the caption) — Today's hero and Up next hosts went with TodayView (25 Sep), and a
+  hero capsule's own drawn check is its receipt — the write site calls `.placed(at:)` (`presentUndo(_:host:)` on
   Android); a season reset stays on the lane (every ring clears, no row can hold it). The episode LIST has had no receipt since 6 Sep — its ring is the receipt (see the Episodes bullet). **THE LANE**
   — `ReceiptLane` (poster or glyph, the fact, the show, Undo/none) as the tab bar's bottom accessory
   on iOS 26.1 (`chromeBottomAccessory(isEnabled:)` → `tabViewBottomAccessory(isEnabled:)`, the lane
@@ -855,7 +1055,7 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   **The hand-off:** the stage leaves only when the landing has been SEEN (on a device the renderer's
   clock follows each drawable's presented handler and rewinds past a display stall; the simulator SDK
   has no presented handler, so there GPU completion stands in and the rewind is off), never before
-  auth answers, at most 0.35 s past the landing for Today's art, ceiling 3.2 s. A tap skips once auth
+  auth answers, at most 0.35 s past the landing for the feed's first art (`markArtReady`), ceiling 3.2 s. A tap skips once auth
   has answered; a launch FOR a show (`LaunchHandoff.intent`, set on the pending-open route) gives way
   at once. The exit is two-stage: inside the film the lockup goes to plain canvas (0.18 s), then the
   canvas layer lifts off the app (0.08–0.38 s) — never scaled (scaled, its edges uncovered a
@@ -865,9 +1065,9 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   with VoiceOver running, on a hot phone or without Metal, `SplashLockup` fades the cached lockup up,
   holds 0.6 s and dissolves; Low Power Mode holds the film at 60 Hz. Every value is a pure function of
   film time (live time from the link's target timestamps, stalls > 0.25 s cut out, 0.4 s in all).
-  **Today sizes its billboard from `ThemeMetrics.windowHeight`**, never the tab content's height:
-  that shrank when the tab bar arrived at the end of the launch and the 0.72 hero slid ~41 pt under
-  the dissolve. Films are explored in a macOS Metal harness (scratchpad) that renders the same shader
+  **Full-height art on a root sizes itself from `ThemeMetrics.windowHeight`**, never the tab
+  content's height: that shrank when the tab bar arrived at the end of the launch, and Today's 0.72
+  billboard (retired 25 Sep) slid ~41 pt under the dissolve. Films are explored in a macOS Metal harness (scratchpad) that renders the same shader
   and script in seconds; the review rig films three simulators (SE / 14 Pro / Pro Max, signed in and
   out) frame-exact with `-splashFilm 1` and live with `simctl io recordVideo`.
 - Debug-only launch args: `-splashTrace 1` (milestones since process start, one line per frame),
@@ -878,10 +1078,10 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   `-detailTrailer 1` opens the first trailer's sheet and `-detailOpenRelated N` opens the Nth
   related title — the way to photograph the show page when the simulator cannot be touched (on
   3 Sep System Events saw no Simulator window and `screencapture` was refused, so cliclick had
-  nothing to hit; `xcrun simctl io screenshot` still works). `-recapDemo 1` forces the full Previously Recap on Today; `-calmDemo 1`
-  empties Today's focus stack so the calm (caught-up) open renders on a library with backlog;
-  `-todayAnchor upnext|watching` scrolls the loaded Today to a shelf (the input MCP dies between
-  sessions and `simctl` cannot scroll);
+  nothing to hit; `xcrun simctl io screenshot` still works). The feed's capture flags (`-feedTab`, `-feedAnchor`,
+  `-feedStory`, `-feedThread`, …) are listed under "Today is the feed" — they are how the feed is
+  photographed and scrolled when the input MCP is dead (`simctl` cannot scroll); `-recapDemo`,
+  `-calmDemo` and `-todayAnchor` went with TodayView (25 Sep);
   `-scheduleFilter anime|tv`, `-scheduleHideWatched 1`, `-scheduleMonthOpen 1` (open with the
   calendar down) and `-scheduleDemoStates 1` (draw the most recent aired airing as unwatched — the
   test account has no aired-and-unwatched slot, so the state ladder cannot otherwise be
@@ -925,7 +1125,7 @@ is no separate worker. A restart re-arms the schedules; it does not replay misse
   derived collection still observes it) — they were filtered and sorted on every read, and
   Today read them ten times per body. **The clock ticks ON the minute** (`startClock`), not every
   20 s: every fact it feeds is minute-grained, and each tick re-evaluates every body that reads
-  `now`. **The scroll offset is never screen state** — Profile joined Today and Detail
+  `now`. **The scroll offset is never screen state** — Profile joined Today (then) and Detail
   (`ScrollOffset`, `ProfileWashTravel`); as `@State` every sample re-ran the sheet's body with
   its library counts. **The library's offline copy decodes off the main actor**
   (`AppModel.start()`); it was the first thing sampled under the ident.

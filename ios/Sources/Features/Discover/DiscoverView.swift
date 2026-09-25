@@ -46,8 +46,6 @@ struct DiscoverView: View {
     /// The scroll view's own height, for centring a state that owns the whole surface.
     @State private var contentH: CGFloat = 0
 
-    /// Content has scrolled under the bar — the soft top veil hardens (same probe as Library's).
-    @State private var raisedTop = false
     /// `.searchable(isPresented:)`. Raised by `AppModel.searchFieldRequested` — an "Add a show"
     /// CTA on another tab asked for the field itself, not just this tab.
     @State private var fieldPresented = false
@@ -105,64 +103,67 @@ struct DiscoverView: View {
         // underneath them still led with an anime, so the scope bar appeared to govern half the
         // screen.
         let trending = appModel.trending.filter { appModel.matchesMediaFilter($0.source) }
+        let searching = fieldPresented || !query.isEmpty
         return ZStack(alignment: .top) {
+            // Flat, as Today is: no wash behind the title and the field (25 Sep, `flushTopBar`).
             ThemeColor.canvas.ignoresSafeArea()
-            // The wash runs to the very top of the screen, status bar included; the soft top veil
-            // only settles it under the title. No opaque band anywhere (user, 24 Aug).
-            ArtBackdrop(url: washURL, height: ThemeMetrics.rootWashHeight,
-                        intensity: ThemeMetrics.rootWashIntensity)
-                .ignoresSafeArea(edges: .top)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    // The launchpad stays MOUNTED under the results (5 Sep, "it lags when I click
-                    // on the Search bar… it lags to revert back"): as two trees swapped through
-                    // `.id(query.isEmpty)`, the browse grid — fifteen cards, each a poster, a
-                    // palette and an add control — and the recents were torn down on the first
-                    // letter and rebuilt from nothing on Cancel, under the system's own field and
-                    // keyboard animations. Now the grid is built once per chart; the query only
-                    // fades it and folds its height away, and Cancel unfolds what is already there.
-                    ZStack(alignment: .top) {
-                        launchpad(trending: trending)
-                            .opacity(query.isEmpty ? 1 : 0)
-                            .allowsHitTesting(query.isEmpty)
-                            .accessibilityHidden(!query.isEmpty)
-                            .frame(maxHeight: query.isEmpty ? nil : 0, alignment: .top)
-                            .clipped()
-                        if !query.isEmpty {
+            // AT REST: X's and Instagram's Explore (`DiscoverExplore`) — For you, Trending, Genres.
+            // It stays MOUNTED under the search surface (5 Sep: tearing the launchpad down on the
+            // first letter and rebuilding it on Cancel was the lag the user felt); the field only
+            // fades it.
+            DiscoverExplore(recommendations: scopedRecommendations,
+                            trending: trending,
+                            genres: DiscoverCatalog.shared.genres(for: appModel.mediaFilter),
+                            reason: { appModel.spokenReason($0) },
+                            caption: { gridCaption($0) },
+                            spoken: { spoken($0, ambiguous: []) },
+                            onOpenRecommendation: { openRecommendation($0) },
+                            onOpenShow: { open($0, zoom: "trend/\($0.id)") },
+                            onRefresh: { [catalog = DiscoverCatalog.shared, api = appModel.api, filter = appModel.mediaFilter] in
+                                await appModel.refreshTrending()
+                                await catalog.loadGenres(api: api, filter: filter, force: true)
+                            },
+                            header: primerVisible ? AnyView(notificationPrimer) : nil)
+                .opacity(searching ? 0 : 1)
+                .allowsHitTesting(!searching)
+                .accessibilityHidden(searching)
+            // SEARCHING: the recents while the field is empty, the results once it is not.
+            if searching {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if query.isEmpty {
+                            if appModel.recentItems.isEmpty && appModel.recentSearches.isEmpty {
+                                if !trending.isEmpty {
+                                    trendingGrid(trending)
+                                        .padding(.top, ThemeSpace.x3)
+                                }
+                            } else {
+                                recentsList
+                                    .padding(.top, ThemeSpace.x2)
+                            }
+                        } else {
                             searchBody(results, trending: trending)
-                                .transition(.opacity)
                         }
+                        // BELOW the results (interactive review: inserted above them it moved the
+                        // row just tapped 88 pt down under the finger).
+                        if primerVisible { notificationPrimer.padding(.top, ThemeSpace.x4) }
                     }
-                    // BELOW the results (interactive review: inserted above them it moved the row
-                    // just tapped 88 pt down under the finger).
-                    if primerVisible { notificationPrimer.padding(.top, ThemeSpace.x4) }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: query.isEmpty)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: query.isEmpty)
-                // The raised-edge probe (geometry-based; `onScrollGeometryChange` is dead on the
-                // iOS 27 simulator): content under the status band hardens the soft top veil —
-                // the app-wide ghosting fix Schedule's chrome comment deferred.
-                .background {
-                    Color.clear.onGeometryChange(for: CGFloat.self) { proxy in
-                        proxy.frame(in: .global).minY
-                    } action: { minY in
-                        let raised = minY < searchChromeBottom
-                        if raised != raisedTop { raisedTop = raised }
-                    }
-                }
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
+                .laneClearance(appModel)
+                .tabBarContentMargin()
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentH = $0 }
+                .transition(.opacity)
             }
-            .scrollIndicators(.hidden)
-            .scrollDismissesKeyboard(.interactively)
-            .laneClearance(appModel)
-            // The one root without a pull: the chart is a network list like any other.
-            .previouslyRefreshable { await appModel.refreshTrending() }
-            // A content MARGIN, not `.padding` inside the stack: padding under a stack that is
-            // shorter than the viewport changes no layout at all, which is exactly the case the
-            // launchpad is in — and it is why the sixth chart row came to rest inside the bottom
-            // ramp with its enabled `+` at 131/255 against 241 for the identical control four rows
-            // higher. The margin is honoured either way and the scroll indicator stops with it.
-            .tabBarContentMargin()
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentH = $0 }
+        }
+        .animation(ThemeMotion.pick(ThemeMotion.keyboard, reduceMotion: reduceMotion), value: searching)
+        // The genre tiles for the scope (the Genres page, and a genre page's chips); a fresh list
+        // (30 min) is not re-asked.
+        .task(id: appModel.mediaFilter) {
+            await DiscoverCatalog.shared.loadGenres(api: appModel.api, filter: appModel.mediaFilter)
         }
         // The top edge belongs to the navigation bar and the search field now, so only the bottom
         // is ours — but it IS ours in both states. `scrollDismissesKeyboard(.interactively)` means
@@ -176,17 +177,22 @@ struct DiscoverView: View {
         // from the very top of the screen — over the wash the navigation container paints
         // (`rootWash`): the launchpad used to open on flat near-black while every other root
         // carried its art.
-        .scrollEdgeChromeBody(top: true, bottom: true,
-                              topHeight: ThemeMetrics.topSafeInset + ThemeMetrics.searchDrawerHeight,
-                              softTop: true, topRaised: raisedTop,
-                              topHold: searchChromeBottom)
+        .scrollEdgeChromeBody(top: false, bottom: true)
+        .flushTopBar(searchChromeBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
         // Inline on every root (user decision): the field is the screen's identity here, and a
         // large title over it put two headlines on one screen.
-        .navigationTitle(Copy.Search.title)
+        // "Discover" — the tab's name (ios-spec §3.1). The field keeps `Copy.Search`'s prompt, so
+        // VoiceOver hears "Discover" for the screen and "Search anime and TV" for the field.
+        .navigationTitle(Copy.Discover.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
+        // The scope (All / Anime / TV) is a menu in the bar, as Schedule's filter is — X's Explore
+        // keeps its settings there; the resting chips went with the launchpad.
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { scopeMenu }
+        }
         // The field lives UNDER the title, always — Apple Music's Search (user reference, 24 Aug):
         // title, field, then the browse grid; focused, the field pins to the top with Cancel, the
         // scope bar appears and the recents take the page. Search is an ordinary tab in the one
@@ -203,8 +209,8 @@ struct DiscoverView: View {
         .autocorrectionDisabled()
         // `.onTextEntry`: the scope bar is a RESULTS control and appears with the first
         // keystroke. On the focused-but-empty page it was a full-width pill pushing the recents
-        // down for a choice that had nothing to filter yet; the active scope shows there as the
-        // launchpad's removable token instead (`scopeChipRow`).
+        // down for a choice that had nothing to filter yet; the bar's scope menu (`scopeMenu`)
+        // chooses and shows the scope at rest instead.
         .searchScopes($model.mediaFilter, activation: .onTextEntry) {
             ForEach(MediaFilter.allCases, id: \.self) { filter in
                 // The segment labels are ours; the bar around them is the system's. At AX1 they
@@ -256,6 +262,7 @@ struct DiscoverView: View {
             PerfProbe.mark(presented ? "search-presented" : "search-dismissed")
         }
         .markAllConfirmation($markAll, appModel: appModel)
+        .modifier(DiscoverCapture(onOpenDetail: onOpenDetail))
         .task(id: appModel.library.count) { await refreshNotificationEligibility() }
         .task { await refreshNotificationEligibility() }
         // WCAG 4.1.3. A VoiceOver user typed a query and results arrived, or didn't, or failed,
@@ -266,11 +273,31 @@ struct DiscoverView: View {
             guard !query.isEmpty else { return }
             announceOutcome()
         }
+        // No haptic: choosing a scope (the chips, the scope bar, a genre page's chips — all one
+        // `mediaFilter`) is not a write, and a haptic is a write's signature (CLAUDE.md).
         .onChange(of: appModel.mediaFilter) { _, _ in
-            FeedbackCoordinator.fire(.selection)
             guard !query.isEmpty, !appModel.searchBusy else { return }
             announceOutcome()
         }
+    }
+
+    /// The scope menu: filled while a scope is on, so a filtered Discover says so in the bar.
+    private var scopeMenu: some View {
+        @Bindable var model = appModel
+        return Menu {
+            Picker(Copy.Discover.scopeMenu, selection: $model.mediaFilter) {
+                ForEach(MediaFilter.allCases, id: \.self) { filter in
+                    Text(Copy.Search.scopeWord(filter)).tag(filter)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Image(systemName: appModel.mediaFilter == .all
+                  ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+        }
+        .tint(appModel.mediaFilter == .all ? ThemeColor.textPrimary : ThemeColor.accent)
+        .accessibilityLabel(Copy.Discover.scopeMenu)
+        .accessibilityValue(Copy.Search.scopeWord(appModel.mediaFilter))
     }
 
     /// "Add a show" elsewhere asked for the field. Present it once and clear the request, so a
@@ -351,7 +378,7 @@ struct DiscoverView: View {
                 .foregroundStyle(ThemeColor.textTertiary)
                 .frame(width: Metrics.dismissDisc, height: Metrics.dismissDisc)
                 .background(ThemeColor.surfaceRaised, in: Circle())
-                .overlay(Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
+                .overlay(Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: FeedMetrics.hairline))
                 .frame(width: Metrics.hitTarget, height: Metrics.hitTarget)
                 .contentShape(Circle())
         }
@@ -475,78 +502,6 @@ struct DiscoverView: View {
 
     // MARK: - Launchpad
 
-    /// ONE page in the slot, at rest and focused: the trending grid, with what you searched
-    /// before above it once the field has focus. The grid used to become a different list — the
-    /// same shows as compact rows — the moment the field was tapped, so the tab's content changed
-    /// anatomy under the finger for no reason a reader could name. Apple TV keeps its grid under
-    /// the keyboard; so does this.
-    @ViewBuilder
-    private func launchpad(trending: [FranchiseSummary]) -> some View {
-        let recentsEmpty = appModel.recentItems.isEmpty && appModel.recentSearches.isEmpty
-        VStack(alignment: .leading, spacing: 0) {
-            // An active scope is VISIBLE whenever the scope bar is not (the bar exists only while
-            // there is text): a sticky TV/anime scope would otherwise filter the whole grid with
-            // nothing on screen saying so and nothing to clear it with. Schedule's rule: whatever
-            // is filtering the feed sits in the chrome as a removable token.
-            if appModel.mediaFilter != .all {
-                scopeChipRow
-            }
-            // Mounted whenever there are recents, folded to nothing until the field has focus:
-            // the rows are built once, and the focus animates a height, not a construction.
-            if !recentsEmpty {
-                recentsList
-                    .padding(.top, ThemeSpace.x2)
-                    .frame(maxHeight: fieldPresented ? nil : 0, alignment: .top)
-                    .clipped()
-                    .opacity(fieldPresented ? 1 : 0)
-                    .allowsHitTesting(fieldPresented)
-                    .accessibilityHidden(!fieldPresented)
-            }
-            // DISCOVERY FROM YOUR OWN SHOWS above the chart — the tab people open to find
-            // something (review i5, N5: Search had only an anime-only "Trending now", and the
-            // owner's "discovery is extremely important" had one surface). The same shelf as
-            // Today's, in the scope the field is filtering.
-            let recs = scopedRecommendations
-            if !recs.isEmpty {
-                ForYouShelf(items: recs, reason: { appModel.spokenReason($0) },
-                            onOpen: { openRecommendation($0) },
-                            onSeeAll: onOpenRecommendations)
-                    .padding(.top, fieldPresented && !recentsEmpty ? ThemeMetrics.sectionGap : ThemeSpace.x2)
-            }
-            if !trending.isEmpty {
-                trendingGrid(trending)
-                    .padding(.top, !recs.isEmpty || (fieldPresented && !recentsEmpty) ? ThemeMetrics.sectionGap : ThemeSpace.x2)
-            } else if !SyncCenter.shared.isOnline {
-                // No grid and no connection: say so. "Find your next show" over a grid that will
-                // never load is a promise, and the path monitor knows it is an empty one.
-                EmptyState(.searchOffline, primary: { appModel.loadTrendingIfNeeded() })
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                    .centredState(contentH: contentH)
-            } else if appModel.mediaFilter != .all, !appModel.trending.isEmpty {
-                // The SCOPE emptied the chart, not the server: name the filter and offer the same
-                // one-tap way out `noScopeMatches` gives the results page.
-                EmptyState(.noScopeTrending(scope: Copy.Search.scopeWord(appModel.mediaFilter)),
-                           primary: {
-                               withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy,
-                                                              reduceMotion: reduceMotion)) {
-                                   appModel.mediaFilter = .all
-                               }
-                           })
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                    .centredState(contentH: contentH)
-            } else if !fieldPresented || recentsEmpty {
-                // `ambient: false` on every state on this screen — it already carries an
-                // `ArtBackdrop`; one wash per screen.
-                EmptyState(.searchLaunchpad)
-                    .padding(.horizontal, ThemeMetrics.gutter)
-                    .centredState(contentH: contentH)
-            }
-        }
-        // The keyboard's own timing (`ThemeMotion.keyboard`): the recents unfolding and the grid
-        // making room are the keyboard's motion, not a second one.
-        .animation(ThemeMotion.pick(ThemeMotion.keyboard, reduceMotion: reduceMotion), value: fieldPresented)
-    }
-
     /// Today's recommendations in the field's scope (Anime / TV), up to twelve.
     private var scopedRecommendations: [RecommendationItem] {
         let all = appModel.visibleRecommendations
@@ -563,27 +518,6 @@ struct DiscoverView: View {
         Task {
             if let id = await appModel.franchiseId(for: r) { onOpenDetail(id, "foryou/\(r.key)") }
         }
-    }
-
-    /// The active scope as a removable token, on the resting launchpad — where the scope bar
-    /// does not exist. Schedule's filter-chip pattern, verbatim.
-    private var scopeChipRow: some View {
-        HStack(spacing: ThemeSpace.x2) {
-            Button {
-                FeedbackCoordinator.fire(.selection)
-                withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
-                    appModel.mediaFilter = .all
-                }
-            } label: {
-                FilterChipLabel(text: appModel.mediaFilter.chipLabel)
-            }
-            .buttonStyle(FilterChipStyle())
-            .accessibilityLabel(Copy.Accessibility.removeFilter(appModel.mediaFilter.chipLabel))
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, ThemeMetrics.gutter)
-        .padding(.top, ThemeSpace.x2)
-        .transition(.opacity)
     }
 
     // MARK: Browse grid
@@ -703,18 +637,9 @@ struct DiscoverView: View {
                     SearchRow(key: SearchRowKey(id: item.id, title: item.title, meta: meta, lead: nil,
                                                 poster: item.portraitArt, owned: false, status: "",
                                                 separator: separator)) {
-                        // The bare-term rows below hold their magnifier in this poster's column,
-                        // so every title and term in the list starts at one x.
-                        AnyView(MediaRow(title: item.title,
-                                         meta: meta,
-                                         poster: item.portraitArt,
-                                         // `.row` — the one list slot Library, Search and Schedule share.
-                                         slot: .row,
-                                         separator: separator,
-                                         hint: Copy.Accessibility.opensTheShowHint,
-                                         zoomID: zoom) {
-                            open(item, zoom: zoom)
-                        }
+                        // X's recent account: the show's avatar, its name in bold, its facts in
+                        // grey — the results' own row, without the pill.
+                        AnyView(recentRow(item, meta: meta, zoom: zoom, separator: separator)
                         .contextMenu {
                             Button(role: .destructive) {
                                 withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
@@ -732,6 +657,39 @@ struct DiscoverView: View {
                 }
             }
             .padding(.horizontal, ThemeMetrics.gutter)
+        }
+    }
+
+    /// A recent show, as X lists a recent account: avatar, bold name, grey facts; the row opens the
+    /// show, its long press forgets it.
+    private func recentRow(_ item: FranchiseSummary, meta: String, zoom: String, separator: Bool) -> some View {
+        VStack(spacing: 0) {
+            Button { open(item, zoom: zoom) } label: {
+                HStack(alignment: .center, spacing: ThemeSpace.x3) {
+                    ShowAvatar(candidates: resultAvatar(item), size: Metrics.resultAvatar)
+                    VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
+                        Text(item.title)
+                            .type(ThemeType.feedName)
+                            .foregroundStyle(ThemeColor.feedText)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if !meta.isEmpty {
+                            Text(meta)
+                                .type(ThemeType.feedMeta)
+                                .foregroundStyle(ThemeColor.feedSecondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, ThemeSpace.x3)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(FeedRowPressStyle())
+            .zoomSource(zoom)
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+            if separator { FeedHairline() }
         }
     }
 
@@ -804,23 +762,49 @@ struct DiscoverView: View {
     /// the row's combined label, and the add control in the trailing slot.
     private func mediaRow(_ item: FranchiseSummary, zoom: String,
                           ambiguous: Set<String>, separator: Bool) -> some View {
-        // The result as a SCENE (20 Sep): the show's landscape art with its logo, the airing fact
-        // and the facts in the art's lower band, and the add control labelled beside them.
-        ArtworkSceneCard(art: item.wideArt, poster: item.portraitArt,
-                         name: item.sceneName, title: disambiguated(item, ambiguous: ambiguous),
-                         fact: when(item),
-                         detail: rowFacts(item, ambiguous: ambiguous).joined(separator: FactLine.separator),
-                         aspect: isAX ? 1 : 1.65,
-                         contentMinWidth: 150,
-                         onOpen: { open(item, zoom: zoom) }) {
-            addControl(item, placement: .artwork)
+        // X's result (the X pass, 25 Sep — "redo the search results in X style too", owner): the
+        // show as an ACCOUNT — its avatar, its name in bold, one line of facts (a time this week
+        // leads in amber), X's Follow pill as the add — on the canvas, a one-pixel rule under it.
+        // It was a landscape SCENE card per result, three to a screen.
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: ThemeSpace.x3) {
+                Button { open(item, zoom: zoom) } label: {
+                    HStack(alignment: .center, spacing: ThemeSpace.x3) {
+                        ShowAvatar(candidates: resultAvatar(item), size: Metrics.resultAvatar)
+                        VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
+                            Text(disambiguated(item, ambiguous: ambiguous))
+                                .type(ThemeType.feedName)
+                                .foregroundStyle(ThemeColor.feedText)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            FactLine(facts: rowFacts(item, ambiguous: ambiguous), lead: when(item),
+                                     token: ThemeType.feedMeta, tint: ThemeColor.feedSecondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityHint(Copy.Accessibility.opensTheShowHint)
+                addControl(item, placement: .pill)
+            }
+            .padding(.horizontal, ThemeMetrics.gutter)
+            .padding(.vertical, ThemeSpace.x3)
+            .zoomSource(zoom)
+            .franchiseQuickActions(appModel.franchise(id: item.id), appModel: appModel)
+            if separator { FeedHairline() }
         }
-        .zoomSource(zoom)
-        // No horizontal padding here: both containers already hold the gutter, and a second one
-        // put the cards on a 32-pt inset while the field and every other screen's cards sat on
-        // 16 (review i4, N7).
-        .padding(.bottom, ThemeSpace.x4)
-        .franchiseQuickActions(appModel.franchise(id: item.id), appModel: appModel)
+    }
+
+    /// A result's avatar: the show's face, as the feed crops it — the textless poster, a TRUE
+    /// landscape, then the poster.
+    private func resultAvatar(_ item: FranchiseSummary) -> [String] {
+        var out: [String] = []
+        for url in [item.textlessPortrait, item.landscapeArt, item.portraitArt] {
+            if let url, !url.isEmpty, !url.contains("/anime/banner/"), !out.contains(url) { out.append(url) }
+        }
+        return out
     }
 
     // MARK: - Results
@@ -905,8 +889,7 @@ struct DiscoverView: View {
                     }.equatable())
                 }
                 .equatable()
-                .padding(.horizontal, ThemeMetrics.gutter)
-                .padding(.top, ThemeSpace.x3)
+                .padding(.top, ThemeSpace.x1)
             }
             // Refining a query that already has results: the old set steps back as a group while
             // the new one is in flight, so a list that is about to change never looks settled.
@@ -1303,10 +1286,58 @@ private struct ResultSet {
     }
 }
 
+// MARK: - Capture (DEBUG)
+
+/// `-discoverGenre <key>` (DEBUG, ios-spec §6.3): with `-openTab discover`, pushes that genre's
+/// page once the launchpad has its genres — the way to photograph the page when the simulator
+/// cannot be touched. Read once, here; the shipped build gets the content untouched.
+private struct DiscoverCapture: ViewModifier {
+    let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
+
+    #if DEBUG
+    @Environment(AppModel.self) private var appModel
+    @State private var genre: DiscoverRoute?
+    @State private var consumed = false
+    #endif
+
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content
+            .navigationDestination(item: $genre) { route in
+                switch route {
+                case let .genre(key, name):
+                    GenreResultsView(genreKey: key, name: name,
+                                     onOpenDetail: { onOpenDetail($0, "genre/\($0)") })
+                        .pushedScreenChrome()
+                }
+            }
+            .task {
+                guard !consumed, let key = UserDefaults.standard.string(forKey: "discoverGenre"),
+                      !key.isEmpty else { return }
+                consumed = true
+                // The name the tile would carry, once the list has answered (≤ 4 s); else the key.
+                var name = key
+                for _ in 0..<20 {
+                    if let hit = DiscoverCatalog.shared.genres(for: appModel.mediaFilter).first(where: { $0.key == key }) {
+                        name = hit.name
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                genre = .genre(key: key, name: name)
+            }
+        #else
+        content
+        #endif
+    }
+}
+
 // MARK: - Sizes with no token
 
 /// Sizes this screen needs that have no token equivalent. Each says why it is the number it is.
 private enum Metrics {
+    /// X's result avatar: 48 pt, the show's rounded square.
+    static let resultAvatar: CGFloat = 48
     /// The 44-pt minimum target (HIG).
     static let hitTarget: CGFloat = 44
     /// A bare-term row: one line at the minimum target. A word is not a poster.

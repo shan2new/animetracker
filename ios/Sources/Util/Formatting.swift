@@ -193,6 +193,15 @@ enum Formatting {
         formatter(skeleton, anchor).string(from: date(ts))
     }
 
+    /// `ts` formatted from a Unicode date-format TEMPLATE ("dMMM", "EEEEdMMMM") in `anchor`'s
+    /// calendar, through the cached, locale-aware formatters — never a `DateFormatter` built per call
+    /// (the spike's `FeedTime.format` built one per stamp, per row, per body). The template orders
+    /// and punctuates itself per locale ("3 Oct" / "Oct 3"). An empty template is the locale's short
+    /// time, which a `.utcDate` timestamp must never be asked for (its clock is synthesized).
+    static func formatted(_ ts: Int64, skeleton: String, anchor: TimeAnchor) -> String {
+        string(ts, skeleton, anchor)
+    }
+
     // Weekday/month NAMES depend on the locale only, never the time zone, so they always come off
     // the local formatter regardless of the anchor the day itself was computed in.
     static func weekdayShort(_ wd: Int) -> String {

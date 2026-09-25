@@ -37,21 +37,28 @@ import UserNotifications
 //    fights interactive dismiss (M10), the severity gradient restored between Sign out and Delete
 //    account (M8), and the wordmark's terminal period drawn once (m2).
 struct ProfileView: View {
-    /// Dismiss the sheet and open All titles filtered to this status. `nil` in a build whose
-    /// presenter has not wired it: the tiles then stay facts rather than pretending to be controls.
-    /// The presenter half is filed as a shared-file request against `TodayView` / `RootView`.
+    /// Dismiss the sheet and open All titles filtered to this status. The feed's header disc — the
+    /// one entry to this sheet — always wires it (RootView's `libraryRequest` route, 25 Sep); `nil`
+    /// only for a presenter that has nowhere to send it, and the shelf's "See all" then is not drawn
+    /// rather than pretending to be a control.
     var onOpenLibrary: ((WatchStatus) -> Void)? = nil
-    /// Dismiss the sheet and open a show — the Watching shelf's route.
+    /// Dismiss the sheet and open a show — the Watching shelf's and Saved's route.
     var onOpenDetail: ((String) -> Void)? = nil
 
     @Environment(AppModel.self) private var appModel
     @Environment(AuthManager.self) private var auth
     @Environment(\.dismiss) private var dismiss
+    /// Set by the feed on this sheet: closes it and opens a feed page on Today (Saved → a post).
+    @Environment(\.openFeedRoute) private var openFeedRoute
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.openURL) private var openURL
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var hapticsOn = FeedbackCoordinator.enabled
+    /// The sheet's own stack: Export and the Community pages are pushed here, inside the sheet.
+    @State private var path: [ProfileRoute] = []
+    /// Community rules, to read (the accept form is the composer's first step, never this row's).
+    @State private var showRules = false
     #if DEBUG
     @State private var demoBusy = UserDefaults.standard.bool(forKey: "demoBusy")
     #endif
@@ -98,7 +105,7 @@ struct ProfileView: View {
     private var isAX: Bool { dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ZStack(alignment: .top) {
                 // The field TRAVELS WITH THE IDENTITY BLOCK it belongs to. Painted fixed to the
                 // screen it stayed where it was while the plates slid through it, so the SETTINGS
@@ -106,11 +113,8 @@ struct ProfileView: View {
                 // further down — one component, two hues, decided by scroll position (M6).
                 // Masking alone cannot fix that: "ends above the stats plate" is only true at
                 // rest. Anchoring it to the content is.
-                ProfileWashTravel(scroll: scroll) {
-                    ProfileWash(tint: washTint, fadeEnd: washFadeEnd)
-                }
-                .ignoresSafeArea(edges: .top)
-
+                // Flat, as Today is (25 Sep): the wash that travelled with the identity block is
+                // gone with every root's.
                 ScrollView {
                     sheetContent
                         .padding(.horizontal, ThemeMetrics.gutter)
@@ -165,6 +169,12 @@ struct ProfileView: View {
                 }
                 .chromeSharedBackgroundHidden()
             }
+            .navigationDestination(for: ProfileRoute.self) { route in
+                destination(route)
+            }
+        }
+        .sheet(isPresented: $showRules) {
+            CommunityRulesSheet(mode: .read, onAccepted: { _ in })
         }
         .onAppear { sync.profileIsOpen = true }
         .onDisappear { sync.profileIsOpen = false }
@@ -236,6 +246,7 @@ struct ProfileView: View {
             if !sync.failedChanges.isEmpty {
                 syncSection.padding(.top, ThemeMetrics.sectionGap)
             }
+            community.padding(.top, ThemeMetrics.sectionGap)
             settings.padding(.top, ThemeMetrics.sectionGap)
             if sync.failedChanges.isEmpty {
                 syncFootnote.padding(.top, ThemeSpace.x2)
@@ -339,7 +350,7 @@ struct ProfileView: View {
         return [-58, 0, 58][i]
     }
 
-    /// Covers loaded right now, in the order Today ranks them.
+    /// Covers loaded right now, in the model's urgency order (`orderedLibrary`).
     private var liveCovers: [String] {
         let covers = orderedLibrary.compactMap(\.portraitArt)
         if covers.count >= 3 { return Array(covers.prefix(3)) }
@@ -355,7 +366,7 @@ struct ProfileView: View {
 
     /// The account's letter, on the one warm disc this screen is allowed.
     ///
-    /// `AccountDisc` with `AuthManager.identity` — the SAME derivation Today's header uses. Two
+    /// `AccountDisc` with `AuthManager.identity` — the SAME derivation the feed's header disc uses. Two
     /// independent ones produced "U" there (off the raw Clerk id) and "Y" here (off this screen's
     /// own fallback label): one user, two meaningless letters, one tap apart. It never draws
     /// `person.fill`; with nothing nameable it draws the brand mark.
@@ -747,6 +758,103 @@ struct ProfileView: View {
     /// that cannot work is worse than no button.
     private var syncCanRefresh: Bool { sync.isOnline && !sync.checking }
 
+    // MARK: - Community (iD13)
+
+    /// What the social layer keeps for this account, and the controls App Review 1.2 asks to be
+    /// reachable: Saved (the only place saved posts live), how the account appears on its replies,
+    /// who it has blocked, which shows it muted, and the rules it agreed to.
+    ///
+    /// With replies switched off on the server (`feedCapabilities.comments`, spec §4.9) the group is
+    /// Saved and Muted shows only — the two that still do something. The name and username, the
+    /// rules and the block list are the plumbing of user content, and with no user content on
+    /// screen they are rows that promise a community the build does not have (the server answers
+    /// the identity writes and new blocks `404 comments disabled` then, too).
+    private var community: some View {
+        let comments = appModel.feedCapabilities.comments
+        return GroupedList(header: Copy.Social.communityHeader) {
+            communityLink(.saved, symbol: "bookmark", title: Copy.Social.savedTitle)
+            if comments {
+                communityLink(.identity, symbol: "at", title: Copy.Social.identityRow, value: identityValue)
+                communityLink(.blocked, symbol: "person.crop.circle.badge.xmark", title: Copy.Social.blockedTitle)
+            }
+            communityLink(.muted, symbol: "speaker.slash", title: Copy.Social.mutedTitle, separator: comments)
+            if comments {
+                ProfileRow(symbol: "text.book.closed",
+                           title: Copy.Social.rulesTitle,
+                           separator: false,
+                           action: { showRules = true }) {
+                    trailingGlyph("chevron.forward", tint: ThemeColor.textDisabled, scale: 0.86)
+                }
+            }
+        }
+        // Once per session (the model keeps the answer); the identity row's value waits for it.
+        .task { await appModel.loadSocialProfile() }
+    }
+
+    /// "@mira.k" once the account has chosen one; "Not set" once the server has said it has not;
+    /// nothing while the question is still out (a guess would be a claim either way).
+    private var identityValue: String? {
+        guard let profile = appModel.socialProfile else { return nil }
+        return profile.handle.map { Copy.Social.handle($0) } ?? Copy.Social.identityNotSet
+    }
+
+    private func communityLink(_ route: ProfileRoute, symbol: String, title: String,
+                               value: String? = nil, separator: Bool = true) -> some View {
+        NavigationLink(value: route) {
+            ProfileRowLabel(symbol: symbol, title: title, separator: separator, indicateWait: false) {
+                HStack(spacing: ThemeSpace.x2) {
+                    if let value {
+                        Text(value)
+                            .type(ThemeType.metadata)
+                            .foregroundStyle(ThemeColor.textTertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    trailingGlyph("chevron.forward", tint: ThemeColor.textDisabled, scale: 0.86)
+                }
+            }
+        }
+        .buttonStyle(GroupedRowPressStyle())
+        .accessibilityValue(value ?? "")
+    }
+
+    /// The pages this sheet pushes on its own stack.
+    @ViewBuilder
+    private func destination(_ route: ProfileRoute) -> some View {
+        switch route {
+        case .export:
+            ExportOptionsView(appModel: appModel, indicatorSize: indicatorSize)
+        case .saved:
+            SavedPostsView(onOpenPost: openSavedPost, onOpenShow: { id in
+                dismiss()
+                // The presenter's route when it gave one; else the model's pending show, which
+                // RootView answers the same way (Today, every feed cover closed, the show pushed).
+                if let onOpenDetail { onOpenDetail(id) } else { appModel.pendingOpen = id }
+            })
+        case .identity:
+            IdentitySetupView(mode: .edit, onDone: { _ in
+                // Back to the sheet, whose row now reads the new handle off the model.
+                if path.last == .identity { path.removeLast() }
+            })
+        case .blocked:
+            BlockedAccountsView()
+        case .muted:
+            MutedShowsView()
+        }
+    }
+
+    /// A saved post opens on Today, the feed's own page for it: the feed closes this sheet first
+    /// and pushes the post once it is down. Without that hand-off (a presenter that set none) the
+    /// same route goes through the model's pending route, which RootView answers the same way.
+    private func openSavedPost(_ postId: String) {
+        if let openFeedRoute {
+            openFeedRoute(.post(id: postId))
+        } else {
+            dismiss()
+            appModel.pendingRoute = .post(postId: postId, commentId: nil)
+        }
+    }
+
     // MARK: - Settings
 
     private var settings: some View {
@@ -820,9 +928,7 @@ struct ProfileView: View {
 
             // A PUSH, not a menu: the pushed screen gives each format a title and a real support
             // line, and covers nothing (the menu anchored itself over the row that raised it).
-            NavigationLink {
-                ExportOptionsView(appModel: appModel, indicatorSize: indicatorSize)
-            } label: {
+            NavigationLink(value: ProfileRoute.export) {
                 ProfileRowLabel(symbol: "square.and.arrow.up",
                                 title: AccountCopy.export,
                                 separator: false) {
@@ -931,25 +1037,10 @@ struct ProfileView: View {
     /// One outcome, one supporting sentence. Two sentences delivering one reassurance is against
     /// the voice note (m8) — the pending-changes case earns its second clause because it carries a
     /// second fact.
-    private var signOutMessage: String {
-        let pending = sync.failedChanges.count
-        guard pending > 0 else {
-            return "Your library stays in your account \u{2014} sign back in any time."
-        }
-        // "3 changes hasn't" — the one verb in the app that has to agree with its count.
-        let verb = pending == 1 ? "hasn\u{2019}t" : "haven\u{2019}t"
-        let pronoun = pending == 1 ? "it stays" : "they stay"
-        return "Your library stays in your account. \(Copy.changes(pending)) \(verb) synced yet — "
-            + "\(pronoun) on this device and upload the next time you sign in."
-    }
+    private var signOutMessage: String { Copy.Account.signOutMessage(pending: sync.failedChanges.count) }
 
-    /// The blast radius, in the user's own numbers. The strongest copy in the app; not shortened.
-    private var deleteMessage: String {
-        let titles = appModel.library.count
-        return "This permanently deletes your account and everything in it"
-            + (titles > 0 ? " — \(Copy.titles(titles)), all progress and watch history" : "")
-            + ". It can\u{2019}t be undone."
-    }
+    /// The blast radius, in the user's own numbers (shared with the suspended screen).
+    private var deleteMessage: String { Copy.Account.deleteMessage(titles: appModel.library.count) }
 
     /// Not asked yet → the system prompt here, then the row reads its answer; asked → Settings.
     private func notificationsTapped() {
@@ -993,15 +1084,22 @@ struct ProfileView: View {
             deleting = true
         }
         Task {
+            // Nothing the app sends may reach the server after the erasure: a late like, mark or
+            // read would bring the account back (`prepareForErasure`).
+            await appModel.prepareForErasure()
             do {
                 try await AccountDeletion.deleteAccount(token: auth.currentToken)
                 // The account is gone; the session must go with it, the snapshot too, and the sheet
-                // with both. A deleted account may not leave its counts on the device.
+                // with both. A deleted account may not leave its counts on the device — so the
+                // model is wiped FIRST, and the wipe never depends on Clerk's sign-out succeeding.
                 ProfileSnapshot.clear()
-                await auth.signOut()
+                appModel.teardown()
+                await auth.accountErased()
                 deleting = false
                 dismiss()
             } catch {
+                // Not deleted: what the erasure held back (marks, likes, replies) goes now.
+                appModel.abortErasure()
                 deleting = false
                 deleteFailure = (error as? LocalizedError)?.errorDescription
                     ?? AccountDeletion.Failure.refused.errorDescription
@@ -1094,8 +1192,9 @@ struct ProfileView: View {
         return b.map { "\(v) (\($0))" } ?? v
     }
 
-    /// The library in the order Today ranks it — so the sheet's wash and its poster fan are drawn
-    /// from the same cover that is on screen behind the sheet, instead of an unrelated one.
+    /// The library in the model's urgency order (what has a new episode, then what is mid-season,
+    /// then the rest) — so the sheet's wash and its poster fan are drawn from the shows the person
+    /// is actually watching, instead of an unrelated one.
     private var orderedLibrary: [Franchise] {
         let ranked = appModel.outNow + appModel.keepWatching
         let rest = appModel.library.filter { f in !ranked.contains(where: { $0.id == f.id }) }
@@ -1143,12 +1242,22 @@ private enum AccountCopy {
     /// one place a user reads when they are worried about their data — a false claim there is worse
     /// than a missing feature (B1). What the file IS, never what it could one day be fed back into.
     static let exportJSON = "JSON"
-    static let exportJSONSub = "Every field, machine-readable"
+    /// The account's own copy from the server (`LibraryExport`), not only the library.
+    static let exportJSONSub = Copy.Account.exportJSONSubtitle
     static let exportCSV = "CSV"
     static let exportCSVSub = "One row per title, for spreadsheets"
-    static let exportFootnote =
-        "A copy is created on this device and handed to whatever you share it with. "
-        + "Nothing leaves your account until you choose a destination."
+    static let exportFootnote = Copy.Account.exportFootnote
+}
+
+// MARK: - Routes
+
+/// The pages Profile pushes inside its own sheet.
+private enum ProfileRoute: Hashable {
+    case export
+    case saved
+    case identity
+    case blocked
+    case muted
 }
 
 // MARK: - Export
@@ -1228,7 +1337,7 @@ private extension String {
 /// REMOVED rather than degraded, and the user lost the only summary of their account exactly when
 /// they could not verify it anywhere else (M4). Three integers and three URLs in `UserDefaults` is
 /// the whole cost of the frame surviving the failure.
-private struct ProfileSnapshot: Equatable {
+struct ProfileSnapshot: Equatable {
     var counts: [String: Int] = [:]
     var covers: [String] = []
 
