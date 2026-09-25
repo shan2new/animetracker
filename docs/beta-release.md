@@ -203,23 +203,143 @@ Things that bite on a first submission and are done — don't redo them:
 
 - `ITSAppUsesNonExemptEncryption: false` in the Info.plist, so no export-compliance prompt per
   upload. The app's only cryptography is HTTPS via the OS.
-- `ios/Resources/PrivacyInfo.xcprivacy` — the privacy manifest. Declares email address, user id and
-  other user content (all *App Functionality*, none for tracking), and `UserDefaults` under reason
-  `CA92.1`. Apple diffs this against the App Privacy answers in App Store Connect, so answer those
-  to match. **Update it in the same commit as any change to what the app collects.**
-- In-app account deletion (guideline 5.1.1(v)) — Profile → Delete Account → `DELETE /me`.
-  **Incomplete as of 7 Sep, and it blocks a public listing** (not internal TestFlight, which has no
-  review). `DELETE /me` erases every user-owned table in one transaction, but the server makes **no
-  Clerk API call at all** — grep for `deleteUser` / `clerkClient` returns nothing — so the auth
-  identity survives. The email stays in Clerk and the person can sign straight back in to a fresh
-  empty account, which is not deletion. Fix: call Clerk's Backend API to delete the user after the
-  DB transaction commits (it is an external call, so it cannot sit inside the transaction) and
-  decide what happens when that call fails — the DB rows are already gone by then.
+- `ios/Resources/PrivacyInfo.xcprivacy` — the privacy manifest. Declares email address, **user
+  id** (the Clerk id and, since the feed build, the community handle), **name** (the community
+  display name), **other user content** (the library, replies, episode ratings, reports) and
+  **product interaction** (likes, saves, reminders, hidden posts and muted shows, blocks, "Not
+  interested", and the `last_opened_at` / `prev_opened_at` visit stamps), all linked, all *App
+  Functionality*, none for tracking, and `UserDefaults` under reason `CA92.1`. Its comment says
+  what is public: display name, handle and reply text; like counts and rating averages only as
+  aggregates. Apple diffs this against the App Privacy answers in App Store Connect, so answer
+  those to match. **Update it in the same commit as any change to what the app collects.**
+- In-app account deletion (guideline 5.1.1(v)) — Profile → Delete account → `DELETE /me`, and the
+  same from the suspended-account screen (a banned account may still delete itself and export its
+  data; every other route answers it `403 account_suspended`). `DELETE /me` erases every
+  user-owned table — the feed's social rows included — in one transaction, and since the feed build
+  it then deletes the **Clerk identity** too (`services/erasure.ts`; a suspended identity is banned
+  in Clerk instead, so the same email cannot come back for a fresh id). That last step needs
+  `CLERK_SECRET_KEY` on the mini (see below): without it the log says `clerk: skipped`, the email
+  stays in Clerk, and the person can sign straight back in to an empty account — which is not
+  deletion, and blocks a public listing. A failed Clerk call is logged
+  (`account.clerk_delete_failed`) and retried with `npm run moderation -- clerk-delete <clerkId>`.
+  Profile → Export library → JSON is the account's own copy (`GET /me/export`).
 - No entitlements are needed: the Live Activity requires only `NSSupportsLiveActivities`, episode
   alerts are local notifications, and there is no App Group or push certificate.
 - The developer sign-in panel is double-gated (`#if DEBUG` **and** `AppConfig.isLocalBackend`), so
   it cannot appear in a TestFlight build even if one were pointed at a local server.
 - `qa/` (1.3 GB of capture PNGs) is gitignored.
+
+## Shipping the Today feed build: server first, then TestFlight
+
+The 25 Sep build replaces Today with the feed and adds the social layer and Discover's genres. It
+calls routes an older server does not have (`/me/feed`, `/feed/posts/:id`, `/social/*`,
+`/me/profile`, `/me/export`, `/discover/genres`), and it needs `POST /me/opened` to keep the
+*previous* visit (`users.prev_opened_at`) for "new since your last visit" to be true. So the order
+is fixed:
+
+1. **Migrate.** On the mini: pull, `npm install`, `npm run db:migrate` (migration `0010`: the
+   social tables, `users.prev_opened_at`, the new notification columns) — before the restart, for
+   the reason below.
+2. **Restart**, then check the deploy rather than trust it: the boot line
+   `{"event":"social.config","commentsEnabled":false}`, and the feed route exists —
+   `curl -s -o /dev/null -w "%{http_code}\n" https://anime.cognipin.com/me/feed` answers `401`
+   (no token), never `404`.
+3. **Only then upload the TestFlight build.** Against a server without `/me/feed` the build does
+   not break — Today degrades to the stories tray, one line saying the feed isn't available,
+   Suggested and Trending (the client's `unavailable` state) — but a tester reads that as broken.
+4. **Production runs with comments OFF**: put `SOCIAL_COMMENTS_ENABLED=0` in the mini's
+   `server/.env` explicitly (it is also the default) until the Terms' UGC clause and the
+   production Clerk instance have shipped — the next section. With it off the app hides every
+   reply and discussion affordance; likes, saves, reminders, hides, ratings and the stories keep
+   working.
+
+5. **In the SAME App Store Connect submission as the feed build**, change the answers the manifest
+   cannot carry: *App Privacy* adds **Name**, **User ID** (now also the public handle) and
+   **Product Interaction**, and widens **Other User Content** (replies and ratings, which other
+   users can see), each linked and App Functionality; the *age rating* questionnaire's
+   **User-Generated Content** is **Yes**. The build ships the reply surfaces even while
+   `SOCIAL_COMMENTS_ENABLED=0`, so these answers go with the build, not with the switch.
+
+The server change is additive for older app builds (TestFlight builds already installed keep
+working against the new server), so there is no lockstep: server first, app second, always.
+
+## Comments stay off until you switch them on
+
+The Today feed's replies and episode discussions are user-generated content, behind the server
+switch `SOCIAL_COMMENTS_ENABLED`. **The server's default is off**: the Mac mini's `.env` predates the
+feed and has no such key, so deploying the feed build leaves comments off (likes, saves, reminders,
+hides and ratings work either way). Every boot logs `{"event":"social.config","commentsEnabled":…}`
+— check it after a deploy. Only `.env.example` says `1`, for local work.
+
+Turning comments on in production is a deliberate step, in this order:
+
+1. **The published Terms carry the UGC / EULA clause** — zero tolerance for objectionable content
+   and abusive users, removal and bans, the minimum age for posting publicly — and the privacy
+   policy lists the new data: update the categories in `landing/lib/legal-content.ts` to name the
+   display name, the handle, comments, episode ratings, likes and saves, reports, and what is
+   PUBLIC (name, handle and reply text; like counts and rating averages as aggregates), matching
+   `PrivacyInfo.xcprivacy`'s comment. The landing pages are still drafts on this; App Review 1.2
+   reads them.
+2. **The production Clerk instance exists** (see the first risk below): handles and bans key on
+   Clerk ids, which do not carry over from the development instance.
+3. **The in-app community rules match the Terms.** Whenever their text changes, bump
+   `SOCIAL_TERMS_VERSION` (server `.env` and the default in `server/src/env.ts`) so everyone accepts
+   the new text before posting again.
+4. Set `SOCIAL_COMMENTS_ENABLED=1` in the Mac mini's `server/.env`, restart, and confirm the boot
+   line says `"commentsEnabled":true`.
+
+Never set `SOCIAL_RATE_LIMIT_DISABLED` on the mini: with `APP_ENV=production` the server refuses to
+boot with it, because the per-user limits are the abuse control App Review expects.
+
+**Migrate before you restart.** The ban check in `authenticate` reads `moderation_bans`; a server
+restarted before `npm run db:migrate` cannot read it. It fails OPEN (every request is served as not
+suspended and `moderation.ban_cache_unavailable` is logged on each check) rather than answering every
+route with a 500 — but until the migration runs, no ban holds. Keep the order in step 1: pull,
+install, migrate, then restart.
+
+Before switching comments on, also set on the mini:
+
+- `MODERATION_ALERT_WEBHOOK_URL` — an `https` webhook (a Slack/Discord incoming webhook or any
+  endpoint that takes a JSON POST). Unset, reports reach only the server log and the CLI queue.
+  The payload is ids and a category — never the comment text, a handle or a Clerk id.
+- `CLERK_SECRET_KEY` — without it, `DELETE /me` erases the account's data but cannot delete the
+  Clerk sign-in identity (the log says `clerk: skipped`), which the privacy policy promises.
+
+## Moderation runbook (App Review 1.2: act on a report within 24 hours)
+
+There is one operator, so the server pushes instead of waiting to be read: the webhook fires on a
+comment's **first** open report, on every **auto-hide** (3 counted reports), and **hourly** while any
+report has waited more than 12 hours (`moderation.stale_reports` in the log as well). Check the
+queue at least once a day, and whenever an alert arrives:
+
+```bash
+cd server
+npm run moderation -- list                  # open reports, most-reported first
+npm run moderation -- show <commentId>      # the comment, its author (clerk id, ban state), every report
+npm run moderation -- hide <commentId>      # remove it: reports resolved as hidden, author + reporters told
+npm run moderation -- dismiss <commentId>   # keep it: reports resolved as dismissed, reporters told
+npm run moderation -- restore <commentId>   # undo an auto-hide: visible again, count reset, reporters told
+npm run moderation -- ban <clerkId|@handle> --reason "…" --hide-comments   # remove the user
+npm run moderation -- reset-identity <clerkId|@handle>   # an offensive name or handle, short of a ban
+npm run moderation -- clerk-delete <clerkId>             # retry after account.clerk_delete_failed
+```
+
+A report or auto-hide log line (`moderation.report`, `moderation.auto_hidden`) carries the author's
+Clerk id: if the author deletes their account (which deletes the reports about their comments), the
+log is what keeps `ban <clerkId>` possible. Reports from accounts younger than
+`SOCIAL_REPORTER_MIN_AGE_HOURS` (24) are queued and alerted but do not count toward the auto-hide.
+
+**App Review notes** (paste into the review notes once comments are on — and check every sentence
+against the build you submit first; a claim the reviewer cannot find is a rejection):
+
+> Previously includes user comments on news posts and episode discussions. Before posting, a user
+> must accept the community rules (zero tolerance for objectionable content or abusive users). A
+> server-side filter refuses blocked terms and links. Every comment has Report and Block in its menu;
+> a blocked user's comments disappear in both directions. Three reports hide a comment automatically
+> pending review; the operator is alerted on the first report, reviews every report within 24 hours,
+> and removes offending users with a ban. The author and the reporters are notified of the outcome.
+> Users can contact us from Profile → Support, delete their own comments, and delete their account
+> in the app.
 
 ## Known beta risks
 

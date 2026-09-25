@@ -492,13 +492,478 @@ export interface AccountDeletedResponse {
   deleted: true
 }
 
-/** A stored per-user notification (announcement news for a subscribed franchise). */
+// ---------- Notifications (GET /me/notifications) ----------
+
+export type NotificationKind =
+  | 'news_rumored'
+  | 'news_announced'
+  | 'news_dated'
+  | 'reply'
+  | 'like_comment'
+  // Moderation notices (services/moderationNotices.ts): no actor, subject, post or comment — the
+  // row opens nothing. `body` is a machine category, never English:
+  | 'comment_hidden' //  your comment was hidden — body 'reports' | 'operator'
+  | 'report_resolved' // your report was decided — body 'hidden' | 'dismissed'
+
+/**
+ * A stored per-user notification: announcement news for a subscribed franchise or a reminded post,
+ * a social event (a reply to you, likes on your comment), or a moderation notice (your comment was
+ * hidden, your report was decided).
+ *
+ * Deep link: `commentId` set → open the thread `subject` at that comment; else `postId` set → open
+ * `/feed/posts/:postId`; else → open the franchise. A moderation notice opens nothing.
+ *
+ * The six social fields are always sent by the §5.2 read path. They are declared optional only so
+ * the pre-social `listNotifications` still compiles until services/notifications.ts builds the full
+ * row; tighten them to required once it does.
+ */
 export interface NotificationItem {
   id: string
   franchiseId: string
-  kind: string // news_rumored | news_announced | news_dated
+  kind: NotificationKind | string // decode leniently; unknown kinds render as a plain row
   title: string // franchise title
-  body: string // e.g. "Season 4 announced — release TBA"
+  body: string // news: server English, the FALLBACK when `news` is null (never parsed); social: ''; moderation: the category
   createdAt: number // ms epoch
   readAt: number | null // ms epoch, null while unread
+  /** reply / like_comment: who did it. */
+  actor: PublicUser | null
+  /** like_comment: distinct likers folded into this row (≥1); 0 otherwise. */
+  actorCount: number
+  /** The thread to open (social kinds). */
+  subject: string | null
+  /** The post to open. */
+  postId: string | null
+  /** The comment to scroll to. */
+  commentId: string | null
+  /** Live: the first 140 code points of the comment (reply: the reply; like: your comment); null if gone. */
+  excerpt: string | null
+  /**
+   * News kinds: the structured fact to word the row from (the feed's headline grammar), read LIVE
+   * from the announcement like `excerpt`. Null for social kinds and for a news row whose
+   * announcement is gone — only then does the client fall back to `body`.
+   */
+  news: NotificationNews | null
+}
+
+/**
+ * The announcement behind a news notification, as it stands NOW (an older row shows the
+ * installment's current state; `kind` says which event created the row). Time text is the
+ * client's, from `releaseWindow` — `body` and `release` are never parsed (brief §3).
+ */
+export interface NotificationNews {
+  /** rumored | announced_no_date | announced | upcoming_dated (decode leniently). */
+  status: string
+  /** "Season 2", "Infinity Castle - Part 2": never contains "(movie)" (as `FeedPost.installment`). */
+  installment: string
+  isMovie: boolean
+  /** Research's prose window, printed as-is only where the feed prints `FeedWindow.release`. */
+  release: string
+  /** `release` resolved (a rumour's is always `unknown`): what the client formats and sorts by. */
+  releaseWindow: ReleaseWindow
+}
+
+export interface NotificationsPage {
+  items: NotificationItem[]
+  unread: number
+  nextCursor: string | null
+}
+
+// ---------- Today feed (GET /me/feed, /feed/posts/:id, /me/saved, /me/reminders) ----------
+
+export type FeedTab = 'following' | 'foryou'
+export type FeedPostKind = 'dated' | 'window' | 'announced' | 'rumour' | 'trailer'
+export type FeedPostOrigin = 'research' | 'catalogue' | 'video'
+
+/** When the news happened. A date-only fact is carried at 12:00 UTC of its day (dateOnly: true). */
+export interface FeedTime {
+  at: number
+  dateOnly: boolean
+  /** primary = the original announcement's date; first_report = earliest report in the 120-day
+   *  cluster; observed = when research first saw this state; catalogue = when the catalogue
+   *  attached the part; published = the video's publish instant. */
+  basis: 'primary' | 'first_report' | 'observed' | 'catalogue' | 'published'
+}
+
+export interface FeedPremiere {
+  at: number
+  precision: 'exact' | 'date_only'
+}
+
+/** `release` is printed, `releaseWindow` is sorted/formatted by. Clients never parse `release`. */
+export interface FeedWindow {
+  release: string
+  releaseWindow: ReleaseWindow
+}
+
+export interface FeedSource {
+  publisher: string
+  tier: AnnouncementEvidenceTier
+  /** https only. Null when there is no https link (the entry is kept only for the catalogue fallback). */
+  url: string | null
+  publishedAt: number | null
+  dateOnly: boolean
+  primary: boolean
+}
+
+/** The part a post is about: art inputs only. The client picks the frame with its existing accessors. */
+export interface FeedPartRef {
+  mediaId: number
+  label: string
+  kind: PartKind
+  status: string | null
+  cover: string
+  banner: string
+  images: ArtworkSet
+  artwork: ArtworkGallery
+}
+
+/** The post's author row ("the show"), shipped once per response. */
+export interface FeedFranchise {
+  id: string
+  source: MediaSource
+  title: string
+  cover: string
+  banner: string
+  images: ArtworkSet
+  artwork: ArtworkGallery
+  year: number | null
+  isReleasing: boolean
+  /** The viewer's library status; null when the show is not in their library. */
+  status: WatchStatus | null
+  upcoming: FranchiseUpcomingView | null
+}
+
+export interface FeedViewerState {
+  liked: boolean
+  saved: boolean
+  reminded: boolean
+}
+
+export interface FeedCounts {
+  likes: number
+  comments: number
+}
+
+export interface FeedCapabilities {
+  comments: boolean
+}
+
+export interface FeedPost {
+  /** PostId: `news:<announcement uuid>` | `catalog:<media id>` | `trailer:<franchise uuid>:<site>:<video id>`. */
+  id: string
+  kind: FeedPostKind
+  origin: FeedPostOrigin
+  franchiseId: string
+  /** "Season 2", "Infinity Castle Part 2". Never contains "(movie)". '' for a franchise-scope trailer. */
+  installment: string
+  isMovie: boolean
+  part: FeedPartRef | null
+  time: FeedTime
+  /** When the app first knew this post in its current state (ms). "New" compares this, never `time`. */
+  discoveredAt: number
+  /** Set by the server against the response's `prevOpenedAt`. Fresh posts come first. */
+  fresh: boolean
+  /** Only for kind 'dated' (and a trailer whose installment has a slot). */
+  premiere: FeedPremiere | null
+  /** Only for kind 'window'. */
+  window: FeedWindow | null
+  /** The research note, tidied. Research posts only. */
+  note: string | null
+  video: FranchiseVideo | null
+  /** Ranked. `sources[0]` is the lead. */
+  sources: FeedSource[]
+  /** True only when sources[0].tier === 'official': the ONLY condition for the gold check. */
+  isOfficial: boolean
+  viewer: FeedViewerState
+  counts: FeedCounts
+}
+
+export interface FeedResponse {
+  tab: FeedTab
+  generatedAt: number
+  /** The previous visit the server ordered against (users.prev_opened_at). */
+  prevOpenedAt: number
+  capabilities: FeedCapabilities
+  /** Exactly the franchises the posts reference. */
+  franchises: FeedFranchise[]
+  posts: FeedPost[]
+  /** For you only: untracked, unmuted trending shows (the Trending module), ranked. [] on following. */
+  trending: FranchiseSummary[]
+}
+
+export interface StoryBeat {
+  /** yyyymmdd (UTC) of the beat's day. */
+  id: string
+  /** ms of the lead report. */
+  day: number
+  publishers: string[]
+  official: boolean
+  primary: boolean
+  headline: string | null
+  /** https only. */
+  url: string | null
+}
+
+export interface FeedPostDetailResponse {
+  /** `post.id` is CANONICAL: use it as the thread subject. */
+  post: FeedPost
+  franchise: FeedFranchise
+  /** False when the franchise's feed no longer carries this post (the thread is still open). */
+  live: boolean
+  storyline: StoryBeat[]
+  /** Every https source across the thread, deduped by URL (the thread page's "Sources"). */
+  threadSources: FeedSource[]
+  capabilities: FeedCapabilities
+}
+
+/** `post: null` = the post can no longer be composed (e.g. a catalogue post whose part has released). */
+export interface SavedItem {
+  postId: string
+  savedAt: number
+  post: FeedPost | null
+}
+
+export interface SavedResponse {
+  items: SavedItem[]
+  franchises: FeedFranchise[]
+}
+
+export interface ReminderItem {
+  postId: string
+  remindedAt: number
+  post: FeedPost | null
+}
+
+export interface RemindersResponse {
+  items: ReminderItem[]
+  franchises: FeedFranchise[]
+}
+
+// ---------- Social (likes, comments, episode rooms, identity) ----------
+
+/** The only public face of an account. Never the email, never the Clerk id. */
+export interface PublicUser {
+  /** users.id */
+  id: string
+  handle: string
+  displayName: string
+}
+
+export interface CommentView {
+  id: string
+  subject: string
+  author: PublicUser
+  body: string
+  createdAt: number
+  parentId: string | null
+  /** The parent's author when the parent is still visible to the viewer. */
+  replyTo: PublicUser | null
+  likeCount: number
+  liked: boolean
+  replyCount: number
+  mine: boolean
+}
+
+export type CommentSort = 'top' | 'latest'
+export type EpisodeAccess = 'open' | 'unwatched' | 'unaired'
+
+export interface CommentsPage {
+  subject: string
+  /** Episode rooms only: true when the viewer may not read it. `items` is then []. */
+  locked: boolean
+  /** null for post subjects. */
+  access: EpisodeAccess | null
+  /** Visible comments for this viewer (blocks and own reports applied). */
+  total: number
+  items: CommentView[]
+  nextCursor: string | null
+}
+
+export interface CommentResponse {
+  comment: CommentView
+}
+
+export interface EpisodeRoom {
+  subject: string
+  franchiseId: string
+  mediaId: number
+  episode: number
+  access: EpisodeAccess
+  /** Global visible count (drives "Mark it watched to join N comments"). */
+  commentCount: number
+  likeCount: number
+  liked: boolean
+  rating: {
+    count: number
+    /** 0–100, 1 dp; null when locked or count 0. */
+    average: number | null
+    yours: number | null
+  }
+}
+
+export type ReportReason = 'spam' | 'harassment' | 'hate' | 'sexual' | 'violence' | 'spoiler' | 'other'
+
+export interface BlockedUsersResponse {
+  items: { user: PublicUser; blockedAt: number }[]
+}
+
+export interface HidesResponse {
+  items: {
+    kind: 'post' | 'show'
+    target: string
+    createdAt: number
+    franchise: { id: string; title: string } | null
+  }[]
+}
+
+export interface ProfileResponse {
+  userId: string
+  handle: string | null
+  displayName: string | null
+  termsAcceptedAt: number | null
+  termsVersion: string | null
+  currentTermsVersion: string
+  /** handle && displayName && termsVersion === current && comments enabled. */
+  canComment: boolean
+}
+
+export interface HandleAvailability {
+  handle: string
+  available: boolean
+  reason: null | 'taken' | HandleRejection
+}
+
+export type ContentRejection = 'empty' | 'too_long' | 'link' | 'blocked_term' | 'invalid_characters'
+export type HandleRejection = 'length' | 'characters' | 'dots' | 'no_letter' | 'reserved' | 'blocked_term'
+export type DisplayNameRejection =
+  | 'empty'
+  | 'too_long'
+  | 'invalid_characters'
+  | 'link'
+  | 'blocked_term'
+  | 'no_letter'
+  | 'at_sign'
+  /** The app, its staff, a system voice or a brand (`RESERVED_NAME_WORDS`, social/identity.ts). */
+  | 'reserved'
+
+/** Machine codes clients branch on (409/410/422/429, and 403 account_suspended). */
+export type SocialErrorCode =
+  | 'handle_required'
+  | 'terms_required'
+  | 'episode_locked'
+  | 'id_conflict'
+  | 'handle_taken'
+  | 'own_comment'
+  | 'self_block'
+  | 'terms_version_mismatch'
+  | 'content_rejected'
+  | 'invalid_handle'
+  | 'invalid_display_name'
+  | 'rate_limited'
+  | 'account_suspended'
+
+export interface SocialError {
+  error: SocialErrorCode | string
+  reason?: string
+  retryAfter?: number
+  currentVersion?: string
+}
+
+// ---------- Account export (GET /me/export) ----------
+
+export interface AccountExport {
+  exportedAt: number
+  account: {
+    id: string
+    createdAt: number
+    email: string | null
+    /** ms epoch of the current visit's `POST /me/opened`; null = never. */
+    lastOpenedAt: number | null
+    /** ms epoch of the visit before it; null = never. */
+    prevOpenedAt: number | null
+  }
+  profile: {
+    handle: string | null
+    displayName: string | null
+    termsAcceptedAt: number | null
+    termsVersion: string | null
+    createdAt: number
+    updatedAt: number
+  } | null
+  /**
+   * The caller's ban record, read by their Clerk id — the one row kept after `DELETE /me`. null
+   * when the identity was never suspended; a lifted ban reads `suspended: false` with `liftedAt`.
+   */
+  moderation: { suspended: boolean; reason: string | null; since: number | null; liftedAt: number | null } | null
+  library: {
+    subscriptions: { franchiseId: string; title: string; status: WatchStatus; addedAt: number }[]
+    progress: { mediaId: number; episodes: number; updatedAt: number }[]
+    preferences: UserPreferences | null
+    recommendationFeedback: { key: string; kind: string; createdAt: number }[]
+  }
+  social: {
+    comments: {
+      id: string
+      subject: string
+      parentId: string | null
+      body: string
+      createdAt: number
+      deletedAt: number | null
+      hiddenAt: number | null
+      /** 'reports' (auto-hidden) | 'operator'; null while visible. */
+      hiddenReason: string | null
+    }[]
+    likes: { subject: string; createdAt: number }[]
+    commentLikes: { commentId: string; createdAt: number }[]
+    saves: { postId: string; createdAt: number }[]
+    reminders: { postId: string; createdAt: number }[]
+    hides: { kind: string; target: string; createdAt: number }[]
+    ratings: { mediaId: number; episode: number; score: number; updatedAt: number }[]
+    blocks: { userId: string; handle: string | null; createdAt: number }[]
+    reports: {
+      commentId: string
+      reason: string
+      note: string | null
+      createdAt: number
+      resolvedAt: number | null
+      resolution: string | null
+    }[]
+    notifications: {
+      id: string
+      kind: string
+      franchiseId: string
+      /** As stored: the franchise title. */
+      title: string
+      /** As stored: news text, '' for social kinds, the category for moderation notices. */
+      body: string
+      subject: string | null
+      postId: string | null
+      commentId: string | null
+      createdAt: number
+      readAt: number | null
+    }[]
+  }
+}
+
+// ---------- Discover: genres (GET /discover/genres, /discover/genres/:key) ----------
+
+export interface DiscoverGenre {
+  key: string
+  name: string
+  count: number
+  /** ≤ 4 portrait URLs: the genre's top trending, non-adult franchises. */
+  posters: string[]
+}
+
+export interface DiscoverGenresResponse {
+  source: MediaSource | null
+  genres: DiscoverGenre[]
+  generatedAt: number
+}
+
+export interface DiscoverGenrePage {
+  genre: DiscoverGenre
+  franchises: FranchiseSummary[]
+  /** Opaque. */
+  nextCursor: string | null
 }

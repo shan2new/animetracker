@@ -2,8 +2,12 @@ import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { authenticate } from './auth/clerk.js'
 import { env } from './env.js'
+import { accountRoutes } from './routes/account.js'
+import { discoverRoutes } from './routes/discover.js'
+import { feedRoutes } from './routes/feed.js'
 import { franchiseRoutes } from './routes/franchises.js'
 import { meRoutes } from './routes/me.js'
+import { socialRoutes } from './routes/social.js'
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({ logger: true })
@@ -19,6 +23,10 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(franchiseRoutes)
   await app.register(meRoutes)
+  await app.register(feedRoutes)
+  await app.register(socialRoutes)
+  await app.register(accountRoutes)
+  await app.register(discoverRoutes)
 
   return app
 }

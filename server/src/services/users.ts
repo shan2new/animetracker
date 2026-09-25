@@ -5,6 +5,12 @@ import { users } from '../db/schema.js'
 export interface AppUser {
   id: string
   clerkId: string
+  /**
+   * ms epoch of the users row's creation. A day-old account gets a smaller comment budget
+   * (util/rateLimit.ts `commentAction`). Always set by `upsertUser`/`getUserByClerkId`; optional only
+   * so a hand-built user (tests) reads as an established account.
+   */
+  createdAt?: number
 }
 
 /** Look up (or create) the internal user row for a Clerk user id. */
@@ -13,15 +19,15 @@ export async function upsertUser(clerkId: string, email?: string | null): Promis
     .insert(users)
     .values({ clerkId, email: email ?? null })
     .onConflictDoUpdate({ target: users.clerkId, set: { email: email ?? null } })
-    .returning({ id: users.id, clerkId: users.clerkId })
-  return row!
+    .returning({ id: users.id, clerkId: users.clerkId, createdAt: users.createdAt })
+  return { id: row!.id, clerkId: row!.clerkId, createdAt: row!.createdAt.getTime() }
 }
 
 export async function getUserByClerkId(clerkId: string): Promise<AppUser | undefined> {
   const [row] = await db
-    .select({ id: users.id, clerkId: users.clerkId })
+    .select({ id: users.id, clerkId: users.clerkId, createdAt: users.createdAt })
     .from(users)
     .where(eq(users.clerkId, clerkId))
     .limit(1)
-  return row
+  return row ? { id: row.id, clerkId: row.clerkId, createdAt: row.createdAt.getTime() } : undefined
 }

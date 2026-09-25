@@ -1,5 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
-import { upsertUser, type AppUser } from '../services/users.js'
+import { wasErased } from '../services/erasure.js'
+import { isSuspended } from '../services/moderation.js'
+import { getUserByClerkId, upsertUser, type AppUser } from '../services/users.js'
 import { authConfigFromEnv } from './authConfig.js'
 import { resolveIdentity } from './identity.js'
 
@@ -19,15 +21,49 @@ function bearer(req: FastifyRequest): string | null {
 }
 
 /**
+ * The routes a suspended account may still call: erasing the account and downloading its data
+ * (docs/api-contract.md, "Client failure semantics"). `url` is the ROUTE pattern
+ * (`req.routeOptions.url`), never the raw request URL, so a query string cannot widen it.
+ */
+export function suspendedMayCall(method: string, url: string | undefined): boolean {
+  return (method === 'DELETE' && url === '/me') || (method === 'GET' && url === '/me/export')
+}
+
+/**
  * Fastify preHandler that authenticates the request and attaches `req.user`.
  *
  * All issuer policy lives in `identity.ts` / `authConfig.ts` — this file is glue only, so
  * `DEV_AUTH_BYPASS` is never read at a decision site.
+ *
+ * A suspended identity (services/moderation.ts, keyed on the Clerk id) answers
+ * `403 { error: 'account_suspended' }` everywhere but `suspendedMayCall` — the one 403 the client
+ * reads as app state rather than infrastructure. The check runs BEFORE `upsertUser`, so a banned
+ * identity whose account was erased does not get a fresh one back by calling the API.
+ *
+ * An identity whose account was just erased (`DELETE /me`, services/erasure.ts) answers
+ * `401 { error: 'account deleted' }`, also before the upsert: its session JWT is still valid for a
+ * while, and the app's in-flight and retried writes must not re-create the account.
+ *
+ * A suspended identity's READ (GET /me/export) never creates a users row either — the erasure hold
+ * lasts minutes, a ban forever: it is looked up, and with no row it answers the route's own
+ * `404 { error: 'account not found' }` rather than storing the email of an erased, banned person
+ * again. DELETE /me still upserts: erasing a row it has just created answers `deleted`, the truth.
  */
 export async function authenticate(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const token = bearer(req)
   if (!token) return reply.code(401).send({ error: 'missing bearer token' })
   const id = await resolveIdentity(token, authConfigFromEnv())
   if (!id) return reply.code(401).send({ error: 'invalid token' })
+  const suspended = await isSuspended(id.clerkId)
+  if (suspended && !suspendedMayCall(req.method, req.routeOptions.url)) {
+    return reply.code(403).send({ error: 'account_suspended' })
+  }
+  if (wasErased(id.clerkId)) return reply.code(401).send({ error: 'account deleted' })
+  if (suspended && req.method === 'GET') {
+    const existing = await getUserByClerkId(id.clerkId)
+    if (!existing) return reply.code(404).send({ error: 'account not found' })
+    req.user = existing
+    return
+  }
   req.user = await upsertUser(id.clerkId, id.email)
 }

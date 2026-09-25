@@ -2,6 +2,7 @@ import { relations, sql } from 'drizzle-orm'
 import {
   bigint,
   boolean,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -154,6 +155,10 @@ export const users = pgTable('users', {
   clerkId: text('clerk_id').notNull().unique(),
   email: text('email'),
   lastOpenedAt: bigint('last_opened_at', { mode: 'number' }).default(0).notNull(),
+  // The visit BEFORE the current one. POST /me/opened moves last_opened_at here atomically, so every
+  // read of "since your last visit" compares against a real previous visit rather than the stamp
+  // the same session just wrote (the pre-0010 echo bug). 0 = never shifted (see services/visits.ts).
+  prevOpenedAt: bigint('prev_opened_at', { mode: 'number' }).default(0).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 })
 
@@ -337,6 +342,181 @@ export const recommendationFeedback = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.key] })],
 )
 
+// ---------- Social (the Today feed) ----------
+// Every table here is user data. DELETE /me erases it in both directions (routes/me.ts
+// `accountErasurePlan`) and GET /me/export returns it. Subjects are the text ids of
+// social/subjects.ts: `news:<announcement uuid>`, `catalog:<media id>`,
+// `trailer:<franchise uuid>:<site>:<video id>` and `ep:<media id>:<episode>`.
+
+/** Public identity. Never the email, never Clerk's display name as-is. */
+export const userProfiles = pgTable(
+  'user_profiles',
+  {
+    userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+    /** Lowercase `[a-z0-9_.]{3,20}` (social/identity.ts). Null until chosen at first reply. */
+    handle: text('handle'),
+    /** The first name the user confirmed. 1–40 code points. */
+    displayName: text('display_name'),
+    termsAcceptedAt: timestamp('terms_accepted_at', { withTimezone: true }),
+    /** The community-rules version accepted (env SOCIAL_TERMS_VERSION). */
+    termsVersion: text('terms_version'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  // Postgres allows many NULLs under a unique index, so profiles without a handle coexist.
+  (t) => [uniqueIndex('user_profiles_handle_uq').on(t.handle)],
+)
+
+/** One flat thread per subject. `id` is CLIENT-generated: the upsert key that makes a retried POST safe. */
+export const comments = pgTable(
+  'comments',
+  {
+    id: uuid('id').primaryKey(),
+    /** The author. */
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    subject: text('subject').notNull(),
+    franchiseId: uuid('franchise_id').notNull().references(() => franchise.id, { onDelete: 'cascade' }),
+    /** "Replied to you". Flat thread, one level of reference. */
+    parentId: uuid('parent_id'),
+    /** NFC-normalised, 1–280 code points. '' once soft-deleted. */
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    /** Author deleted it. Body is erased; the row stays as a tombstone for idempotency. */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    /** Moderation: auto-hidden after N reports, or by the operator. */
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
+    hiddenReason: text('hidden_reason'), // reports | operator
+    /** Distinct reporters. Denormalised, incremented in the report transaction, reset on restore. */
+    reportCount: integer('report_count').notNull().default(0),
+  },
+  (t) => [
+    // A reply OUTLIVES its parent: when the parent's author erases their account the reply stays,
+    // as a top-level comment of the same thread. SET NULL, never CASCADE.
+    foreignKey({ name: 'comments_parent_id_fk', columns: [t.parentId], foreignColumns: [t.id] }).onDelete('set null'),
+    index('comments_subject_created_idx').on(t.subject, t.createdAt, t.id),
+    index('comments_user_created_idx').on(t.userId, t.createdAt),
+    index('comments_parent_idx').on(t.parentId),
+  ],
+)
+
+/** Likes on a post or an episode (subject). Likes on comments live in comment_likes. */
+export const likes = pgTable(
+  'likes',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    subject: text('subject').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.subject] }), index('likes_subject_idx').on(t.subject)],
+)
+
+export const commentLikes = pgTable(
+  'comment_likes',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    commentId: uuid('comment_id').notNull().references(() => comments.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.commentId] }), index('comment_likes_comment_idx').on(t.commentId)],
+)
+
+export const saves = pgTable(
+  'saves',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    postId: text('post_id').notNull(),
+    franchiseId: uuid('franchise_id').notNull().references(() => franchise.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.postId] }),
+    index('saves_user_created_idx').on(t.userId, t.createdAt),
+    index('saves_post_idx').on(t.postId),
+  ],
+)
+
+/** Reminders. The client schedules dated ones locally; research fans undated ones out (news/service.ts fanOut). */
+export const reminders = pgTable(
+  'reminders',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    postId: text('post_id').notNull(),
+    franchiseId: uuid('franchise_id').notNull().references(() => franchise.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.postId] }), index('reminders_post_idx').on(t.postId)],
+)
+
+/** "Not interested" (kind post, target = post id) and "Mute <show>" (kind show, target = franchise uuid). */
+export const feedHides = pgTable(
+  'feed_hides',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(), // post | show
+    target: text('target').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.kind, t.target] }), index('feed_hides_target_idx').on(t.kind, t.target)],
+)
+
+/** The emoji slider. score 0–100. The average is real: AVG over raters. */
+export const episodeRatings = pgTable(
+  'episode_ratings',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    mediaId: integer('media_id').notNull(),
+    episode: integer('episode').notNull(),
+    score: integer('score').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.mediaId, t.episode] }),
+    index('episode_ratings_episode_idx').on(t.mediaId, t.episode),
+  ],
+)
+
+/** user_id blocked blocked_user_id. Reads filter BOTH directions. */
+export const blocks = pgTable(
+  'blocks',
+  {
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    blockedUserId: uuid('blocked_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.blockedUserId] }), index('blocks_blocked_idx').on(t.blockedUserId)],
+)
+
+/** One report per (reporter, comment). */
+export const reports = pgTable(
+  'reports',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** The reporter. */
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    commentId: uuid('comment_id').notNull().references(() => comments.id, { onDelete: 'cascade' }),
+    reason: text('reason').notNull(), // spam | harassment | hate | sexual | violence | spoiler | other
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    resolution: text('resolution'), // hidden | dismissed
+  },
+  (t) => [
+    uniqueIndex('reports_user_comment_uq').on(t.userId, t.commentId),
+    index('reports_comment_idx').on(t.commentId),
+    index('reports_open_idx').on(t.resolvedAt, t.createdAt),
+  ],
+)
+
+// Keyed on the Clerk identity, NOT users.id, and with NO foreign key. A ban must survive DELETE /me
+// (the account's one disclosed retention) or deleting and signing back in would lift it.
+export const moderationBans = pgTable('moderation_bans', {
+  clerkId: text('clerk_id').primaryKey(),
+  reason: text('reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  liftedAt: timestamp('lifted_at', { withTimezone: true }),
+})
+
 // ---------- Announcements & notifications ----------
 
 // One row per distinct piece of upcoming-installment news for a franchise ("Season 4",
@@ -402,8 +582,9 @@ export const announcementEvidence = pgTable(
   ],
 )
 
-// Per-user notification inbox. Fanned out from announcements to subscribers at detection time
-// so reads are a single indexed scan; readAt is null until the client acknowledges.
+// Per-user notification inbox. News rows are fanned out from announcements to subscribers (and
+// reminder holders) at detection time; social rows (reply, like_comment) are written by the comment
+// transaction. Reads are a single indexed scan; readAt is null until the client acknowledges.
 export const notifications = pgTable(
   'notifications',
   {
@@ -415,13 +596,32 @@ export const notifications = pgTable(
       .notNull()
       .references(() => franchise.id, { onDelete: 'cascade' }),
     announcementId: uuid('announcement_id').references(() => announcements.id, { onDelete: 'cascade' }),
-    kind: text('kind').notNull(), // news_rumored | news_announced | news_dated
+    kind: text('kind').notNull(), // news_rumored | news_announced | news_dated | reply | like_comment
     title: text('title').notNull(), // franchise title, e.g. "Jujutsu Kaisen"
-    body: text('body').notNull(), // e.g. "Season 4 announced — release TBA"
+    body: text('body').notNull(), // news: server text, e.g. "Season 4 announced — release TBA"; social kinds: '' (the excerpt is read live)
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     readAt: timestamp('read_at', { withTimezone: true }),
+    /** Who did it (reply, like_comment). Their account's erasure removes the row. */
+    actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'cascade' }),
+    /** Distinct actors folded into this row (like_comment aggregation). 0 for news kinds. */
+    actorCount: integer('actor_count').notNull().default(0),
+    /** The social thread (ThreadSubject) for reply / like_comment. */
+    subject: text('subject'),
+    /** The feed post the row opens (PostId): news kinds → `news:<announcementId>`; social kinds on a post thread → the subject. */
+    postId: text('post_id'),
+    /** reply: the reply itself. like_comment: YOUR comment that was liked. */
+    commentId: uuid('comment_id').references(() => comments.id, { onDelete: 'cascade' }),
   },
-  (t) => [index('notifications_user_created_idx').on(t.userId, t.createdAt)],
+  (t) => [
+    index('notifications_user_created_idx').on(t.userId, t.createdAt),
+    index('notifications_actor_idx').on(t.actorUserId),
+    index('notifications_subject_idx').on(t.subject),
+    index('notifications_post_idx').on(t.postId),
+    // At most ONE unread like_comment row per (recipient, comment): the aggregation target.
+    uniqueIndex('notifications_like_unread_uq')
+      .on(t.userId, t.commentId)
+      .where(sql`${t.kind} = 'like_comment' and ${t.readAt} is null`),
+  ],
 )
 
 // Cron / sync bookkeeping (single-row keyed values).

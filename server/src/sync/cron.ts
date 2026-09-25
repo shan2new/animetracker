@@ -9,6 +9,8 @@ import { materialiseTopRecommendations } from '../services/recommendations.js'
 import { refreshAnimeMetadataFallback } from '../services/animeVideoFallback.js'
 import { refreshPreferredAvailability } from '../services/watchAvailability.js'
 import { clampUnairedProgress } from '../services/library.js'
+import { purgeCommentTombstones } from '../services/commentRetention.js'
+import { alertStaleReports } from '../services/moderationAlert.js'
 import { tmdbEnabled } from '../tmdb/client.js'
 import {
   attachNewSeasons,
@@ -66,6 +68,29 @@ export function startCron(): void {
       }
     } catch (err) {
       console.error('[cron] AniList trailer sweep failed:', (err as Error).message)
+    }
+  })
+
+  // Hourly at :20: while any report has waited more than 12 hours, log it and nudge the operator's
+  // webhook (services/moderationAlert.ts) — App Review expects reports acted on within 24 hours, and
+  // there is one operator. Its own schedule and catch, so the catalogue jobs cannot delay it.
+  cron.schedule('20 * * * *', async () => {
+    try {
+      await alertStaleReports()
+    } catch (err) {
+      console.error('[cron] stale report alert failed:', (err as Error).message)
+    }
+  })
+
+  // Daily 03:10: remove comments their authors deleted more than 30 days ago (social/retention.ts).
+  // The tombstone only has to outlive a client's replay of the same POST; past that it is who
+  // commented on what, kept after they deleted it. Likes, reports and notifications cascade.
+  cron.schedule('10 3 * * *', async () => {
+    try {
+      const n = await purgeCommentTombstones()
+      if (n > 0) console.log(`[cron] purgeCommentTombstones: ${n} comments`)
+    } catch (err) {
+      console.error('[cron] purgeCommentTombstones failed:', (err as Error).message)
     }
   })
 

@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, notLike, or, type SQL } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import {
   announcementEvidence,
@@ -8,12 +8,17 @@ import {
   franchiseMember,
   media,
   notifications,
+  reminders,
   subscriptions,
 } from '../db/schema.js'
 import { env } from '../env.js'
+import { adoptCatalogueThread } from '../feed/adopt.js'
+import { safeHttpsUrl, sanitizeEvidence, verifiedTier } from '../feed/evidence.js'
+import { formatSubject } from '../social/subjects.js'
 import type { AnnouncementEvidence, AnnouncementObservationView, FranchiseUpcoming } from '../types/api.js'
 import { BoundedTaskQueue } from '../util/taskQueue.js'
 import { researchFranchiseNews, type NewsResult } from './agent.js'
+import { dedupeKey, sameInstallment } from './installment.js'
 
 // Only forward progress through this ladder produces a notification; the agent re-reporting
 // the same news (or waffling back down to a rumor) just bumps lastSeenAt.
@@ -77,24 +82,6 @@ export function enqueueFranchiseNewsRefresh(
   return true
 }
 
-/** Stable per-installment key so "Season 4" / "season 4!" / "SEASON 4" collapse to one row. */
-const dedupeKey = (next: string): string => next.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-
-/**
- * Whether two normalized keys name the same installment. Exact match, or one key's tokens
- * fully contained in the other's — the agent rewording "Season 4" as "Season 4: The Culling
- * Game Part 2" across runs must not create a second announcement.
- */
-function sameInstallment(a: string, b: string): boolean {
-  if (a === b) return true
-  const ta = new Set(a.split(' ').filter(Boolean))
-  const tb = new Set(b.split(' ').filter(Boolean))
-  const [small, big] = ta.size <= tb.size ? [ta, tb] : [tb, ta]
-  if (small.size === 0) return false
-  for (const t of small) if (!big.has(t)) return false
-  return true
-}
-
 const isConcreteRelease = (release: string): boolean => {
   const r = release.trim().toLowerCase()
   return r !== '' && r !== 'tba' && r !== 'tbd' && r !== 'unknown'
@@ -117,7 +104,27 @@ function notificationText(result: NewsResult, event: NewsEvent): { kind: string;
   }
 }
 
-/** Insert one notification per subscriber of the franchise. Returns how many were created. */
+/**
+ * The reminders this announcement's news answers: one on the news post itself (`news:<A>`), and one
+ * on ANY of the show's non-news posts — a trailer (`trailer:<fid>:…`, which is never re-keyed) or a
+ * catalogue post that adoption could not match to this installment (`catalog:<mediaId>`). The app
+ * tells everyone who sets an undated reminder that news about it will show in Activity; only the
+ * research job can keep that promise, and it knows the show, not which of its posts was tapped. A
+ * reminder on ANOTHER announcement's post (`news:<B>`) is about that installment and waits for its
+ * own news.
+ */
+export function reminderHoldersWhere(franchiseId: string, newsPostId: string): SQL {
+  return or(
+    eq(reminders.postId, newsPostId),
+    and(eq(reminders.franchiseId, franchiseId), notLike(reminders.postId, 'news:%')),
+  )!
+}
+
+/**
+ * Insert one notification per subscriber of the franchise AND per reminder holder the news answers
+ * (`reminderHoldersWhere`) — someone who asked to hear when an undated installment firms up hears it
+ * whether or not the show is in their library. One row per person. Returns how many.
+ */
 async function fanOut(
   franchiseId: string,
   franchiseTitle: string,
@@ -125,22 +132,31 @@ async function fanOut(
   kind: string,
   body: string,
 ): Promise<number> {
-  const subs = await db
-    .select({ userId: subscriptions.userId })
-    .from(subscriptions)
-    .where(eq(subscriptions.franchiseId, franchiseId))
-  if (subs.length === 0) return 0
+  const postId = formatSubject({ kind: 'news', announcementId })
+  const [subs, holders] = await Promise.all([
+    db
+      .select({ userId: subscriptions.userId })
+      .from(subscriptions)
+      .where(eq(subscriptions.franchiseId, franchiseId)),
+    db
+      .selectDistinct({ userId: reminders.userId })
+      .from(reminders)
+      .where(reminderHoldersWhere(franchiseId, postId)),
+  ])
+  const recipients = [...new Set([...subs, ...holders].map((row) => row.userId))]
+  if (recipients.length === 0) return 0
   await db.insert(notifications).values(
-    subs.map((s) => ({
-      userId: s.userId,
+    recipients.map((userId) => ({
+      userId,
       franchiseId,
       announcementId,
       kind,
       title: franchiseTitle,
       body,
+      postId,
     })),
   )
-  return subs.length
+  return recipients.length
 }
 
 /**
@@ -152,8 +168,11 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
   const [f] = await db.select().from(franchise).where(eq(franchise.id, franchiseId)).limit(1)
   if (!f) return { checked: false, notified: 0 }
 
+  // Watch order, as the feed reads them. (Adoption below loads its own index — `loadInstallmentIndex`
+  // — so it matches parts exactly as the composer and the write-side canonical subject do.)
   const members = await db
     .select({
+      mediaId: media.id,
       label: franchiseMember.label,
       titleEnglish: media.titleEnglish,
       titleRomaji: media.titleRomaji,
@@ -164,6 +183,7 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
     .from(franchiseMember)
     .innerJoin(media, eq(franchiseMember.mediaId, media.id))
     .where(eq(franchiseMember.franchiseId, franchiseId))
+    .orderBy(asc(franchiseMember.watchOrder), asc(franchiseMember.sequence), asc(media.id))
 
   const knownParts = members.map((m) => {
     const name = m.label || m.titleEnglish || m.titleRomaji || 'Unknown'
@@ -183,7 +203,8 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
   })
   if (!result) return { checked: false, notified: 0 }
 
-  const upcoming: FranchiseUpcoming = { ...result, checked: new Date().toISOString() }
+  // The stored state carries the same verified evidence the observation rows do.
+  const upcoming: FranchiseUpcoming = { ...result, evidence: storableEvidence(result.evidence), checked: new Date().toISOString() }
   await db.update(franchise).set({ upcoming }).where(eq(franchise.id, franchiseId))
 
   const noteworthy = isNoteworthy(result.status) && !!result.next.trim()
@@ -228,6 +249,19 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
     }
   }
 
+  // A catalogue-only feed post about this installment (`catalog:<mediaId>`) becomes this
+  // announcement's post (`news:<id>`): its likes, saves, reminders and comments move with it. Runs on
+  // every noteworthy run (a no-op when there is nothing to move) and BEFORE the fan-out, so the
+  // holders of a catalogue post's reminder hear when research first confirms it. A failure here must
+  // not lose the research result; the next run retries.
+  if (announcementId) {
+    try {
+      await adoptCatalogueThread(announcementId)
+    } catch (err) {
+      console.warn(`[news] adopting the catalogue thread failed for "${f.title}":`, (err as Error).message)
+    }
+  }
+
   const [observation] = await db
     .insert(announcementObservations)
     .values({
@@ -256,15 +290,31 @@ export async function refreshFranchiseNews(franchiseId: string): Promise<{ check
   return { checked: true, notified }
 }
 
-function normalizedEvidence(result: NewsResult): AnnouncementEvidence[] {
-  const candidates: AnnouncementEvidence[] = result.evidence.length > 0
-    ? result.evidence
-    : result.source
-      ? [{ url: result.source, publisher: null, publishedAt: null, tier: 'unknown', primary: false }]
-      : []
+/**
+ * Evidence as it is stored (write-side hygiene — the agent's output is untrusted): https links only
+ * (a `javascript:` or `http:` link must never be served back), an `official` tier only on a reviewed
+ * official host (`verifiedTier`, feed/officialHosts.ts — the agent reads arbitrary pages, so its
+ * tier is a claim; the feed's read side applies the same rule, so stored rows agree with it), one
+ * entry per URL, at most five.
+ */
+export function storableEvidence(list: readonly AnnouncementEvidence[]): AnnouncementEvidence[] {
   const byUrl = new Map<string, AnnouncementEvidence>()
-  for (const item of candidates) if (!byUrl.has(item.url)) byUrl.set(item.url, item)
+  for (const item of list) {
+    if (safeHttpsUrl(item.url) == null || byUrl.has(item.url)) continue
+    byUrl.set(item.url, { ...item, tier: verifiedTier(item.url, item.tier) })
+  }
   return [...byUrl.values()].slice(0, 5)
+}
+
+/** The evidence rows to store for a result: `storableEvidence`, the bare `source` standing in when the agent returned no list. */
+export function normalizedEvidence(result: Pick<NewsResult, 'evidence' | 'source'>): AnnouncementEvidence[] {
+  return storableEvidence(
+    result.evidence.length > 0
+      ? result.evidence
+      : result.source
+        ? [{ url: result.source, publisher: null, publishedAt: null, tier: 'unknown', primary: false }]
+        : [],
+  )
 }
 
 /** Inspectable evidence history behind the latest one-line `upcoming` state. */
@@ -303,7 +353,9 @@ export async function listAnnouncementObservations(
     release: row.release,
     note: row.note,
     observedAt: row.observedAt.toISOString(),
-    evidence: byObservation.get(row.id) ?? [],
+    // Rows written before the write-side https rule may still hold other schemes; this route is
+    // public, so they are filtered on the way out too.
+    evidence: sanitizeEvidence(byObservation.get(row.id) ?? []),
   }))
 }
 

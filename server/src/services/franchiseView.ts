@@ -302,13 +302,23 @@ function toPart(
   }
 }
 
+/**
+ * A franchise's parts in WATCH order: watch order, then kind, then sequence. Exported so the
+ * installment index (social/resolve.ts) scans parts exactly as the feed's composer does — the part
+ * an announcement names is the first match in this order.
+ */
+export function comparePartOrder(
+  a: Pick<FranchisePart, 'watchOrder' | 'kind' | 'sequence'>,
+  b: Pick<FranchisePart, 'watchOrder' | 'kind' | 'sequence'>,
+): number {
+  const order = a.watchOrder - b.watchOrder
+  if (order !== 0) return order
+  const k = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)
+  return k !== 0 ? k : a.sequence - b.sequence
+}
+
 function sortParts(parts: FranchisePart[]): FranchisePart[] {
-  return parts.sort((a, b) => {
-    const order = a.watchOrder - b.watchOrder
-    if (order !== 0) return order
-    const k = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)
-    return k !== 0 ? k : a.sequence - b.sequence
-  })
+  return parts.sort(comparePartOrder)
 }
 
 /** Unwatched aired episodes for a part (0 unless releasing). */
@@ -572,6 +582,11 @@ export async function getSummaries(franchiseIds: string[]): Promise<FranchiseSum
  * `media.trending` score is the correct product fact; popularity is only a deterministic tie-break.
  */
 export async function getTrendingFranchises(limit: number): Promise<FranchiseSummary[]> {
+  return getSummaries(await trendingFranchiseIds(limit))
+}
+
+/** The trending ranking alone (see `getTrendingFranchises`): franchise ids, most trending first. */
+export async function trendingFranchiseIds(limit: number): Promise<string[]> {
   const rows = await db
     .select({ id: franchise.id })
     .from(franchise)
@@ -584,7 +599,71 @@ export async function getTrendingFranchises(limit: number): Promise<FranchiseSum
       sql`max(${franchise.updatedAt}) desc`,
     )
     .limit(limit)
-  return getSummaries(rows.map((r) => r.id))
+  return rows.map((r) => r.id)
+}
+
+/**
+ * Batched franchises for the Today feed: lean parts (no episode lists), videos, upcoming, art; the
+ * viewer's progress and subscription when `userId` is given. No related-title or catalogue-link
+ * resolution — the feed shows neither. A fixed number of queries for any number of ids (the
+ * `getLibrary` pattern without its per-item extras). Franchises come back in the order asked for;
+ * an id with no franchise row is skipped.
+ *
+ * `externalIdById` (franchise id → `franchise.external_id`, the TMDB show id) is additive to the
+ * feed spec's shape: a TMDB catalogue post links to the show page, which needs it.
+ */
+export async function getFeedFranchises(franchiseIds: string[], userId: string | null): Promise<{
+  franchises: Franchise[]
+  statusById: Map<string, WatchStatus>
+  memberAddedAt: Map<number, number>
+  externalIdById: Map<string, number | null>
+}> {
+  const ids = [...new Set(franchiseIds)]
+  const statusById = new Map<string, WatchStatus>()
+  const memberAddedAt = new Map<number, number>()
+  const externalIdById = new Map<string, number | null>()
+  if (ids.length === 0) return { franchises: [], statusById, memberAddedAt, externalIdById }
+
+  const [frRows, members, subs] = await Promise.all([
+    db.select().from(franchise).where(inArray(franchise.id, ids)),
+    db.select().from(franchiseMember).where(inArray(franchiseMember.franchiseId, ids)),
+    userId
+      ? db
+        .select({ franchiseId: subscriptions.franchiseId, status: subscriptions.status, createdAt: subscriptions.createdAt })
+        .from(subscriptions)
+        .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.franchiseId, ids)))
+      : Promise.resolve([]),
+  ])
+  const mediaIds = members.map((m) => m.mediaId)
+  const [mediaRows, watchedById] = await Promise.all([
+    mediaIds.length ? db.select().from(media).where(inArray(media.id, mediaIds)) : Promise.resolve([]),
+    loadProgressMap(userId ?? undefined, mediaIds),
+  ])
+
+  const frById = new Map(frRows.map((f) => [f.id, f]))
+  const mediaById = new Map(mediaRows.map((m) => [m.id, m]))
+  const membersByFranchise = new Map<string, MemberRow[]>()
+  for (const mem of members) {
+    const arr = membersByFranchise.get(mem.franchiseId) ?? []
+    arr.push(mem)
+    membersByFranchise.set(mem.franchiseId, arr)
+    memberAddedAt.set(mem.mediaId, mem.addedAt.getTime())
+  }
+  const subById = new Map<string, { status: WatchStatus; addedAt: number }>()
+  for (const s of subs) {
+    const status = s.status as WatchStatus
+    subById.set(s.franchiseId, { status, addedAt: s.createdAt.getTime() })
+    statusById.set(s.franchiseId, status)
+  }
+
+  const franchises: Franchise[] = []
+  for (const id of ids) {
+    const f = frById.get(id)
+    if (!f) continue
+    externalIdById.set(f.id, f.externalId ?? null)
+    franchises.push(buildFranchise(f, membersByFranchise.get(id) ?? [], mediaById, watchedById, subById.get(id) ?? null))
+  }
+  return { franchises, statusById, memberAddedAt, externalIdById }
 }
 
 /** The authenticated user's library: full franchises + status + behind + newParts. */

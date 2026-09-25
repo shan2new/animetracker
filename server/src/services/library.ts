@@ -1,9 +1,8 @@
-import { and, eq, gt } from 'drizzle-orm'
+import { and, eq, gt, inArray, sql } from 'drizzle-orm'
 import { db } from '../db/index.js'
 import { franchise, franchiseMember, media, progress, subscriptions, users } from '../db/schema.js'
-import type { FranchiseProgressCommandResponse, WatchStatus } from '../types/api.js'
-import { inArray } from 'drizzle-orm'
-import { deriveAiredEpisodes } from './franchiseView.js'
+import type { EpisodeMeta, FranchiseProgressCommandResponse, WatchStatus } from '../types/api.js'
+import { airedCount, caughtUpValue, clampProgressValue, type AiredInput } from './aired.js'
 
 /** Subscribe to a franchise. Defaults status to `watching` if any part is releasing, else `planned`. */
 export async function subscribe(userId: string, franchiseId: string, status?: WatchStatus): Promise<void> {
@@ -38,55 +37,83 @@ export async function unsubscribe(userId: string, franchiseId: string): Promise<
     .where(and(eq(subscriptions.userId, userId), eq(subscriptions.franchiseId, franchiseId)))
 }
 
-export async function setProgress(userId: string, mediaId: number, episodes: number): Promise<void> {
-  let clamped = Number.isFinite(episodes) ? Math.max(0, Math.floor(episodes)) : 0
-  // Ceiling: a part can't be watched past its own SIZE. Belt-and-braces against any client with
-  // an unbounded "+1" control — one such control walked a 10-episode season up to 59 watched, and
-  // a bad value written once stays wrong until something overwrites it.
-  //
-  // Size is `max(episodes, airedEpisodes)`, exactly what the client bounds itself to
-  // (`FranchisePart.progressCeiling`). The two ceilings MUST agree: a RELEASING part whose
-  // catalogue total lags its aired count (a stale `episode_count`, an `episodes: null` season
-  // that derives its aired number from the next slot) let the client legitimately mark caught up
-  // at N while a `media.episodes`-only ceiling silently stored less — the user saw "caught up"
-  // against a server that disagreed and a fresh launch reverted them.
-  // Unsized and un-aired (ongoing AniList shows carry `episodes: null`) stays unbounded.
+export type SetProgressResult = { ok: true; episodes: number } | { ok: false; reason: 'media_not_found' }
+
+/**
+ * Store one part's watched count, clamped by `clampProgressValue` (services/aired.ts):
+ *
+ * - a NOT_YET_RELEASED part takes 0 — a season that has not premiered cannot have been watched;
+ * - a RELEASING part takes at most what has AIRED by now (a slot that struck counts before the
+ *   hourly sync advances `next`). The old ceiling was the season's size, `max(episodes, aired)`,
+ *   which let a 12-episode season with 5 aired be marked to 12 — and that mark then opened
+ *   episode rooms for episodes nobody could have seen;
+ * - anything else takes at most its size, `max(episodes, aired)`. Unsized stays unbounded.
+ *
+ * The ceiling bounds only an INCREASE: the stored count stays reachable, so a mark written before
+ * the aired ceiling existed (12 of a season with 5 aired) is never pulled down by the next write —
+ * unmarking 12 → 11 stores 11, not 5 ("a progress mark never rolls back").
+ *
+ * Belt-and-braces against any client with an unbounded "+1" control: one such control walked a
+ * 10-episode season up to 59 watched, and a bad value written once stays wrong until something
+ * overwrites it. The client must bound itself to a number no higher (`FranchisePart.progressCeiling`
+ * = its aired-by-now count for a releasing part, which never exceeds the server's), or the server
+ * cuts a mark the client showed.
+ *
+ * An unknown `mediaId` writes NOTHING and says so (the route answers 404 `media not found`, which is
+ * final): it used to be written unclamped, a row no read would ever surface.
+ */
+export async function setProgress(userId: string, mediaId: number, episodes: number): Promise<SetProgressResult> {
   const [row] = await db
     .select({
+      source: media.source,
       status: media.status,
       episodes: media.episodes,
       next: media.nextAiringEpisode,
       episodesList: media.episodesList,
+      watched: progress.episodesWatched,
     })
     .from(media)
+    .leftJoin(progress, and(eq(progress.mediaId, media.id), eq(progress.userId, userId)))
     .where(eq(media.id, mediaId))
     .limit(1)
-  if (row) clamped = clampProgress(row, clamped)
+  if (!row) return { ok: false, reason: 'media_not_found' }
+  const clamped = clampProgressValue(toAiredInput(row), episodes, Date.now(), row.watched ?? 0)
+  const now = new Date()
   await db
     .insert(progress)
-    .values({ userId, mediaId, episodesWatched: clamped, updatedAt: new Date() })
+    .values({ userId, mediaId, episodesWatched: clamped, updatedAt: now })
     .onConflictDoUpdate({
       target: [progress.userId, progress.mediaId],
-      set: { episodesWatched: clamped, updatedAt: new Date() },
+      set: { episodesWatched: clamped, updatedAt: now },
     })
+  return { ok: true, episodes: clamped }
 }
 
 export interface ProgressMediaRow {
   mediaId: number
+  /** media.source ('anilist' | 'tmdb'): a TMDB slot is date-only, which moves when it counts as aired. */
+  source: string
   status: string | null
   episodes: number | null
   next: { episode: number; airingAt: number } | null
-  episodesList: import('../types/api.js').EpisodeMeta[] | null
+  episodesList: EpisodeMeta[] | null
+  /** The caller's stored count for the part (null / absent = none): a write never pulls it down. */
+  watched?: number | null
 }
 
-function airedForProgress(row: ProgressMediaRow): number {
-  return deriveAiredEpisodes({
+/** A media select's nullable jsonb columns as the aired rule's input. */
+function toAiredInput(row: Omit<ProgressMediaRow, 'mediaId'>): AiredInput {
+  return {
+    source: row.source,
     status: row.status,
-    totalEpisodes: row.episodes ?? 0,
-    next: row.next && row.next.airingAt > 0 ? row.next : null,
-    episodes: row.episodesList ?? [],
-    nowMs: Date.now(),
-  })
+    episodes: row.episodes,
+    next: row.next ?? null,
+    episodesList: row.episodesList ?? null,
+  }
+}
+
+function airedForProgress(row: Omit<ProgressMediaRow, 'mediaId'>, nowMs: number = Date.now()): number {
+  return airedCount(toAiredInput(row), nowMs).aired
 }
 
 /**
@@ -103,6 +130,7 @@ export async function clampUnairedProgress(): Promise<number> {
       userId: progress.userId,
       mediaId: progress.mediaId,
       watched: progress.episodesWatched,
+      source: media.source,
       status: media.status,
       episodes: media.episodes,
       next: media.nextAiringEpisode,
@@ -124,17 +152,6 @@ export async function clampUnairedProgress(): Promise<number> {
   return fixed
 }
 
-function clampProgress(row: Omit<ProgressMediaRow, 'mediaId'>, episodes: number): number {
-  const value = Number.isFinite(episodes) ? Math.max(0, Math.floor(episodes)) : 0
-  const aired = airedForProgress({ ...row, mediaId: 0 })
-  // A season that has not premiered cannot have been watched: it takes what has aired, which is
-  // nothing until it does. The size-of-season ceiling let 13 marks land on Avatar: Seven Havens
-  // a fortnight before its premiere, so it would never read as behind, NEW or on Today (23 Sep).
-  if (row.status === 'NOT_YET_RELEASED') return Math.min(value, aired)
-  const ceiling = Math.max(row.episodes ?? 0, aired)
-  return ceiling > 0 ? Math.min(value, ceiling) : value
-}
-
 export type FranchiseProgressCommand =
   | { mode: 'caught_up' | 'completed' | 'reset'; status?: WatchStatus }
   | { parts: { mediaId: number; episodes: number }[]; status?: WatchStatus }
@@ -148,14 +165,21 @@ export class FranchiseProgressError extends Error {
   }
 }
 
+/**
+ * The writes a franchise-level command makes. `caught_up` / `completed` mark each part to what has
+ * aired by `nowMs` (a slot that struck counts before the hourly sync notices), never below what the
+ * part already holds (`caughtUpValue`); explicit parts are clamped exactly as `PUT /me/progress`
+ * clamps (`clampProgressValue`, the stored count kept reachable). Only `reset` walks progress back.
+ */
 export function progressWritesForCommand(
   rows: ProgressMediaRow[],
   command: FranchiseProgressCommand,
+  nowMs: number = Date.now(),
 ): { mediaId: number; episodes: number }[] {
   if ('mode' in command) {
     return rows.map((row) => ({
       mediaId: row.mediaId,
-      episodes: command.mode === 'reset' ? 0 : airedForProgress(row),
+      episodes: command.mode === 'reset' ? 0 : caughtUpValue(toAiredInput(row), nowMs, row.watched ?? 0),
     }))
   }
   const byId = new Map(rows.map((row) => [row.mediaId, row]))
@@ -166,7 +190,10 @@ export function progressWritesForCommand(
       throw new FranchiseProgressError('invalid_part', `media ${part.mediaId} is not a unique member of this franchise`)
     }
     seen.add(part.mediaId)
-    return { mediaId: part.mediaId, episodes: clampProgress(row, part.episodes) }
+    return {
+      mediaId: part.mediaId,
+      episodes: clampProgressValue(toAiredInput(row), part.episodes, nowMs, row.watched ?? 0),
+    }
   })
 }
 
@@ -187,13 +214,16 @@ export async function setFranchiseProgress(
     const rows: ProgressMediaRow[] = await tx
       .select({
         mediaId: media.id,
+        source: media.source,
         status: media.status,
         episodes: media.episodes,
         next: media.nextAiringEpisode,
         episodesList: media.episodesList,
+        watched: progress.episodesWatched,
       })
       .from(franchiseMember)
       .innerJoin(media, eq(media.id, franchiseMember.mediaId))
+      .leftJoin(progress, and(eq(progress.mediaId, media.id), eq(progress.userId, userId)))
       .where(eq(franchiseMember.franchiseId, franchiseId))
 
     const writes = progressWritesForCommand(rows, command)
@@ -241,12 +271,23 @@ export async function setFranchiseProgress(
   })
 }
 
-/** Stamp the user's last-opened time to now; return the PREVIOUS value (for "since you were last here"). */
+/**
+ * A new visit: move the last visit into `prev_opened_at` and stamp now, in ONE statement; return the
+ * previous visit (for "since you were last here").
+ *
+ * Postgres evaluates every SET right-hand side against the OLD row, so `prev_opened_at =
+ * last_opened_at` reads the stamp this statement replaces — atomic, with no read-then-write window
+ * for a second foreground to slip through. Every later read in the session (`GET /me/library`,
+ * `GET /me/feed`) answers `prev_opened_at`, never the stamp just written (the pre-0010 echo bug:
+ * the pill and "new" compared against a moment ago). 0 for an unknown id.
+ */
 export async function markOpened(userId: string): Promise<number> {
-  const [u] = await db.select({ prev: users.lastOpenedAt }).from(users).where(eq(users.id, userId)).limit(1)
-  const prev = u?.prev ?? 0
-  await db.update(users).set({ lastOpenedAt: Date.now() }).where(eq(users.id, userId))
-  return prev
+  const [row] = await db
+    .update(users)
+    .set({ prevOpenedAt: sql`${users.lastOpenedAt}`, lastOpenedAt: Date.now() })
+    .where(eq(users.id, userId))
+    .returning({ prev: users.prevOpenedAt })
+  return row?.prev ?? 0
 }
 
 /** Whether a franchise exists (for 404s on subscribe). */

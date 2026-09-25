@@ -14,11 +14,42 @@ export interface CatalogUpcomingPart {
 
 const KIND_ORDER: PartKind[] = ['season', 'movie', 'ona', 'ova', 'special', 'music']
 
-function providerUrl(source: MediaSource, franchiseExternalId: number | null, mediaId: number): string | null {
+/**
+ * The catalogue page a catalogue-derived fact links to: the AniList entry for the part, or the
+ * TMDB show page (TMDB has no public page per season id). Null for a TMDB show with no known id.
+ */
+export function catalogProviderUrl(source: MediaSource, franchiseExternalId: number | null, mediaId: number): string | null {
   if (source === 'tmdb') {
     return franchiseExternalId == null ? null : `https://www.themoviedb.org/tv/${franchiseExternalId}`
   }
   return `https://anilist.co/anime/${mediaId}`
+}
+
+/**
+ * The catalogue's own next installment: the NOT_YET_RELEASED part that premieres soonest (a dated
+ * part before an undated one), else the first undated one by kind and sequence. The one rule shared
+ * by `deriveCatalogUpcoming` (the `upcoming` fact) and the Today feed's catalogue posts
+ * (feed/compose.ts), so the two can never name different parts. `FranchisePart` satisfies the bound.
+ */
+export function pickCatalogUpcomingPart<
+  P extends { status: string | null; nextAiringAt: number | null; kind: PartKind; sequence: number },
+>(parts: readonly P[], nowMs: number): P | null {
+  const candidates = parts.filter((part) => {
+    if (part.status !== 'NOT_YET_RELEASED') return false
+    // A past premiere on a NOT_YET_RELEASED row is stale catalogue data, not an undated
+    // announcement. The normal sync will advance it; until then, do not publish a false return.
+    return part.nextAiringAt == null || part.nextAiringAt > nowMs
+  })
+  if (candidates.length === 0) return null
+
+  candidates.sort((a, b) => {
+    if (a.nextAiringAt != null && b.nextAiringAt != null) return a.nextAiringAt - b.nextAiringAt
+    if (a.nextAiringAt != null) return -1
+    if (b.nextAiringAt != null) return 1
+    const kind = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)
+    return kind !== 0 ? kind : a.sequence - b.sequence
+  })
+  return candidates[0] ?? null
 }
 
 /**
@@ -34,26 +65,10 @@ export function deriveCatalogUpcoming(input: {
   parts: CatalogUpcomingPart[]
   nowMs?: number
 }): FranchiseUpcoming | null {
-  const nowMs = input.nowMs ?? Date.now()
-  const candidates = input.parts.filter((part) => {
-    if (part.status !== 'NOT_YET_RELEASED') return false
-    // A past premiere on a NOT_YET_RELEASED row is stale catalogue data, not an undated
-    // announcement. The normal sync will advance it; until then, do not publish a false return.
-    return part.nextAiringAt == null || part.nextAiringAt > nowMs
-  })
-  if (candidates.length === 0) return null
-
-  candidates.sort((a, b) => {
-    if (a.nextAiringAt != null && b.nextAiringAt != null) return a.nextAiringAt - b.nextAiringAt
-    if (a.nextAiringAt != null) return -1
-    if (b.nextAiringAt != null) return 1
-    const kind = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)
-    return kind !== 0 ? kind : a.sequence - b.sequence
-  })
-
-  const next = candidates[0]!
+  const next = pickCatalogUpcomingPart(input.parts, input.nowMs ?? Date.now())
+  if (!next) return null
   const release = next.nextAiringAt == null ? 'TBA' : new Date(next.nextAiringAt).toISOString().slice(0, 10)
-  const source = providerUrl(input.source, input.franchiseExternalId, next.mediaId)
+  const source = catalogProviderUrl(input.source, input.franchiseExternalId, next.mediaId)
   return {
     status: next.nextAiringAt == null ? 'announced_no_date' : 'upcoming_dated',
     next: next.label,

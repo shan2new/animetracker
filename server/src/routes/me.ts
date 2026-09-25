@@ -1,5 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
+import { eq, getTableName, sql } from 'drizzle-orm'
+import type { PgColumn, PgTable } from 'drizzle-orm/pg-core'
+import { env } from '../env.js'
 import { getLibrary } from '../services/franchiseView.js'
 import { listNotifications, markNotificationsRead } from '../services/notifications.js'
 import {
@@ -12,10 +15,30 @@ import {
   subscribe,
   unsubscribe,
 } from '../services/library.js'
+import { readVisitAnchors } from '../services/visits.js'
+import { eraseClerkIdentity, recordErasure } from '../services/erasure.js'
 import { db } from '../db/index.js'
-import { notifications, progress, recommendationFeedback, subscriptions, userPreferences, users } from '../db/schema.js'
-import { eq } from 'drizzle-orm'
-import type { AccountDeletedResponse, RecommendationsResponse } from '../types/api.js'
+import {
+  blocks,
+  commentLikes,
+  comments,
+  episodeRatings,
+  feedHides,
+  likes,
+  notifications,
+  progress,
+  recommendationFeedback,
+  reminders,
+  reports,
+  saves,
+  subscriptions,
+  userPreferences,
+  userProfiles,
+  users,
+} from '../db/schema.js'
+import type { AccountDeletedResponse, NotificationsPage, RecommendationsResponse } from '../types/api.js'
+import { decodeCursor } from '../util/cursor.js'
+import { MAX_MEDIA_ID } from '../social/subjects.js'
 import { enqueueAnimeVideoFallback } from '../services/animeVideoFallback.js'
 import { enqueueRecommendationRefresh } from '../services/catalogEnrichment.js'
 import {
@@ -38,6 +61,26 @@ const statusEnum = z.enum(['watching', 'completed', 'planned', 'paused', 'droppe
 const recommendationKey = z.string().regex(/^(anilist|tmdb):[1-9][0-9]{0,9}$/)
 const countrySchema = z.string().regex(/^[a-z]{2}$/i).transform((value) => value.toUpperCase())
 const countryQuery = z.object({ country: countrySchema.optional() })
+/** `media.id` and `progress.episodes_watched` are int4: a value past it would be a 500 from Postgres, not a 400. */
+const INT4_MAX = 2_147_483_647
+
+// Any id the column can hold is LOOKED UP (absent → 404, which the client treats as final); only a
+// value no int4 can hold is a bad body.
+const progressBody = z
+  .object({
+    mediaId: z.number().int().min(-MAX_MEDIA_ID - 1).max(MAX_MEDIA_ID),
+    episodes: z.number().int().min(0).max(INT4_MAX),
+  })
+  .strict()
+
+const notificationsQuery = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: z.string().max(400).optional(),
+  })
+  .strict()
+
+const notificationsReadBody = z.object({ ids: z.array(z.string().uuid()).max(500).optional() }).strict()
 
 const progressCommand = z.union([
   z.object({
@@ -56,12 +99,15 @@ const progressCommand = z.union([
 export const meRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.authenticate)
 
-  app.get('/me/library', async (req) => {
-    const query = countryQuery.parse(req.query)
+  app.get('/me/library', async (req, reply) => {
+    const query = countryQuery.safeParse(req.query)
+    if (!query.success) return reply.code(400).send({ error: 'invalid request' })
     const userId = req.user!.id
-    const [u] = await db.select({ prev: users.lastOpenedAt }).from(users).where(eq(users.id, userId)).limit(1)
-    const franchises = await getLibrary(userId, u?.prev ?? 0)
-    const preferences = await resolveUserPreferences(userId, query.country)
+    // The PREVIOUS visit (what `POST /me/opened` shifted away), never the stamp this session just
+    // wrote: `newParts` and the client's "new" both compare against it (services/visits.ts).
+    const { prevOpenedAt } = await readVisitAnchors(userId)
+    const franchises = await getLibrary(userId, prevOpenedAt)
+    const preferences = await resolveUserPreferences(userId, query.data.country)
     const country = preferences.country
     if (country) {
       const availability = await getAvailabilityPreviews(franchises.map((item) => item.id), country)
@@ -70,7 +116,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         if (value) item.availability = applyProviderPreferences(value, preferences.providerIds)
       }
     }
-    return { franchises, prevOpenedAt: u?.prev ?? 0 }
+    return { franchises, prevOpenedAt }
   })
 
   app.get('/me/preferences', async (req) => getUserPreferences(req.user!.id))
@@ -135,9 +181,14 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true }
   })
 
-  app.put('/me/progress', async (req) => {
-    const body = z.object({ mediaId: z.number().int(), episodes: z.number().int().min(0) }).parse(req.body)
-    await setProgress(req.user!.id, body.mediaId, body.episodes)
+  // The count is clamped (services/aired.ts): a RELEASING part to what has aired by now, a
+  // NOT_YET_RELEASED one to 0. An unknown media id writes nothing and is FINAL — the client drops
+  // the pending write instead of retrying it forever.
+  app.put('/me/progress', async (req, reply) => {
+    const body = progressBody.safeParse(req.body)
+    if (!body.success) return reply.code(400).send({ error: 'invalid request' })
+    const result = await setProgress(req.user!.id, body.data.mediaId, body.data.episodes)
+    if (!result.ok) return reply.code(404).send({ error: 'media not found' })
     return { ok: true }
   })
 
@@ -160,63 +211,147 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     return { prevOpenedAt }
   })
 
-  app.get('/me/notifications', async (req) => {
-    const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query)
-    return listNotifications(req.user!.id, limit)
+  app.get('/me/notifications', async (req, reply) => {
+    const query = notificationsQuery.safeParse(req.query)
+    if (!query.success) return reply.code(400).send({ error: 'invalid request' })
+    // `?cursor=` with nothing after it is the first page; anything else must be a cursor we wrote.
+    const raw = query.data.cursor
+    const cursor = raw ? decodeCursor(raw) : null
+    if (raw && !cursor) return reply.code(400).send({ error: 'invalid request' })
+    const page: NotificationsPage = await listNotifications(req.user!.id, {
+      limit: query.data.limit,
+      cursor,
+      // With comments switched off the social kinds (reply, like_comment) are not listed at all.
+      includeSocial: env.SOCIAL_COMMENTS_ENABLED,
+    })
+    return page
   })
 
-  app.post('/me/notifications/read', async (req) => {
+  app.post('/me/notifications/read', async (req, reply) => {
     // ids omitted → mark everything unread as read.
-    const { ids } = z.object({ ids: z.array(z.string().uuid()).optional() }).parse(req.body ?? {})
-    const marked = await markNotificationsRead(req.user!.id, ids)
+    const body = notificationsReadBody.safeParse(req.body ?? {})
+    if (!body.success) return reply.code(400).send({ error: 'invalid request' })
+    const marked = await markNotificationsRead(req.user!.id, body.data.ids)
     return { marked }
   })
 
   // In-app account deletion — App Store guideline 5.1.1(v). The client confirms; this is the
   // point of no return, so it must actually erase, not deactivate.
   //
-  // Every user-owned table is deleted EXPLICITLY rather than left to the `onDelete: 'cascade'`
-  // declared on each foreign key. The cascade is real and is asserted by `me.account.test.ts`,
-  // but a database restored from a dump, or a table added later without one, would turn "delete
-  // my account" into "orphan my rows" — and a deletion route that silently leaves a user's
-  // progress behind is the failure the guideline exists to prevent. The whole erasure runs in one
-  // transaction: a half-deleted account is worse than either outcome.
+  // Every user-owned row is deleted EXPLICITLY (`accountErasurePlan`, below) rather than left to
+  // the `onDelete: 'cascade'` declared on each foreign key. The cascade is real and is asserted by
+  // `me.account.test.ts`, but a database restored from a dump, or a table added later without one,
+  // would turn "delete my account" into "orphan my rows" — and a deletion route that silently leaves
+  // a user's progress, comments or likes behind is the failure the guideline exists to prevent. The
+  // whole erasure runs in one transaction: a half-deleted account is worse than either outcome.
+  //
+  // A suspended account can still call this (auth/clerk.ts): deletion must stay reachable. The ban
+  // row itself (`moderation_bans`, keyed on the Clerk id) is the one disclosed retention, so
+  // deleting and signing back in does not lift a ban.
+  //
+  // Only once the transaction has COMMITTED (services/erasure.ts): the Clerk id is held for 15
+  // minutes (`authenticate` answers `401 account deleted`, so the app's in-flight writes cannot
+  // re-create the account on a still-valid JWT), and the Clerk identity is deleted — or, for a
+  // suspended one, banned in Clerk. A Clerk failure does not undo the erasure: it is logged
+  // (`account.clerk_delete_failed`) for `npm run moderation -- clerk-delete <clerkId>`.
   app.delete('/me', async (req, reply) => {
     // Nothing to read, and validated anyway: an irreversible route rejects a request it does not
-    // fully understand instead of ignoring the part it did not expect. `safeParse` rather than the
-    // `parse` the other routes use, because a thrown ZodError surfaces as a 500 — and "the server
-    // broke" is the wrong answer to "you sent me a field I do not know" on the one route that
-    // cannot be undone.
+    // fully understand instead of ignoring the part it did not expect. `safeParse` rather than
+    // `parse`, because a thrown ZodError surfaces as a 500 — and "the server broke" is the wrong
+    // answer to "you sent me a field I do not know" on the one route that cannot be undone.
     if (!z.object({}).strict().safeParse(req.body ?? {}).success) {
       return reply.code(400).send({ error: 'unexpected body' })
     }
     const userId = req.user!.id
     await db.transaction(async (tx) => {
-      await tx.delete(notifications).where(eq(notifications.userId, userId))
-      await tx.delete(subscriptions).where(eq(subscriptions.userId, userId))
-      await tx.delete(progress).where(eq(progress.userId, userId))
-      await tx.delete(userPreferences).where(eq(userPreferences.userId, userId))
-      await tx.delete(recommendationFeedback).where(eq(recommendationFeedback.userId, userId))
+      for (const step of accountErasurePlan) {
+        const scope = step.via
+          ? sql`${step.column} in (select ${step.via.key} from ${step.via.table} where ${step.via.owner} = ${userId})`
+          : eq(step.column, userId)
+        await tx.delete(step.table).where(scope)
+      }
       // Last: everything that references it is gone, so this succeeds with or without the cascade.
       await tx.delete(users).where(eq(users.id, userId))
     })
+    const clerkId = req.user!.clerkId
+    recordErasure(clerkId)
+    const clerk = await eraseClerkIdentity(clerkId)
+    if (clerk.outcome === 'failed') {
+      req.log.error({ event: 'account.clerk_delete_failed', clerkId, error: clerk.error })
+    } else {
+      req.log.info({ event: 'account.erased', clerk: clerk.outcome })
+    }
     const body: AccountDeletedResponse = { deleted: true }
     return reply.code(200).send(body)
   })
 }
 
 /**
- * The tables `DELETE /me` erases before the `users` row itself — every table that stores rows
- * belonging to one user.
- *
- * Exported so the test can hold it against the schema: if a future table gains a `userId` column
- * and is not listed here, `me.account.test.ts` fails rather than the deletion quietly leaving that
- * table's rows behind.
+ * A plan table read by a second-level step: rows of `table` whose `owner` is the caller, and the
+ * `key` a child's foreign key points at (the parent's id).
  */
-export const accountOwnedTableNames = [
-  'notifications',
-  'subscriptions',
-  'progress',
-  'user_preferences',
-  'recommendation_feedback',
-] as const
+export interface ErasureParent {
+  table: PgTable
+  key: PgColumn
+  owner: PgColumn
+}
+
+/**
+ * One delete of `DELETE /me`: every row of `table` whose `column` is the caller — or, with `via`,
+ * whose `column` points at one of the caller's rows of another plan table (`via.table`).
+ */
+export interface ErasureStep {
+  table: PgTable
+  column: PgColumn
+  via?: ErasureParent
+}
+
+/** The caller's comments, for the rows that hang off them. */
+const VIA_COMMENTS: ErasureParent = { table: comments, key: comments.id, owner: comments.userId }
+
+/**
+ * Every row that is the user's (owner) or ABOUT the user (the other side of a relationship), in
+ * foreign-key-safe order: the rows hanging off the user's comments go before the comments, and the
+ * `users` row goes after all of it (the route appends it).
+ *
+ * Exported so `me.account.test.ts` can hold it against the schema: every foreign key to `users` or
+ * to a plan table (whatever its column is called — `actor_user_id`, `blocked_user_id`) must have an
+ * owner step, a `via` step that runs before its parent's rows go, or be ON DELETE SET NULL; and
+ * every column named like a user id (`…user_id`, `clerk_id`) must have a step or be a disclosed
+ * retention.
+ *
+ * Other people's replies to the user's comments SURVIVE: `comments.parent_id` is ON DELETE SET
+ * NULL, so they become top-level comments of the same thread. `comments.report_count` on other
+ * people's comments this user reported stays too, as an anonymous aggregate.
+ */
+export const accountErasurePlan: readonly ErasureStep[] = [
+  { table: commentLikes, column: commentLikes.userId }, //                        likes BY the user
+  { table: commentLikes, column: commentLikes.commentId, via: VIA_COMMENTS }, //  likes ON the user's comments
+  { table: reports, column: reports.userId }, //                                  reports BY the user
+  { table: reports, column: reports.commentId, via: VIA_COMMENTS }, //            reports ABOUT the user's comments
+  { table: notifications, column: notifications.userId }, //                      the user's inbox
+  { table: notifications, column: notifications.actorUserId }, //                 rows about the user's actions in others' inboxes
+  { table: notifications, column: notifications.commentId, via: VIA_COMMENTS }, // anything else hanging off their comments
+  { table: comments, column: comments.userId }, //                                hard delete; others' replies → parent_id NULL (FK)
+  { table: likes, column: likes.userId },
+  { table: saves, column: saves.userId },
+  { table: reminders, column: reminders.userId },
+  { table: feedHides, column: feedHides.userId },
+  { table: episodeRatings, column: episodeRatings.userId },
+  { table: blocks, column: blocks.userId }, //                                    whom they blocked
+  { table: blocks, column: blocks.blockedUserId }, //                             who blocked them
+  { table: userProfiles, column: userProfiles.userId }, //                        frees the handle
+  { table: subscriptions, column: subscriptions.userId },
+  { table: progress, column: progress.userId },
+  { table: userPreferences, column: userPreferences.userId },
+  { table: recommendationFeedback, column: recommendationFeedback.userId },
+]
+
+/**
+ * The tables `DELETE /me` erases before the `users` row itself, derived from the plan (kept for
+ * compatibility): if a future table gains a `userId` column and is not in the plan,
+ * `me.account.test.ts` fails rather than the deletion quietly leaving that table's rows behind.
+ */
+export const accountOwnedTableNames: readonly string[] = [
+  ...new Set(accountErasurePlan.map((step) => getTableName(step.table))),
+]

@@ -505,38 +505,135 @@ Detail do a current bounded lookup. Use the batch endpoint to warm a visible she
 | POST | `/franchises/watch-providers/batch` | `{ franchiseIds: [uuid], country? }` | `{ country, availability: [{ franchiseId, ...WatchAvailability }] }`; max 100, four bounded workers |
 | GET | `/me/preferences` | — | `{ country, language, providerIds, updatedAt }` |
 | PUT | `/me/preferences` | `{ country?: "IN" \| null, language?, providerIds? }` | Saved preference object; omitted fields are preserved |
-| GET | `/me/library?country=IN` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }`; country falls back to preferences and adds cached availability |
+| GET | `/me/library?country=IN` | — | `{ franchises: LibraryFranchise[], prevOpenedAt: Int }`; country falls back to preferences and adds cached availability. `prevOpenedAt` is the **previous visit** (the value `POST /me/opened` shifted away; the last stamp for an account not yet shifted since migration 0010), never the stamp this session just wrote; `newParts` counts against it |
 | GET | `/me/recommendations?limit=12` | — | `{ items: RecommendationItem[], generatedAt }` — see **Recommended for you**; `limit` 1–30 |
 | POST | `/me/recommendations/feedback` | `{ key, kind: "dismissed" \| "seen" }` | `204` |
 | DELETE | `/me/recommendations/feedback` | `{ key }` | `204` (undo) |
 | POST | `/me/subscriptions` | `{ franchiseId, status? }` | `{ ok: true }` (status defaults: `watching` if releasing else `planned`) |
 | PATCH | `/me/subscriptions/:franchiseId` | `{ status }` | `{ ok: true }` |
 | DELETE | `/me/subscriptions/:franchiseId` | — | `{ ok: true }` |
-| PUT | `/me/progress` | `{ mediaId, episodes }` | `{ ok: true }` |
+| PUT | `/me/progress` | `{ mediaId, episodes }` | `{ ok: true }`. The count is clamped: a NOT_YET_RELEASED part to 0, a **RELEASING part to its aired-by-now count** (see **Episode discussions**; with no evidence of a count at all — no slot, no dated episode — to its size, or unbounded when unsized), anything else to `max(episodes, aired)`. The ceiling bounds only an **increase**: the value already stored stays reachable, so a mark written before the ceiling existed (12 of a season with 5 aired) is never pulled down — writing 11 stores 11, not 5. `404 {"error":"media not found"}` for an unknown `mediaId` — nothing is written, and it is final (discard the pending write, never retry). `400` on a bad body |
 | PUT | `/me/franchises/:franchiseId/progress` | `{ mode: "caught_up" \| "completed" \| "reset", status? }` **or** `{ parts: [{ mediaId, episodes }], status? }` | Atomic canonical `{ ok, franchiseId, status, progress[] }`; rejects foreign/duplicate media IDs before writing; `completed` also upserts completed subscription status |
-| POST | `/me/opened` | — | `{ prevOpenedAt: Int }` (returns the value *before* this call, then stamps now) |
-| GET | `/me/notifications?limit=50` | — | `{ items: NotificationItem[], unread: Int }` newest-first |
-| POST | `/me/notifications/read` | `{ ids?: [uuid] }` | `{ marked: Int }` — omit `ids` to mark all unread as read |
-| DELETE | `/me` | — (an unknown field is a `400`) | `{ deleted: true }` — see **Account deletion** |
+| POST | `/me/opened` | — | `{ prevOpenedAt: Int }` — ONE statement moves the last visit into `prevOpenedAt` and stamps now, atomically; returns the value *before* this call. Not idempotent: call it once per new-visit foreground, **before** loading the feed, and use its answer as the session's anchor |
+| GET | `/me/notifications?limit=50&cursor=` | — | `NotificationsPage` `{ items: NotificationItem[], unread: Int, nextCursor }` newest-first — see **NotificationItem**; `limit` 1–200, `400` outside it or on a bad cursor |
+| POST | `/me/notifications/read` | `{ ids?: [uuid] }` (≤ 500) | `{ marked: Int }` — omit `ids` to mark all unread as read; `400` on a bad body |
+| DELETE | `/me` | — (an unknown field is a `400`) | `{ deleted: true }` — see **Account deletion**. Answers a suspended account too |
+| GET | `/me/feed?tab=following` | — | `FeedResponse` — see **Today feed**; `tab` is `following` (default) or `foryou`, `400` otherwise; `429` (the read budget — see **Rate limits**) |
+| GET | `/feed/posts/:id` | — | `FeedPostDetailResponse` — see **Post detail, Saved, Reminders**; `:id` a PostId; `400` bad id, `404 {"error":"post not found"}`, `429` (the read budget) |
+| GET | `/me/saved` | — | `SavedResponse`, newest first |
+| GET | `/me/reminders` | — | `RemindersResponse`, newest first |
+| PUT / DELETE | `/me/likes` | `{ subject }` (a ThreadSubject) | `204`; PUT: `404 subject not found`, `409 episode_locked` (ep only), `429` — see **Social** |
+| PUT / DELETE | `/me/saves` | `{ postId }` | `204`; PUT: `404`, `429` |
+| PUT / DELETE | `/me/reminders` | `{ postId }` | `204`; PUT: `404`, `429` |
+| PUT / DELETE | `/me/hides` | `{ kind: "post", target: postId }` \| `{ kind: "show", target: franchiseId }` | `204`; PUT: `404` unknown post or franchise, `429` |
+| GET | `/me/hides` | — | `HidesResponse` `{ items: [{ kind, target, createdAt, franchise: { id, title } \| null }] }`, newest first |
+| PUT | `/me/ratings` | `{ mediaId, episode: 1…99999, score: 0…100 }` | `204`; `404 episode not found`, `409 episode_locked`, `429` |
+| DELETE | `/me/ratings` | `{ mediaId, episode }` | `204` |
+| PUT / DELETE | `/me/blocks` | `{ userId }` | `204`; PUT: `400 {"error":"self_block"}`, `404 user not found`, `429` |
+| GET | `/me/blocks` | — | `BlockedUsersResponse` `{ items: [{ user: PublicUser, blockedAt }] }`, newest first |
+| GET | `/social/comments?subject=&sort=top&cursor=&limit=20` | — | `CommentsPage`; `sort` top \| latest, `limit` 1–50; `400`, `404 subject not found`, `404 comments disabled`, `429` (the read budget) |
+| POST | `/social/comments` | `{ id: uuid, subject, body, parentId?: uuid \| null }` | `201` new / `200` replay, `{ comment: CommentView }`; `404` subject/parent/`comments disabled`, `409` `handle_required` \| `terms_required` \| `episode_locked` \| `id_conflict`, `410 comment deleted`, `422 content_rejected`, `429` |
+| DELETE | `/social/comments/:id` | — | `204` (a repeat is `204`); `404` not found or not yours |
+| PUT / DELETE | `/social/comments/:id/like` | — | `204`; PUT: `404` (missing, deleted, hidden, blocked either way), `409 episode_locked`, `429` |
+| POST | `/social/comments/:id/report` | `{ reason, note? }` | `204` (a repeat is `204`); `404`, `409 own_comment`, `429` |
+| GET | `/social/episodes/:mediaId/:episode` | — | `EpisodeRoom`; `400`, `404 episode not found` |
+| GET | `/me/profile` | — | `ProfileResponse` — see **Identity** |
+| PUT | `/me/profile` | `{ handle, displayName }` | `200 ProfileResponse`; `409 handle_taken`, `422 invalid_handle` \| `invalid_display_name` (+`reason`), `429` |
+| GET | `/me/profile/handle?handle=` | — | `HandleAvailability`; `400`, `429` |
+| POST | `/me/terms` | `{ version }` | `200 ProfileResponse`; `409 terms_version_mismatch` (+`currentVersion`), `429` |
+| GET | `/me/export` | — | `AccountExport` as a JSON attachment — see **Account export**; `429`. Answers a suspended account too |
+| GET | `/discover/genres?source=` | — | `DiscoverGenresResponse` — see **Discover: genres**; `400` on a bad source |
+| GET | `/discover/genres/:key?source=&limit=24&cursor=` | — | `DiscoverGenrePage`; `limit` 1–50; `400`, `404 genre not found` |
 
 ### Account deletion
 
 `DELETE /me` erases the account. It is required by App Store guideline 5.1.1(v) and it is the one
 route in this API that cannot be undone, so its semantics are exact:
 
-- **Erased, not deactivated.** In one transaction: the caller's `notifications`, `subscriptions`,
-  `progress`, `user_preferences` and `recommendation_feedback` rows, then the `users` row itself. Every user-owned table is deleted explicitly
-  rather than left to the `ON DELETE CASCADE` each foreign key declares — the cascade is real and
-  `me.account.test.ts` asserts it, but a database restored from a dump, or a table added later
-  without one, must not be able to turn "delete my account" into "orphan my rows".
+- **Erased, not deactivated.** In one transaction, in an order the foreign keys allow, the server
+  deletes every row that is the user's AND every row that is about the user, then the `users` row
+  itself, last:
+  - the likes, reports and notifications hanging off the user's own comments (other people's likes
+    on them, reports about them, "replied to you" rows pointing at them);
+  - the user's comment likes, reports, notification inbox, and every notification in someone else's
+    inbox that names the user as the actor;
+  - the user's comments — hard-deleted; **other people's replies to them survive as top-level
+    comments** of the same thread (the parent link is cleared, never cascaded);
+  - the user's likes, saves, reminders, hides, episode ratings, blocks in both directions (whom they
+    blocked and who blocked them), and public profile (which **frees the handle**);
+  - the user's `subscriptions`, `progress`, `user_preferences` and `recommendation_feedback`.
+
+  Every user-owned table is deleted explicitly rather than left to the `ON DELETE CASCADE` each
+  foreign key declares — the cascade is real and `me.account.test.ts` asserts it (for every foreign
+  key to `users`, whatever the column is called), but a database restored from a dump, or a table
+  added later without one, must not be able to turn "delete my account" into "orphan my rows".
 - **Scoped to the bearer.** The user id comes from the token; there is no path or body parameter
   that could name a different account. A body is accepted only if it is empty — an unrecognised
   field is a `400`, never an ignored one.
 - **Nothing else is touched.** The catalogue (`media`, `franchise`, `announcements`) is shared and
-  survives; only the rows that belong to this user are removed.
-- The client signs out immediately afterwards; the next sign-in with the same Clerk identity
-  creates a brand-new, empty account.
+  survives; only the rows that belong to or are about this user are removed. The user's reports go
+  with the account, and a comment's report count is RECOUNTED from the reports that remain the next
+  time it is reported (see **Comments** → report), so an erased reporter's report stops counting.
+- **The one disclosed exception: the ban list.** If the account was suspended, its `moderation_bans`
+  row — the Clerk identity and the operator's reason — is kept after deletion. It is keyed on the
+  Clerk id and has no link to the erased account; without it, deleting and signing back in would
+  lift a ban.
+- A suspended account can still call `DELETE /me` (and `GET /me/export`). A suspended identity's
+  export only LOOKS its account up — it never re-creates an erased one (nor stores its email
+  again): with no account it answers `404 {"error":"account not found"}`.
+- **The sign-in identity is erased too.** Once the transaction has committed, the server deletes the
+  Clerk user (Clerk's backend API, when the server has `CLERK_SECRET_KEY`) — or, for a SUSPENDED
+  identity, **bans** it in Clerk instead, so the same email cannot sign up again for a fresh Clerk id
+  and walk around the ban. A Clerk failure does not undo the erasure (the answer is still
+  `{ deleted: true }`): it is logged as `account.clerk_delete_failed` and the operator retries it with
+  `npm run moderation -- clerk-delete <clerkId>`.
+- **An erased identity is refused for 15 minutes.** A Clerk session token is verified offline and
+  stays valid for up to a minute after the account is gone, and every authenticated route creates an
+  account for a valid token. So for 15 minutes after the erasure, **every** authenticated route
+  answers the Clerk id with `401 {"error":"account deleted"}`, before anything is created — an
+  in-flight or retried write (a like, a rating, a progress mark, a queued comment) can never re-create
+  the account the user just erased. A client stops its write queues BEFORE it sends `DELETE /me`,
+  wipes its local state on success without waiting for sign-out to finish, and treats a
+  `401 account deleted` like any other `401`: the session is gone.
+- The client signs out immediately afterwards. The next sign-in after the hold (a fresh sign-up,
+  once Clerk has deleted the user) creates a brand-new, empty account; a suspended identity cannot
+  sign up again (above).
 
+### Account export: `GET /me/export`
+
+Everything the server holds for the caller, as one JSON document, answered with
+`Content-Type: application/json; charset=utf-8`,
+`Content-Disposition: attachment; filename="previously-export-<YYYY-MM-DD>.json"` and
+`Cache-Control: no-store`. Rate limited to 3 an hour. It works while suspended.
+
+```ts
+interface AccountExport {
+  exportedAt: number
+  account: { id: string; createdAt: number; email: string | null; lastOpenedAt: number | null; prevOpenedAt: number | null }  // visit stamps: null = never
+  profile: { handle: string | null; displayName: string | null; termsAcceptedAt: number | null; termsVersion: string | null; createdAt: number; updatedAt: number } | null
+  // The caller's ban record, read by their Clerk id — the one row kept after DELETE /me. null when the
+  // identity was never suspended; a lifted ban reads suspended: false with liftedAt set.
+  moderation: { suspended: boolean; reason: string | null; since: number | null; liftedAt: number | null } | null
+  library: {
+    subscriptions: { franchiseId: string; title: string; status: WatchStatus; addedAt: number }[]
+    progress: { mediaId: number; episodes: number; updatedAt: number }[]
+    preferences: UserPreferences | null
+    recommendationFeedback: { key: string; kind: string; createdAt: number }[]
+  }
+  social: {
+    comments: { id: string; subject: string; parentId: string | null; body: string; createdAt: number; deletedAt: number | null; hiddenAt: number | null; hiddenReason: string | null }[]  // hiddenReason: 'reports' | 'operator'
+    likes: { subject: string; createdAt: number }[]
+    commentLikes: { commentId: string; createdAt: number }[]
+    saves: { postId: string; createdAt: number }[]
+    reminders: { postId: string; createdAt: number }[]
+    hides: { kind: string; target: string; createdAt: number }[]
+    ratings: { mediaId: number; episode: number; score: number; updatedAt: number }[]
+    blocks: { userId: string; handle: string | null; createdAt: number }[]
+    reports: { commentId: string; reason: string; note: string | null; createdAt: number; resolvedAt: number | null; resolution: string | null }[]
+    notifications: { id: string; kind: string; franchiseId: string; title: string; body: string; subject: string | null; postId: string | null; commentId: string | null; createdAt: number; readAt: number | null }[]  // title/body as stored
+  }
+}
+```
 
 ### FranchiseListResponse
 The envelope every franchise-list route returns. `franchises` is the only guaranteed field; the
@@ -559,23 +656,665 @@ A client must treat an absent `sources` as "nothing to report", never as a failu
 
 ### NotificationItem
 
-```
+`GET /me/notifications?limit=50&cursor=…` answers a `NotificationsPage`:
+
+```jsonc
 {
-  id: uuid,
-  franchiseId: uuid,
-  kind: "news_rumored" | "news_announced" | "news_dated",
-  title: String,       // franchise title, e.g. "Jujutsu Kaisen"
-  body: String,        // e.g. "Season 4 announced — release TBA"
-  createdAt: Int,      // ms epoch
-  readAt: Int | null   // ms epoch, null while unread
+  "items": [NotificationItem, …],   // newest first: (createdAt desc, id desc)
+  "unread": 3,                       // same filters, readAt null (the bell's badge)
+  "nextCursor": "eyJhdCI6…" | null   // opaque; pass back as ?cursor= for the next page
 }
 ```
 
-Notifications are produced by a daily backend job (Claude Agent SDK web research over each
-subscribed franchise). A notification is created only when news is genuinely new: first
-sighting of an upcoming installment (including credible rumors), a status upgrade
-(rumored → announced → dated), or a TBA release gaining a concrete date. The same job keeps
-`franchise.upcoming` fresh, so the existing upcoming badges/callouts update automatically.
+```jsonc
+{
+  "id": "uuid",
+  "franchiseId": "uuid",
+  "kind": "news_rumored" | "news_announced" | "news_dated" | "reply" | "like_comment"
+        | "comment_hidden" | "report_resolved",
+                          // decode LENIENTLY: an unknown kind renders as a plain row
+  "title": "Sakamoto Days",   // franchise title
+  "body": "Season 2 announced — release TBA",  // news: server English, the FALLBACK only (when
+                              // `news` is null) — never parse it; social kinds: "";
+                              // moderation notices: a CATEGORY (see **Moderation notices**)
+  "createdAt": 1790330400000, // ms epoch (for an aggregated like: the newest like)
+  "readAt": null,             // ms epoch, null while unread
+  "actor": PublicUser | null, // reply / like_comment: who did it (the newest liker); null for news,
+                              // AND null when that person has no public profile (liking needs no
+                              // handle, and a reset name has none) — word the row without a name:
+                              // "Someone liked your reply" / "3 people liked your reply" from actorCount
+  "actorCount": 0,            // like_comment: distinct likers folded into this row (≥ 1); 0 otherwise
+  "subject": "news:…" | null, // the thread to open (social kinds): a ThreadSubject
+  "postId": "news:…" | null,  // the feed post to open: news kinds → "news:<announcementId>";
+                              // social kinds on a post thread → that post; null for an episode room
+  "commentId": "uuid" | null, // reply: the reply itself; like_comment: YOUR comment that was liked
+  "excerpt": "…" | null,      // read LIVE: the first 140 code points of that comment; null once it is
+                              // gone, and null for a comment in an episode room that is not OPEN to
+                              // you now (a reset re-locks it: the spoiler gate applies here too)
+  "news": NotificationNews | null  // news kinds: the fact to word the row from; null for social
+                                   // kinds and for a news row whose announcement is gone
+}
+```
+
+**Moderation notices.** Both sides of a moderation decision are told, as rows in the same inbox (DSA
+Art. 17's statement of reasons to the author; Art. 16(5)'s decision to the notifier). They carry no
+actor, `subject`, `postId`, `commentId`, `excerpt` or `news` — a hidden comment is nobody's to open,
+so the row **opens nothing**; `title` is the show and `body` is a machine category the client words
+(with the support contact), never English:
+
+| `kind` | To | `body` |
+|---|---|---|
+| `comment_hidden` | the comment's author | `reports` — hidden automatically after reports; `operator` — hidden by a moderator (a `hide`, or a ban that hides the account's comments) |
+| `report_resolved` | each reporter whose open report was decided | `hidden` — the comment was removed; `dismissed` — it stays up (a `restore` or `dismiss`) |
+
+They are listed whether or not comments are switched on, and count toward `unread`.
+
+```jsonc
+// NotificationNews — read LIVE from the announcement (like `excerpt`): an older row shows the
+// installment's CURRENT state, and `kind` says which event created the row.
+{
+  "status": "upcoming_dated",   // rumored | announced_no_date | announced | upcoming_dated (decode leniently)
+  "installment": "Season 2",    // as FeedPost.installment: never contains "(movie)"
+  "isMovie": false,
+  "release": "2026-11-20",      // research's prose, printed as-is only where the feed prints
+                                // FeedWindow.release — never parsed
+  "releaseWindow": ReleaseWindow  // what the client formats and sorts by; a rumour's is always unknown
+}
+```
+
+**Wording a news row.** Render it with the feed's headline grammar (dated / window / announced /
+rumour) from `news` — the time text is the client's, from `releaseWindow`, like every other time in
+the app. `body` is server English with the raw `release` in it ("Season 2 arrives 2026-11-20") and
+is only the fallback for a row whose `news` is null.
+
+Research's words reach Activity on the feed composer's terms (brief §14): `installment` and
+`release` are normalised and capped like `FeedPost.installment` / `FeedWindow.release`, and text
+carrying a link or a blocked term is never sent. A news row whose installment name cannot be printed
+has `news: null`; a `release` that cannot be printed is `""` and its `releaseWindow` is `unknown`
+(word the row as announced) — except a day-precise date, which is a structured fact and is kept. A
+news row's `body` that carries a link or a blocked term is sent as `""`: render the title alone.
+
+**Deep link.** `commentId` set → open the thread `subject` scrolled to that comment. Else `postId`
+set → open `GET /feed/posts/:postId`. Else → open the franchise.
+
+**Aggregation.** Likes on one of your comments fold into ONE unread `like_comment` row per comment:
+each new liker bumps `actorCount`, becomes `actor` and moves `createdAt` to now. Once you have read
+it, the next like starts a new row, but not within `SOCIAL_LIKE_NOTIFY_COOLDOWN_MINUTES` (60) of the
+last one. Unliking never decrements. Render "Mira and 41 others liked your reply" from `actor` and
+`actorCount − 1`. Nobody is notified about their own actions, and a block (either way) silences both
+kinds.
+
+**Filtering.** A row whose actor is blocked either way, or whose comment has since been deleted or
+hidden, is not listed and does not count as unread. While `SOCIAL_COMMENTS_ENABLED` is off, the
+social kinds are not listed at all.
+
+**News rows** are produced by the daily research job (Claude Agent SDK web research over each
+subscribed franchise). A notification is created only when news is genuinely new: first sighting of
+an upcoming installment (including credible rumors), a status upgrade (rumored → announced → dated),
+or a TBA release gaining a concrete date. It goes to the franchise's subscribers **and to the
+reminder holders it answers** (`PUT /me/reminders`), once each: everyone with a reminder on that
+news post (`news:<announcementId>`), **and everyone with a reminder on any of the show's non-news
+posts** — a trailer (`trailer:…`, never re-keyed) or a catalogue post that adoption could not match
+(`catalog:…`). That is what keeps the app's "News about it will show in Activity" true for every
+undated reminder. A reminder on ANOTHER announcement's post (`news:<B>`) is about that installment
+and waits for its own news. The same job keeps `franchise.upcoming` fresh, so the existing upcoming
+badges/callouts update automatically.
+
+There is no push in this build: the Activity sheet polls. Opening it marks read
+(`POST /me/notifications/read`).
+
+## Post ids and thread subjects
+
+Every social row (likes, comments, saves, reminders, "not interested") keys on one text id. There
+are four kinds; the first three are **PostIds** (a post in the feed), and all four are
+**ThreadSubjects** (something with a discussion):
+
+| Subject | Grammar (whole string) | What it is |
+|---|---|---|
+| `news:<uuid>` | `news:` + lowercase uuid | A research-backed news post. The uuid is the announcement's id. |
+| `catalog:<mediaId>` | `catalog:` + 1…2147483647, no leading zero | A catalogue-only upcoming post: an announced (NOT_YET_RELEASED) part that research has no row for |
+| `trailer:<franchiseId>:<site>:<videoId>` | lowercase uuid, `[a-z0-9]{1,20}` (lowercased), `[A-Za-z0-9_-]{1,64}` | A trailer post |
+| `ep:<mediaId>:<n>` | 1…2147483647, episode 1…99999 | An episode discussion room (spoiler-gated — see **Episode discussions**) |
+
+- **A news post is its announcement**, not its wording: `news:<announcement id>`. Research that
+  rewords the same installment ("Season 2" / "2nd Season") lands on the same announcement row, so
+  the post and its thread stay one.
+- **A catalogue post becomes a news post when research catches up.** When research first creates or
+  advances an announcement that matches a `catalog:<mediaId>` post's part, every social row is
+  re-keyed from `catalog:<mediaId>` to `news:<announcementId>` in one transaction (likes, saves,
+  reminders, hides, comments, notification links). A catalogue post also composes as `news:<id>` as
+  soon as a matching announcement exists.
+- **"Matches" is ONE rule everywhere.** An announcement names the part its installment (`next`)
+  resolves to with the feed's part matcher, the parts scanned in watch order (the same match that
+  sets a research post's `part`); when several announcements name one part, the oldest
+  (`first_seen_at`, then id) is the one. The catalogue post's id, the post-detail alias, adoption
+  and the write-side canonical subject below all read this rule, so a thread is never keyed on one
+  id while the feed shows another.
+- **Writes and thread reads key on the CANONICAL subject.** Once an announcement names its part,
+  `catalog:<mediaId>` IS `news:<announcementId>` on the server: `PUT /me/likes`, `/me/saves`,
+  `/me/reminders` and `/me/hides` (`kind: "post"`) store the `news:` id, and their `DELETE`s clear
+  both the `news:` id and the id as sent; `GET /social/comments` reads the `news:` thread and names
+  it in `CommentsPage.subject`; `POST /social/comments` stores the comment (and checks its
+  `parentId`) under the `news:` thread and answers a `CommentView` whose `subject` is that id. So a
+  toggle queued, a comment replayed or a hide sent against the old id is never stranded. A client
+  that sent `catalog:<mediaId>` and reads back a different `subject` re-files its state under the
+  answered id. A `catalog:` id no announcement names is its own canonical subject.
+- **A trailer id carries its franchise**, so one YouTube id attached to two shows cannot collide.
+- Clients treat every id as **opaque**. Use `post.id` from `GET /feed/posts/:id` as the canonical
+  thread subject (it can differ from the id you asked for — see the alias rule there). An old
+  `catalog:` link can answer `404` after adoption; fall back to the franchise.
+- The server rejects anything off-grammar with `400`, including uppercase uuids and ids longer than
+  160 characters. A trailer subject is accepted only for a video the franchise actually carries, so
+  nobody can open a thread on an arbitrary video id.
+
+## Today feed: `GET /me/feed`
+
+`GET /me/feed?tab=following|foryou&since=<ms>` (`tab` defaults to `following`; `since` is optional).
+Posts are assembled ON THE SERVER by one composer with stable ids; the client renders every WORD
+(headline, stamp, premiere line, window) from the structured facts below, in the viewer's locale and
+time zone.
+
+| Query | Meaning |
+|---|---|
+| `tab` | `following` \| `foryou` |
+| `since` | The client's visit anchor, ms epoch, digits only (anything else is `400`): the `prevOpenedAt` its own `POST /me/opened` answered this session. When `0 < since ≤ now` it is THE anchor — `fresh`, the order and the echoed `prevOpenedAt` all use it. Otherwise (absent, `0`, in the future) the server reads its stored anchor. Pass it once this session's stamp has landed: the stored anchor is the visit before last while that stamp is missing (it failed; it is never retried), and another device's stamp moves it mid-session. |
+
+```ts
+type FeedTab = 'following' | 'foryou'
+type FeedPostKind = 'dated' | 'window' | 'announced' | 'rumour' | 'trailer'
+type FeedPostOrigin = 'research' | 'catalogue' | 'video'
+
+interface FeedTime {            // when the news happened
+  at: number                    // ms; a date-only fact is carried at 12:00 UTC of its day
+  dateOnly: boolean
+  basis: 'primary'              // the original announcement's own date
+       | 'first_report'         // earliest report in the 120-day cluster (no usable primary)
+       | 'observed'             // when research first saw this state (no dated report)
+       | 'catalogue'            // when the catalogue attached the part
+       | 'published'            // the video's publish instant
+}
+interface FeedPremiere { at: number; precision: 'exact' | 'date_only' }
+interface FeedWindow { release: string; releaseWindow: ReleaseWindow }   // see FranchiseUpcoming
+interface FeedSource {
+  publisher: string
+  tier: 'official' | 'trade' | 'reputable' | 'catalogue' | 'unknown'
+  url: string | null            // https only; null = no https link (catalogue fallback only)
+  publishedAt: number | null
+  dateOnly: boolean
+  primary: boolean
+}
+interface FeedPartRef {         // the part a post is about: art inputs only
+  mediaId: number; label: string; kind: PartKind; status: string | null
+  cover: string; banner: string; images: ArtworkSet; artwork: ArtworkGallery
+}
+interface FeedFranchise {       // the post's author row ("the show"), shipped once per response
+  id: string; source: 'anilist' | 'tmdb'; title: string
+  cover: string; banner: string; images: ArtworkSet; artwork: ArtworkGallery
+  year: number | null; isReleasing: boolean
+  status: WatchStatus | null    // the viewer's library status; null = not in their library
+  upcoming: FranchiseUpcoming | null
+}
+interface FeedPost {
+  id: string                    // PostId
+  kind: FeedPostKind
+  origin: FeedPostOrigin
+  franchiseId: string
+  installment: string           // "Season 2", "Infinity Castle Part 2"; never "(movie)"; '' for a franchise-wide
+                                // trailer (and for a delisted trailer composed by id — see Post detail)
+  isMovie: boolean
+  part: FeedPartRef | null
+  time: FeedTime                // never after the response's generatedAt
+  discoveredAt: number          // when the app first knew this post in its current state; 0 = never "new"
+  fresh: boolean                // discoveredAt > the response's prevOpenedAt
+  premiere: FeedPremiere | null // kind 'dated' (and a trailer whose installment has a slot STILL TO COME)
+  window: FeedWindow | null     // kind 'window'
+  note: string | null           // the research note, tidied; research posts only
+  video: FranchiseVideo | null  // a trailer's own video; null only on a delisted trailer composed by id
+  sources: FeedSource[]         // ranked; sources[0] is the lead
+  isOfficial: boolean           // sources[0].tier === 'official'
+  viewer: { liked: boolean; saved: boolean; reminded: boolean }
+  counts: { likes: number; comments: number }
+}
+interface FeedResponse {
+  tab: FeedTab
+  generatedAt: number
+  prevOpenedAt: number          // the anchor the server ordered against: `since` when it was used,
+                                // else the stored previous visit. Label "caught up since …" from THIS.
+  capabilities: { comments: boolean }
+  franchises: FeedFranchise[]   // exactly the franchises the posts reference
+  posts: FeedPost[]
+  trending: FranchiseSummary[]  // For you only (the Trending module); [] on following
+}
+```
+
+```jsonc
+{
+  "tab": "following", "generatedAt": 1790330400000, "prevOpenedAt": 1790244000000,
+  "capabilities": { "comments": true },
+  "franchises": [{ "id": "…", "source": "anilist", "title": "Sakamoto Days", "status": "watching", "…": "…" }],
+  "posts": [{
+    "id": "news:0b6c…", "kind": "window", "origin": "research", "franchiseId": "…",
+    "installment": "Season 2", "isMovie": false, "part": null,
+    "time": { "at": 1789819200000, "dateOnly": true, "basis": "primary" },
+    "discoveredAt": 1790300000000, "fresh": true,
+    "premiere": null,
+    "window": { "release": "January 2027", "releaseWindow": { "date": "2027-01", "precision": "month", "sortKey": 20270101 } },
+    "note": "Announced at …", "video": null,
+    "sources": [{ "publisher": "Netflix Tudum", "tier": "official", "url": "https://…", "publishedAt": 1789819200000, "dateOnly": true, "primary": true }],
+    "isOfficial": true,
+    "viewer": { "liked": false, "saved": false, "reminded": true },
+    "counts": { "likes": 0, "comments": 0 }
+  }],
+  "trending": []
+}
+```
+
+Rules a client builds on:
+
+- **Kinds.** `dated` has a `premiere`; `window` has a `window`; `announced` is confirmed with no
+  date; `rumour` is unconfirmed (it keeps its Community Note); `trailer` has a `video`. The post's
+  state is the newest research observation resolved against the catalogue exactly as Detail's
+  `upcoming` is, so the feed can never say "rumoured" while the show page says "dated". A research
+  result whose release is DAY-precise is `dated` (a `date_only` premiere) whatever its status called
+  it — an `announced` "November 20, 2026" is never a window "in Nov 20, 2026".
+- **News leaves the feed when its installment arrives.** A research post is not in the feed once
+  the part it names has left `NOT_YET_RELEASED`, or once its `premiere` is more than 24 h past (it
+  still composes by id, `live: false`); the show page and the story tray own an airing installment.
+  A trailer's `premiere` is only ever still to come. A post's `premiere` can still be in the past
+  within that day and within the ≤1 h before the hourly sync flips the part, so a client that prints
+  "premieres …" must word a past premiere in the past tense (or drop the line).
+- **Time facts.** `time` is when the NEWS happened (`basis` says which evidence dated it; `dateOnly`
+  facts sit at 12:00 UTC of their day and must never print a clock). `time.at` is never after
+  `generatedAt`: a report dated up to a day ahead (a JST publisher's "tomorrow") is clamped to now,
+  keeping its `dateOnly`. `discoveredAt` is when the app first knew the post in its current state.
+  **"New" compares `discoveredAt`, never `time`**: a week-old announcement research found this
+  morning is new; the news date is still a week ago. A catalogue post's `time` is when the catalogue
+  attached the part; its `discoveredAt` is that instant only when the part was attached AFTER the
+  show was grouped (the daily pass found a new season). A part that came with the show's grouping —
+  a newly materialised show, or one a re-grouping re-stamped — has `discoveredAt: 0` and is never
+  `fresh`: its attach instant says nothing about when it was announced.
+- **The client renders all words** — the headline, the stamp, the premiere line and the window —
+  from these facts. `window.releaseWindow` is the only thing sorted or formatted by; `release` is
+  printed as-is and **never parsed** (the FranchiseUpcoming rule).
+- **`isOfficial` is the only condition for the gold check mark**: the lead source is a studio,
+  network or streamer. A trade-press lead (`trade`, `reputable`) has no mark. A trailer is official
+  only when its catalogue record says `official: true`. The research agent's own tier is a CLAIM
+  (it reads arbitrary pages): evidence is `official` only when its URL is on a reviewed official
+  host (`server/src/feed/officialHosts.ts`, suffix-matched); every other `official` claim is served —
+  and stored — as `reputable`.
+- **Sources are https-only.** The server drops every non-https evidence URL before any rule runs
+  (and ignores evidence dated more than 24 h in the future). Clients open only `https` URLs anyway.
+- **Research-agent words are filtered before they are printed.** `installment`, a source's
+  `publisher`, `window.release` and `note` come from the agent: each is normalised (the first three
+  to one line with invisible and control characters removed; the note keeps its line breaks), capped (60 / 60 / 60 / 600 code points,
+  cut on a word with "…"), and refused when it carries a link or a blocked term. A refused
+  installment falls back to the matched part's catalogue label, else there is no post; a refused
+  publisher reads as the page's host; a refused release makes the post `announced`; a refused note
+  is `null`. A storyline `headline` whose words carry a blocked term is `null`.
+- **`fresh` and the order.** `fresh = prevOpenedAt > 0 && discoveredAt > prevOpenedAt`. Fresh posts
+  come first, then everything else; each block is ordered by `time.at` desc, then `id` asc (so equal
+  times never flicker). The "new posts" pill counts the fresh posts, and "You're all caught up" sits
+  above the first post with `fresh: false` when at least one fresh post precedes it.
+  `prevOpenedAt` is the previous visit (see `POST /me/opened`), never the stamp this session wrote —
+  or the client's own `since` when it sent one. Its "since …" label reads the RESPONSE's
+  `prevOpenedAt`, so the words and the fresh block always name the same boundary.
+- **Following** is every show in the viewer's library (every status), minus muted shows and posts
+  marked "Not interested", capped at 200 posts.
+- **For you** is news about trending shows the viewer does not track: the top 150 trending
+  franchises are composed once per 10 minutes per process (independent of the viewer). Per request:
+  the viewer's anchors and hides are read; the composed posts lose the viewer's library shows, muted
+  shows and posts marked "Not interested"; the rest are ordered by `time.at` desc, then `id` asc —
+  **no fresh block, every post `fresh: false`** (nothing in For you is "new since your visit"; the
+  response still echoes `prevOpenedAt`); capped at 50 posts; then the viewer's likes/saves/reminders
+  and the global counts are attached, and every author row has `status: null`. `trending` is the
+  Trending module — the first 8 untracked, unmuted trending shows as `FranchiseSummary`, ranked.
+- **The feed never triggers research.** A trending show nobody follows may have only catalogue and
+  trailer posts, or none. A show researched before research kept observations (before 3 Sep) posts
+  from its stored `upcoming` when an announcement row names the same installment — the same
+  `news:<announcement id>` post, dated at that announcement's first sighting until research sees it
+  again.
+- **`capabilities.comments`** mirrors `SOCIAL_COMMENTS_ENABLED`. When `false`, hide every reply and
+  discussion affordance (comment counts included); likes, saves, reminders, hides and ratings stay.
+
+## Post detail, Saved, Reminders
+
+`GET /feed/posts/:id` (`:id` a PostId; colons are fine in a path segment, and percent-encoding is
+accepted):
+
+```ts
+interface FeedPostDetailResponse {
+  post: FeedPost                // post.id is CANONICAL: use it as the thread subject
+  franchise: FeedFranchise
+  live: boolean                 // false = the feed no longer carries this post; the thread stays open
+  storyline: StoryBeat[]        // the story so far, oldest → newest (at most 6 beats)
+  threadSources: FeedSource[]   // every https source across the thread, deduped by URL
+  capabilities: { comments: boolean }
+}
+interface StoryBeat {
+  id: string                    // yyyymmdd (UTC) of the beat's day
+  day: number                   // ms of the lead report
+  publishers: string[]
+  official: boolean
+  primary: boolean
+  headline: string | null       // a headline recovered from the lead URL's slug, or null
+  url: string | null            // https only
+}
+```
+
+- A `news:` post composes from its own announcement thread **even after it leaves the feed** (the
+  season premiered and research now says "airing"): `live: false`, and its comments stay reachable
+  from notifications and Saved. A trailer past the feed's 200-day horizon still composes.
+- A `catalog:<mediaId>` post composes **whatever the part's status now**, as long as the part is
+  still in the franchise: after the part premieres it is `live: false`, kind `dated` with the first
+  episode's airing as its `premiere` when the catalogue still carries it, else `announced`.
+- A `trailer:` post whose video the catalogue no longer lists (an enrichment refresh delisted it, or
+  it stopped being an official, dated trailer) composes only while someone holds a like, a live
+  comment, a save or a reminder on it: a bare post — `video: null`, `installment: ''`,
+  `part: null`, `sources: []`, `isOfficial: false`, `discoveredAt: 0`, `time` = the thread's first
+  activity (`basis: 'observed'`), `live: false`. Nobody holding a row on it → `404`.
+- **Alias:** asking for `catalog:<mediaId>` when an announcement already matches that part answers
+  the `news:<id>` post. Always adopt `post.id` from the response.
+- A post the viewer hid is still served (they followed a link to it). `404 {"error":"post not found"}`
+  when the post cannot be composed (an unknown id, a part or show the catalogue no longer has, a
+  delisted trailer nobody holds a row on); `400` for an id that is not a PostId (an `ep:` subject
+  included).
+
+`GET /me/saved` and `GET /me/reminders` list the viewer's saves and reminders newest first:
+
+```ts
+interface SavedResponse    { items: { postId: string; savedAt: number;    post: FeedPost | null }[]; franchises: FeedFranchise[] }
+interface RemindersResponse { items: { postId: string; remindedAt: number; post: FeedPost | null }[]; franchises: FeedFranchise[] }
+```
+
+`post: null` means the post can no longer be composed (for example a catalogue post whose part the
+catalogue no longer lists). Show a quiet "no longer available" row, or drop it. A saved or reminded
+post whose installment has since premiered, or a saved trailer since delisted, is still composed
+(`FeedPost` as above) — the viewer's own row keeps a delisted trailer reachable.
+
+**Reminders.** A post with a `premiere` is scheduled LOCALLY by the client (anime at the air
+minute, a TMDB date-only premiere at 9 AM local on its date). An undated post (`window`,
+`announced`, `rumour`) is remembered by the server: when research upgrades that installment, a
+notification goes to every reminder holder alongside the subscribers (see **NotificationItem**).
+
+## Social
+
+Every route here requires auth. Timestamps are ms epoch; writes answer `204` unless stated.
+
+**Toggles are idempotent set-state**: `PUT` sets, `DELETE` clears, both with a JSON body, both
+`204` whether or not anything changed — so clients mark them `idempotent: true` and keep one
+newest-word-wins pending write per target. `DELETE` never checks that the target still exists.
+A `catalog:` post's toggles key on its **canonical subject** (see **Post ids and thread subjects**):
+once an announcement names the part they are stored under `news:<id>`, and a `DELETE` clears both.
+
+| Toggle | Body | Notes |
+|---|---|---|
+| `/me/likes` | `{ subject: ThreadSubject }` | A post or an episode room. An `ep:` like needs the room open (`409 episode_locked`). |
+| `/me/saves` | `{ postId: PostId }` | Listed by `GET /me/saved`. |
+| `/me/reminders` | `{ postId: PostId }` | Listed by `GET /me/reminders`. A dated post's reminder is also a LOCAL notification the app schedules. The server notifies on research news: a reminder on `news:<A>` hears that announcement, and a reminder on any `trailer:`/`catalog:` post hears every announcement for its show (see **News rows**). |
+| `/me/hides` | `{ kind: "post", target: PostId }` or `{ kind: "show", target: franchiseId }` | "Not interested" / "Mute <show>". `GET /me/hides` lists them newest first (`franchise` set for `show`). |
+| `/me/ratings` | `PUT { mediaId, episode, score: 0…100 }`, `DELETE { mediaId, episode }` | The emoji slider; one rating per (user, episode), re-rating replaces it. Needs the room open. |
+| `/me/blocks` | `{ userId }` | `400 {"error":"self_block"}` for yourself; `404 user not found` for an account with no handle. `GET /me/blocks` lists them newest first. While comments are off, `PUT` answers `404 comments disabled` (nobody is shown to block); `GET` and `DELETE` always work. |
+
+A `PUT` names a thing that must exist: `404 {"error":"subject not found"}` (or `post`, `franchise`,
+`episode`, `user not found`) otherwise.
+
+**Comments** are one flat thread per ThreadSubject, with an optional `parentId` for "replied to
+you".
+
+- `POST /social/comments` `{ id: uuid, subject, body, parentId?: uuid | null }`. **`id` is generated
+  by the client** (a lowercase v4 uuid per draft) and is the upsert key that makes a retry safe. The
+  server checks the id FIRST: an id that already exists and is yours answers **`200`** with the
+  stored comment (no other check, no rate-limit charge — a replay is always cheap and stable); yours
+  but deleted → **`410 {"error":"comment deleted"}`** (drop the pending write); someone else's →
+  `409 id_conflict`. A new comment answers **`201`**. Both carry `{ comment: CommentView }`.
+- Then, in order: a profile with a handle and display name (`409 handle_required`) and the current
+  community rules accepted (`409 terms_required` + `currentVersion`); the subject exists (`404`);
+  for an `ep:` room the gate is open (`409 episode_locked` + `reason: "unwatched" | "unaired"`); the
+  body passes the content filter (`422 content_rejected` + `reason` — every refusal spends one of
+  the hour's `rejected` budget, and once it is spent the refusal answers `429` instead); the parent
+  exists in the SAME subject and is visible (`404 parent not found`); the rate limit (`429`).
+- **Body rules.** The server normalises the text — NFC, CRLF → LF, zero-width and bidi controls
+  removed, trailing spaces before a newline dropped, 3+ newlines collapsed to 2, trimmed — and
+  stores the normalised text. Then: `empty`; `invalid_characters` (C0/C1 controls other than tab and
+  newline); `too_long` over **280 Unicode code points** (count `unicodeScalars`, not UTF-16 units: an
+  emoji with a skin tone is 2); `link` (any URL, `www.`, or bare domain — no links in comments in
+  v1); `blocked_term` (slurs, sexual terms involving minors, self-harm incitement). The raw body may
+  be at most 4000 characters. Normalisation only removes characters, so a client counting its
+  trimmed draft is never refused for length by anything the server strips.
+- `GET /social/comments?subject=…&sort=top|latest&cursor=…&limit=20` (limit 1…50; `top` default)
+  answers a `CommentsPage`. `latest` is `(createdAt desc, id desc)`; `top` is `(likeCount desc,
+  createdAt desc, id desc)`. The cursor is opaque. **`top` pages can repeat or skip a comment when
+  like counts change between pages — dedupe by id.** A malformed cursor is `400`.
+- The list shows what the viewer may see: not deleted, not hidden, the author not blocked by the
+  viewer and not blocking the viewer, and not a comment the viewer reported. `total` counts the
+  same set. `replyTo` names the parent's author only while the parent is visible to the viewer.
+- `DELETE /social/comments/:id` deletes your own comment: its text is erased and a tombstone keeps
+  the id (so a replayed POST answers `410`, never resurrects it); its likes and notifications go.
+  Replies to it stay. Someone else's comment → `404`; already deleted → `204`. It works **even while
+  comments are switched off**: deleting your own content is never switched off. **The tombstone is
+  kept 30 days**, then a daily job removes it with the reports and notifications that point at it
+  (a reply's `parentId` becomes null — its parent was already invisible). A replay of the same
+  uuid after that creates a new comment; clients replay within their session, so this never meets
+  a real retry.
+- `PUT` / `DELETE /social/comments/:id/like` — a like on a visible comment (`404` for a missing,
+  deleted, hidden or blocked-either-way author's comment; an `ep:` comment needs the room open).
+- `POST /social/comments/:id/report` `{ reason, note? }` (`reason`: spam, harassment, hate, sexual,
+  violence, spoiler, other; `note` ≤ 500 code points). One report per (reporter, comment): a repeat
+  is `204` and changes nothing. Your own comment → `409 own_comment`. Only a comment you can see can
+  be reported: a missing or deleted comment, one whose author you blocked or who blocked you, and a
+  comment in an episode room that is not **open** to you (either reason) are `404 comment not found`
+  — a HIDDEN comment can still be reported. A comment is **auto-hidden once
+  `SOCIAL_AUTO_HIDE_REPORTS` (3) reports count**, and the reporter stops seeing it at once. A report
+  counts while it is open and its reporter's account is at least `SOCIAL_REPORTER_MIN_AGE_HOURS`
+  (24) old; the count is recomputed on every report, never incremented, so an erased reporter's
+  report drops out and one person cycling accounts cannot hide a comment single-handed. Every report
+  (a young account's too) reaches the operator's queue (`npm run moderation -- list`) and the
+  server log; the operator is alerted on a comment's first open report and on every auto-hide. The
+  author is told when a comment is hidden, and reporters when their report is decided (see
+  **Moderation notices**).
+
+```ts
+interface PublicUser { id: string; handle: string; displayName: string }   // id = users.id
+interface CommentView {
+  id: string; subject: string; author: PublicUser; body: string; createdAt: number
+  parentId: string | null
+  replyTo: PublicUser | null    // the parent's author, while the parent is visible to you
+  likeCount: number; liked: boolean; replyCount: number; mine: boolean
+}
+interface CommentsPage {
+  subject: string
+  locked: boolean               // episode rooms only: you may not read it; items is then []
+  access: 'open' | 'unwatched' | 'unaired' | null   // null for post subjects
+  total: number                 // visible comments for you (for a locked room: the global count)
+  items: CommentView[]
+  nextCursor: string | null
+}
+```
+
+**Blocks** filter BOTH directions on every list (comments, replies, notifications): you do not see
+someone you blocked, and someone who blocked you does not see you. Like and comment **counts are
+global** (they are not filtered by blocks).
+
+**The episode room** — `GET /social/episodes/:mediaId/:episode`:
+
+```ts
+interface EpisodeRoom {
+  subject: string               // "ep:<mediaId>:<episode>"
+  franchiseId: string; mediaId: number; episode: number
+  access: 'open' | 'unwatched' | 'unaired'
+  commentCount: number          // global visible count ("Mark it watched to join 12 comments")
+  likeCount: number; liked: boolean
+  rating: { count: number; average: number | null; yours: number | null }  // average 0–100, 1 dp;
+                                                                           // null while locked or unrated
+}
+```
+
+`404 episode not found` when the media is unknown or not part of a franchise.
+
+**Status codes** (a client branches on the machine code in `error`, never on the English):
+
+| Status | When | Body |
+|---|---|---|
+| `400` | Schema, parameter, cursor or id-grammar failure (an unknown field included) | `{ "error": "invalid request" }`, or `{ "error": "self_block" }` |
+| `404` | The thing does not exist or is not visible to you — including a blocked-either-way author's comment — and, while comments are off, every comment route but your own delete, plus `PUT /me/blocks`, `PUT /me/profile`, `GET /me/profile/handle` and `POST /me/terms` | `{ "error": "<noun> not found" }` or `{ "error": "comments disabled" }` |
+| `409` | Well-formed, but a precondition is missing | `handle_required`, `terms_required` (+`currentVersion`), `episode_locked` (+`reason`), `id_conflict`, `handle_taken`, `own_comment`, `terms_version_mismatch` (+`currentVersion`) |
+| `410` | A replayed POST for a comment its author deleted | `{ "error": "comment deleted" }` |
+| `422` | Content refused | `{ "error": "content_rejected", "reason": ContentRejection }`, `{ "error": "invalid_handle", "reason" }`, `{ "error": "invalid_display_name", "reason" }` |
+| `429` | Rate limited | `{ "error": "rate_limited", "retryAfter": <seconds> }` + `Retry-After: <seconds>` (an integer ≥ 1) |
+| `403` | Only a suspended account (see **Client failure semantics**) | `{ "error": "account_suspended" }` |
+
+App-logic refusals are never `403`: a client treats a bare `403` as infrastructure.
+
+`ContentRejection` = `empty | too_long | link | blocked_term | invalid_characters`.
+
+**Rate limits** are per user (never per IP), in-process, sliding windows, keyed on the caller's
+**Clerk identity** — not the account row, so deleting the account and signing straight back in does
+not reset them. A denied request writes nothing and is not counted.
+
+| Action | Default limit | Routes |
+|---|---|---|
+| comment | 5 / minute and 60 / hour | `POST /social/comments` (new comments only; a replay is free) |
+| comment, new account | 5 / minute and **10 / hour** | the same, while the account is less than a day old (one log with the row above: the day it ages, its last hour still counts) |
+| rejected | 20 / hour | every `422` from `POST /social/comments` and `PUT /me/profile`; once spent, those refusals answer `429` instead |
+| read | 120 / minute | `GET /me/feed`, `GET /social/comments`, `GET /feed/posts/:id` (together) |
+| toggle | 120 / minute | likes, saves, reminders, hides, ratings, comment likes |
+| report | 20 / hour | `POST /social/comments/:id/report` |
+| block | 30 / hour | `PUT /me/blocks` |
+| profile | 10 / day | `PUT /me/profile`, `POST /me/terms` |
+| lookup | 120 / minute | `GET /me/profile/handle` |
+| export | 3 / hour | `GET /me/export` |
+
+`SOCIAL_RATE_LIMIT_DISABLED=1` switches them all off for local work only: a production process
+(`APP_ENV=production`) with it set refuses to boot.
+
+**`SOCIAL_COMMENTS_ENABLED`** (server env). **The server's default is OFF**: a host whose `.env`
+has no such key — every production `.env` written before this build — keeps comments off, so a
+deploy can never switch public comments on by itself. `.env.example` sets `1`, so a local copy is
+on. Turning them on in production is an explicit step, taken only once the published terms carry
+the UGC clause and the production Clerk instance exists (`docs/beta-release.md`); every boot logs
+`{ event: "social.config", commentsEnabled }`. When off, every `/social/comments*` route answers
+`404 {"error":"comments disabled"}` — except `DELETE /social/comments/:id`, your own delete, which
+always works — `GET /me/feed` says `capabilities.comments: false`, and the social notification kinds
+are not listed. Nothing new about people is collected either: `PUT /me/profile`,
+`GET /me/profile/handle`, `POST /me/terms` and `PUT /me/blocks` answer the same `404`. Likes, saves,
+reminders, hides, ratings, `GET /me/profile`, reading and lifting blocks (`GET`/`DELETE /me/blocks`),
+`GET /me/export` and `GET /social/episodes/…` keep working.
+
+## Episode discussions (spoiler gate)
+
+An episode room `ep:<mediaId>:<n>` is **open** to a viewer only when BOTH hold:
+
+1. **the viewer has watched it**: their progress on `mediaId` is ≥ `n`, and
+2. **episode `n` has aired by now**.
+
+Otherwise it is `unaired` (checked first) or `unwatched`. A locked room still answers
+`GET /social/comments` — `locked: true`, `items: []` and the room's global `total`, which drives
+"Mark it watched to join N comments" — and refuses posts, likes and ratings with
+`409 episode_locked` + `reason`. On `unwatched`, a client first replays the part's pending progress
+write, then retries once.
+
+**Aired by now** is computed from the part's airing slots, the same rule that clamps progress:
+
+- A timed slot (AniList) has aired once its instant has passed. A slot that has struck counts even
+  before the hourly sync advances `nextAiringEpisode`.
+- A **date-only** slot (TMDB) counts from **10:00 UTC on its UTC date** — the moment the earliest
+  time zone on Earth (UTC+14) reaches the day after it. The client counts a date-only episode from
+  the day after its date in the device's local day, which is never earlier, so **the server is never
+  stricter than the client**: a room the app shows unlocked, the server accepts.
+- A NOT_YET_RELEASED part has aired nothing. Only a FINISHED part counts as its size.
+- A part whose episodes are still (or were only partly) coming — RELEASING, HIATUS, CANCELLED —
+  counts from **evidence only**: the episode before its next slot, a slot that has struck, and any
+  dated episode that has aired. Never the catalogue's episode total, which counts announced episodes
+  as aired (AniList episode lists are undated, so a schedule gap would open every announced room).
+- With **no evidence at all** (no slot and no dated episode) the count is unknown and the room is
+  **`unaired`, whatever the progress** — it fails closed, and opens once the catalogue has a slot or
+  dates, or the part finishes. The client treats a part with no airing slot, no `nextAiringAt` and no
+  dated airing the same way.
+
+`PUT /me/progress` shares the rule: a RELEASING part cannot be marked past its aired count (a mark
+already stored above it is kept, never pulled down). A `reset` re-locks rooms for the resetting
+viewer; comments they already wrote stay visible to others, and Activity stops printing the text of
+replies in rooms that are no longer open to them.
+
+## Identity
+
+The public face of an account is `PublicUser` — `{ id, handle, displayName }` — and nothing else.
+**The email and the Clerk id are never public**, and the Clerk display name is never published as-is:
+the user confirms a first name.
+
+```ts
+interface ProfileResponse {
+  userId: string
+  handle: string | null
+  displayName: string | null
+  termsAcceptedAt: number | null
+  termsVersion: string | null
+  currentTermsVersion: string   // SOCIAL_TERMS_VERSION
+  canComment: boolean           // handle && displayName && termsVersion === current && comments enabled
+}
+interface HandleAvailability { handle: string; available: boolean; reason: null | 'taken' | HandleRejection }
+```
+
+- **Handle** (picked at the first reply; `PUT /me/profile { handle, displayName }`): trimmed, one
+  leading `@` dropped, lowercased; 3–20 characters of `[a-z0-9_.]`; no leading, trailing or doubled
+  `.`; at least one letter; not reserved (admin, moderator, official, support, previously, anitrack,
+  and the rest of the server's list, plus the prefixes `previously`, `anitrack`, `official`, `admin`,
+  `support`, `mod.`, `mod_`); no blocked term. A handle is ONE token, so a blocked term of four or
+  more letters is refused ANYWHERE in it with `.`/`_` removed ("xslurx", "slur123"), after a short
+  reviewed list of ordinary words that merely contain one ("grape", "peacock", "analog") is cut out;
+  shorter terms are refused only as a whole word. Unique: a taken handle is `409 handle_taken`.
+  `HandleRejection` = `length | characters | dots | no_letter | reserved | blocked_term`.
+- **Display name**: normalised to one line, 1–40 code points, no control characters, no `@` (keeps
+  emails out), no link, at least one letter, no blocked term (names also refuse general profanity,
+  which comments allow), and not **reserved**: no word of the name (a plural and leet spellings
+  too), nor the whole name with its separators removed, may be the app, its staff or a system voice
+  (previously, anitrack, admin, administrator, moderator, mod, official, support, staff, team,
+  system, security) or a brand whose news or data the app carries (anilist, tmdb, justwatch,
+  myanimelist, crunchyroll, funimation, hidive, netflix, aniplex) — "Previously Support" and
+  "Crunchyroll" would read as the official voice beside every reply. `DisplayNameRejection` =
+  `empty | too_long | invalid_characters | link | blocked_term | no_letter | at_sign | reserved`
+  (decode leniently: a reason the client does not know reads "That name can't be used").
+- `GET /me/profile/handle?handle=` checks availability as you type.
+- **Community rules come first.** Before a first comment the user accepts the current rules:
+  `POST /me/terms { version }` stamps the time and version; a stale version is
+  `409 terms_version_mismatch` + `currentVersion`. **No identity is collected before that:**
+  `PUT /me/profile` and `GET /me/profile/handle` answer `409 terms_required` + `currentVersion`
+  until the current version is accepted (so a client's name editor sends the user through the rules
+  first). When the rules change, posting answers `409 terms_required` + `currentVersion` until the
+  new version is accepted.
+- **Comments off.** While `SOCIAL_COMMENTS_ENABLED` is off, `PUT /me/profile`,
+  `GET /me/profile/handle` and `POST /me/terms` answer `404 {"error":"comments disabled"}`: nothing
+  would show a name. `GET /me/profile` and `GET /me/export` always answer.
+- **Operator reset.** `npm run moderation -- reset-identity <clerkId|@handle>` clears an offensive
+  handle and display name short of a ban: both become `null`, `canComment` turns `false`, the next
+  reply answers `409 handle_required` so the user picks again, and until they do their comments are
+  unlisted (a thread lists only authors with a handle).
+- Deleting the account frees the handle.
+
+## Discover: genres
+
+A canonical genre vocabulary over both catalogues (an AniList genre and its TMDB counterpart are one
+key; TMDB's combined genres such as "Action & Adventure" and "Sci-Fi & Fantasy" feed both halves).
+Adult titles are never listed, and Ecchi, Hentai, News, Soap and Talk are not genres here.
+
+- `GET /discover/genres?source=anilist|tmdb` (absent = both) → `DiscoverGenresResponse`: every genre
+  with at least 3 qualifying franchises, most titles first (then by key). `posters` are up to four
+  portrait URLs of the genre's top trending titles, for the tile's collage. Cached ~30 minutes.
+- `GET /discover/genres/:key?source=&limit=24&cursor=` (limit 1…50) → `DiscoverGenrePage`: the
+  genre's franchises ranked by trending, then popularity. **Owned titles are marked, not excluded**:
+  `FranchiseSummary.status` is set for a show in the viewer's library. The cursor is opaque; the
+  ranking moves hourly, so dedupe by id across pages. Unknown key → `404 genre not found`.
+
+```ts
+interface DiscoverGenre { key: string; name: string; count: number; posters: string[] }
+interface DiscoverGenresResponse { source: 'anilist' | 'tmdb' | null; genres: DiscoverGenre[]; generatedAt: number }
+interface DiscoverGenrePage { genre: DiscoverGenre; franchises: FranchiseSummary[]; nextCursor: string | null }
+```
+
+Keys: `action`, `adventure`, `comedy`, `drama`, `fantasy`, `sci-fi`, `mystery`, `romance`, `horror`,
+`thriller`, `psychological`, `supernatural`, `slice-of-life`, `sports`, `mecha`, `music`,
+`mahou-shoujo`, `crime`, `documentary`, `family`, `reality`, `war-politics`, `western`, `animation`.
+Genre names are catalogue data (English), as the franchise's own `genres` carry them.
 
 ## Client-side derivation (ported from the legacy React app's `format.ts`/`App.tsx`)
 
@@ -591,9 +1330,12 @@ The client computes views exactly like the old app, but per **releasing part**:
 - **`nextAiringAt` in the past is stale, not a schedule.** Sources don't advance the slot the
   instant an episode airs, so clients treat a `nextAiringAt` whose *local day* is already behind
   today as absent (same-day is kept) rather than rendering it as an upcoming airing.
-- **Today / "Out now"** = releasing parts whose `lastAiredAt > prevOpenedAt`.
+- **Today / "Out now"** = releasing parts whose `lastAiredAt > prevOpenedAt`. `prevOpenedAt` is the
+  **previous visit**: the answer of this session's `POST /me/opened` once it has landed (a library or
+  feed response never moves it after that), and the response's own `prevOpenedAt` only until then.
+  Never `max()` the two — that re-introduced the echo of the stamp the session just wrote.
 - **Airing soon** = releasing parts with `nextAiringAt` within 48h.
-- **Schedule** = releasing parts bucketed into the IST Mon–Sun week by `nextAiringAt`.
+- **Schedule** = the dated airings of tracked parts, bucketed by the device's local day.
 - **Library buckets** = Behind / Caught up (releasing, behind 0) / Finished / Plan, computed
   from the franchise's releasing part + subscription status.
 - Render franchise chronology by `watchOrder`; use `relationship`/`optional` for honest side-story
@@ -602,8 +1344,10 @@ The client computes views exactly like the old app, but per **releasing part**:
   member atomically and leaves a `NOT_YET_RELEASED` part at zero. The legacy per-part endpoint
   remains valid for a single +/- control.
 
-All time math is **IST (Asia/Kolkata)** — port `istParts`, `istDayKey`, `istMondayCol`,
-`fmtCountdown`, `fmtAgo`, `fmtDay`, `fmtTime`, `greetingFor` to Swift.
+Time math is in the **device's time zone** (the legacy app's IST-only helpers are retired). The
+anchor rules live in iOS `Util/TemporalCopy.swift` and `FranchisePart.airedByNow`: a timed slot has
+aired once `at <= now`; a date-only (TMDB) slot counts from the day after its UTC date in the local
+day and never prints a clock; one temporal expression per item.
 
 ## Auth
 
@@ -632,8 +1376,25 @@ Deploy test — `npm run auth:smoke -- https://<host>` asserts `GET /health` →
 ### Client failure semantics
 
 `401` means the session is gone (the client refreshes its token once, retries, and only then signs
-out). `403` — including a Cloudflare/WAF HTML challenge — is an **infrastructure** failure: the
-session is kept and the surface shows a stale/error frame. Any response whose body is HTML is
+out). That includes `401 {"error":"account deleted"}`, which every authenticated route answers for
+15 minutes after `DELETE /me` (see **Account deletion**): a queued write that meets it is dropped,
+never retried. `403` — including a Cloudflare/WAF HTML challenge — is an **infrastructure** failure: the
+session is kept and the surface shows a stale/error frame, **with one exception: a `403` whose JSON
+body is `{"error":"account_suspended"}` is a suspension**, not infrastructure. Read the body before
+classifying. A suspended account gets it from every authenticated route except `DELETE /me` and
+`GET /me/export`, which keep answering so the user can still delete or download their data; the
+app shows a suspended state (sign out or delete). A ban takes effect within
+`SOCIAL_BAN_CACHE_SECONDS` (60 s) of the operator's command. If the ban list cannot be read at all
+(the database is down at boot, or the server restarted before `db:migrate`), the check fails OPEN —
+requests are served as not suspended, `moderation.ban_cache_unavailable` is logged and the next
+request retries — rather than answering every authenticated route with a `500`.
+
+`409`, `410` and `422` from the social routes are **final** answers about the request, never
+retried: branch on the machine code (`handle_required` → the handle picker, `terms_required` → the
+rules sheet then one retry, `episode_locked` with `reason: "unwatched"` → replay the part's pending
+progress then one retry, `410` → drop the pending comment, `content_rejected` → say why from
+`reason`). A `429` from a social route carries `retryAfter` (and `Retry-After`); the comment limits
+are per hour, so a client stops retrying after the 8 s cap below and tells the user, never loops. Any response whose body is HTML is
 treated the same way at any status, including 2xx (captive portals).
 
 Two things that look like `401` but are not. A client that cannot **mint** a token (an expired

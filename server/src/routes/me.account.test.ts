@@ -20,7 +20,18 @@ import * as schema from '../db/schema.js'
 const recorded = vi.hoisted(() => ({
   deletes: [] as { table: string; where: unknown }[],
   transactions: 0,
-})) as { deletes: { table: string; where: unknown }[]; transactions: number }
+  /** 'commit', then the post-commit steps, in the order they ran. */
+  events: [] as string[],
+  /** Make the erasure transaction fail after its deletes (a rollback). */
+  failTx: false,
+  clerkOutcome: { outcome: 'deleted' } as { outcome: string; error?: string },
+})) as {
+  deletes: { table: string; where: unknown }[]
+  transactions: number
+  events: string[]
+  failTx: boolean
+  clerkOutcome: { outcome: string; error?: string }
+}
 
 vi.mock('../db/index.js', () => {
   const tx = {
@@ -40,7 +51,10 @@ vi.mock('../db/index.js', () => {
       ...tx,
       async transaction<T>(fn: (t: typeof tx) => Promise<T>): Promise<T> {
         recorded.transactions += 1
-        return fn(tx)
+        const result = await fn(tx)
+        if (recorded.failTx) throw new Error('could not serialize access')
+        recorded.events.push('commit')
+        return result
       },
       // `GET /me/library` is registered in the same plugin; it is never called here, but the
       // module has to expose enough shape for the import to succeed.
@@ -52,8 +66,15 @@ vi.mock('../db/index.js', () => {
 })
 
 vi.mock('../services/animeVideoFallback.js', () => ({ enqueueAnimeVideoFallback: vi.fn() }))
+vi.mock('../services/erasure.js', () => ({
+  recordErasure: (clerkId: string) => recorded.events.push(`recordErasure:${clerkId}`),
+  eraseClerkIdentity: async (clerkId: string) => {
+    recorded.events.push(`clerk:${clerkId}`)
+    return recorded.clerkOutcome
+  },
+}))
 
-const { meRoutes, accountOwnedTableNames } = await import('./me.js')
+const { meRoutes, accountErasurePlan, accountOwnedTableNames } = await import('./me.js')
 
 const CALLER = '11111111-1111-1111-1111-111111111111'
 
@@ -72,6 +93,9 @@ async function appWithUser(userId: string | null = CALLER) {
 beforeEach(() => {
   recorded.deletes.length = 0
   recorded.transactions = 0
+  recorded.events.length = 0
+  recorded.failTx = false
+  recorded.clerkOutcome = { outcome: 'deleted' }
 })
 
 describe('DELETE /me — the account is erased, not deactivated', () => {
@@ -82,7 +106,11 @@ describe('DELETE /me — the account is erased, not deactivated', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual({ deleted: true })
     expect(recorded.transactions).toBe(1)
-    expect(recorded.deletes.map((d) => d.table)).toEqual([...accountOwnedTableNames, 'users'])
+    // Exactly the plan, in the plan's order, then the user row.
+    expect(recorded.deletes.map((d) => d.table)).toEqual([
+      ...accountErasurePlan.map((s) => getTableName(s.table)),
+      'users',
+    ])
     // Every delete is scoped — a missing `where` would erase the table for every account.
     expect(recorded.deletes.every((d) => d.where !== undefined)).toBe(true)
     await app.close()
@@ -92,6 +120,33 @@ describe('DELETE /me — the account is erased, not deactivated', () => {
     const app = await appWithUser()
     await app.inject({ method: 'DELETE', url: '/me' })
     expect(recorded.deletes.at(-1)?.table).toBe('users')
+    await app.close()
+  })
+
+  it('holds the Clerk id and erases the Clerk identity only AFTER the transaction commits', async () => {
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'DELETE', url: '/me' })
+    expect(res.statusCode).toBe(200)
+    expect(recorded.events).toEqual(['commit', 'recordErasure:user_test', 'clerk:user_test'])
+    await app.close()
+  })
+
+  it('a rolled-back erasure holds nothing and never calls Clerk', async () => {
+    recorded.failTx = true
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'DELETE', url: '/me' })
+    expect(res.statusCode).toBe(500)
+    expect(recorded.events).toEqual([])
+    await app.close()
+  })
+
+  it('a Clerk failure does not undo the erasure: still { deleted: true }', async () => {
+    recorded.clerkOutcome = { outcome: 'failed', error: 'timed out' }
+    const app = await appWithUser()
+    const res = await app.inject({ method: 'DELETE', url: '/me' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ deleted: true })
+    expect(recorded.events).toEqual(['commit', 'recordErasure:user_test', 'clerk:user_test'])
     await app.close()
   })
 
@@ -113,12 +168,45 @@ describe('DELETE /me — the account is erased, not deactivated', () => {
 })
 
 describe('the schema keeps the deletion complete', () => {
-  /** Every declared table that stores rows belonging to one user. */
   // `Object.values` over the schema module yields tables AND `relations()` helpers; the `unknown[]`
   // step is what lets the `is(v, PgTable)` guard narrow that heterogeneous union.
-  const userOwned = (Object.values(schema) as unknown[])
-    .filter((v): v is PgTable => is(v, PgTable))
-    .filter((t) => 'userId' in getTableColumns(t))
+  const tables = (Object.values(schema) as unknown[]).filter((v): v is PgTable => is(v, PgTable))
+  /** Every declared table that stores rows belonging to one user. */
+  const userOwned = tables.filter((t) => 'userId' in getTableColumns(t))
+
+  /** Every foreign key in the schema: its table and first column, and what it points at. */
+  const allForeignKeys = tables.flatMap((table) =>
+    getTableConfig(table)
+      .foreignKeys.map((fk) => ({ fk, ref: fk.reference() }))
+      .map(({ fk, ref }) => ({
+        table: getTableName(table),
+        column: ref.columns[0]!.name,
+        foreignTable: getTableName(ref.foreignTable),
+        foreignColumn: ref.foreignColumns[0]!.name,
+        onDelete: fk.onDelete,
+      })),
+  )
+
+  /** Every foreign key in the schema pointing at `target`. */
+  const foreignKeysTo = (target: string) => allForeignKeys.filter((fk) => fk.foreignTable === target)
+
+  /** The plan step deleting `table` by `column` — an owner step, or with `via`, one read through that parent table. */
+  const planIndex = (table: string, column: string, via?: string) =>
+    accountErasurePlan.findIndex(
+      (s) =>
+        getTableName(s.table) === table &&
+        s.column.name === column &&
+        (s.via ? getTableName(s.via.table) : undefined) === via,
+    )
+
+  /** `users` and every table the plan deletes from: a row in any of them is (about) the user. */
+  const userTables = new Set(['users', ...accountOwnedTableNames])
+
+  /**
+   * Tables that keep a user-identifying column on purpose, disclosed in the privacy policy. The ban
+   * list is keyed on the Clerk id with no foreign key, so it survives DELETE /me.
+   */
+  const RETAINED_BY_DESIGN = ['moderation_bans']
 
   it('lists every user-owned table in the route, so a new one cannot be forgotten', () => {
     expect(new Set(userOwned.map((t) => getTableName(t)))).toEqual(new Set(accountOwnedTableNames))
@@ -132,5 +220,115 @@ describe('the schema keeps the deletion complete', () => {
       expect(fk, `${getTableName(table)} has no foreign key to users`).toBeDefined()
       expect(getTableConfig(table).foreignKeys.some((f) => f.onDelete === 'cascade')).toBe(true)
     }
+  })
+
+  it('erases every foreign key to users, whatever the column is called', () => {
+    const fks = foreignKeysTo('users')
+    // Sanity: the renamed columns this exists to catch are really in the schema.
+    expect(fks.map((f) => `${f.table}.${f.column}`)).toEqual(
+      expect.arrayContaining(['notifications.actor_user_id', 'blocks.blocked_user_id']),
+    )
+    for (const fk of fks) {
+      expect(planIndex(fk.table, fk.column), `no erasure step for ${fk.table}.${fk.column}`).toBeGreaterThanOrEqual(0)
+      expect(fk.onDelete, `${fk.table}.${fk.column} must cascade from users`).toBe('cascade')
+    }
+  })
+
+  it("erases rows that hang off the user's comments, and keeps other people's replies", () => {
+    const fks = foreignKeysTo('comments')
+    const commentsOwner = planIndex('comments', 'user_id')
+    expect(commentsOwner).toBeGreaterThanOrEqual(0)
+    // Sanity: the reply self-reference is among them.
+    expect(fks.some((f) => f.table === 'comments' && f.column === 'parent_id')).toBe(true)
+    for (const fk of fks) {
+      if (fk.table === 'comments' && fk.column === 'parent_id') {
+        // A reply OUTLIVES its parent: it becomes a top-level comment of the same thread.
+        expect(fk.onDelete).toBe('set null')
+        expect(accountErasurePlan.some((s) => getTableName(s.table) === 'comments' && s.column.name === 'parent_id')).toBe(false)
+        continue
+      }
+      const step = planIndex(fk.table, fk.column, 'comments')
+      expect(step, `no via-comments erasure step for ${fk.table}.${fk.column}`).toBeGreaterThanOrEqual(0)
+      expect(step, `${fk.table}.${fk.column} must be erased before the comments`).toBeLessThan(commentsOwner)
+    }
+  })
+
+  // The general form of the two tests above, so a table keyed on ANOTHER user-owned table (a
+  // `mentions.profile_user_id → user_profiles`, a `report_notes → reports`) or a second-level child
+  // of any plan table cannot slip past them.
+  it('erases every foreign key into users or any plan table, at any depth', () => {
+    const fks = allForeignKeys.filter((fk) => userTables.has(fk.foreignTable))
+    // Sanity: second-level children are really among them.
+    expect(fks.map((f) => `${f.table}.${f.column}`)).toEqual(
+      expect.arrayContaining(['comment_likes.comment_id', 'reports.comment_id', 'notifications.comment_id']),
+    )
+    for (const fk of fks) {
+      const label = `${fk.table}.${fk.column} → ${fk.foreignTable}.${fk.foreignColumn}`
+      // A row that outlives its parent (a reply becomes a top-level comment) needs no step.
+      if (fk.onDelete === 'set null') continue
+      // A parent removed by ANY step (the reports ABOUT the user's comments go with the comments)
+      // must take this row with it, or the erasure fails on the foreign key.
+      expect(fk.onDelete, `${label} must cascade`).toBe('cascade')
+      // The column holds a user id (it points at users, or at the column a plan table's owner step
+      // deletes by): an owner step erases it directly.
+      const holdsUserId = fk.foreignTable === 'users' || planIndex(fk.foreignTable, fk.foreignColumn) >= 0
+      if (holdsUserId && planIndex(fk.table, fk.column) >= 0) continue
+      // Otherwise it is read through its parent, BEFORE any step deletes the parent's rows (after,
+      // the subquery finds nothing).
+      const via = planIndex(fk.table, fk.column, fk.foreignTable)
+      expect(via, `no erasure step for ${label}`).toBeGreaterThanOrEqual(0)
+      expect(accountErasurePlan[via]!.via!.key.name, `${label}: the step reads another column`).toBe(fk.foreignColumn)
+      accountErasurePlan.forEach((s, i) => {
+        if (getTableName(s.table) === fk.foreignTable) {
+          expect(via, `${label} must be erased before ${fk.foreignTable} (step ${i})`).toBeLessThan(i)
+        }
+      })
+    }
+  })
+
+  it("reads every second-level step through the parent's own owner step", () => {
+    const viaSteps = accountErasurePlan.filter((s) => s.via)
+    expect(viaSteps.length).toBeGreaterThan(0)
+    for (const step of viaSteps) {
+      const parent = getTableName(step.via!.table)
+      expect(getTableName(step.via!.key.table)).toBe(parent)
+      expect(getTableName(step.via!.owner.table)).toBe(parent)
+      expect(planIndex(parent, step.via!.owner.name), `${parent}.${step.via!.owner.name} has no owner step`).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('erases every column named like a user id, foreign key or not, unless it is a disclosed retention', () => {
+    // A user id kept in a plain text/uuid column has no foreign key for the tests above to follow.
+    // (One inside a jsonb value is out of reach of any schema scan: never store one there.)
+    const looksLikeUser = /(^|_)user_id$|clerk_id/
+    const found: string[] = []
+    for (const table of tables) {
+      const name = getTableName(table)
+      if (name === 'users') continue
+      for (const column of Object.values(getTableColumns(table))) {
+        if (!looksLikeUser.test(column.name)) continue
+        found.push(`${name}.${column.name}`)
+        if (RETAINED_BY_DESIGN.includes(name)) continue
+        expect(planIndex(name, column.name), `${name}.${column.name} names a user but no erasure step deletes by it`).toBeGreaterThanOrEqual(0)
+      }
+    }
+    // Sanity: the scan sees the renamed columns and the retained one.
+    expect(found).toEqual(
+      expect.arrayContaining(['notifications.actor_user_id', 'blocks.blocked_user_id', 'moderation_bans.clerk_id']),
+    )
+    for (const retained of RETAINED_BY_DESIGN) expect(accountOwnedTableNames).not.toContain(retained)
+  })
+
+  it('the ban list is the one disclosed exception', () => {
+    const withClerkId = tables
+      .filter((t) => getTableName(t) !== 'users')
+      .filter((t) => Object.values(getTableColumns(t)).some((c) => c.name === 'clerk_id'))
+      .map((t) => getTableName(t))
+    expect(withClerkId).toEqual(['moderation_bans'])
+    const bans = tables.find((t) => getTableName(t) === 'moderation_bans')!
+    expect(
+      getTableConfig(bans).foreignKeys.some((fk) => getTableName(fk.reference().foreignTable) === 'users'),
+    ).toBe(false)
+    expect(accountOwnedTableNames).not.toContain('moderation_bans')
   })
 })
