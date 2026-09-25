@@ -32,19 +32,19 @@ struct CommunityRulesSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text(Copy.Social.rulesIntro)
-                    .type(ThemeType.feedBodyLarge)
+                    .type(ThemeType.feedLightLarge)
                     .foregroundStyle(ThemeColor.feedText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.bottom, ThemeSpace.x4)
                 Rectangle().fill(ThemeColor.feedSeparator).frame(height: FeedMetrics.hairline)
                 ForEach(Array(Copy.Social.rulesItems.enumerated()), id: \.offset) { index, rule in
                     HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x3) {
-                        Image(systemName: "\(index + 1).circle.fill")
-                            .font(ThemeType.feedBody.font)
+                        AppGlyph(systemName: "\(index + 1).circle.fill")
+                            .font(ThemeType.feedMeta.font)
                             .foregroundStyle(ThemeColor.feedSecondary)
                             .accessibilityHidden(true)
                         Text(rule)
-                            .type(ThemeType.feedBody)
+                            .type(ThemeType.feedLight)
                             .foregroundStyle(ThemeColor.feedText)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,7 +60,7 @@ struct CommunityRulesSheet: View {
                     } label: {
                         HStack(spacing: ThemeSpace.x1) {
                             Text(Copy.Social.rulesReadTerms)
-                            Image(systemName: "arrow.up.right").accessibilityHidden(true)
+                            AppGlyph(systemName: "arrow.up.right").accessibilityHidden(true)
                         }
                     }
                     .buttonStyle(InlineLinkButtonStyle())
@@ -79,7 +79,7 @@ struct CommunityRulesSheet: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if mode == .accept { acceptBar }
         }
-        .navigationTitle(Copy.Social.rulesTitle)
+        .brandNavigationTitle(Copy.Social.rulesTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 

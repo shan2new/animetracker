@@ -17,7 +17,7 @@ enum FeedStage {
 
 // X's media viewer (round 4). A post's picture zooms out of the feed onto a black stage (the
 // system's zoom transition, so a swipe down carries it back into the post it came from); pinch or
-// double-tap to look closer; one tap clears the chrome; the post's own line and its action bar sit
+// double-tap to look closer; one tap clears the chrome; the post's own words and its action bar sit
 // along the foot in white, as X's do. Dragging the picture away thins the black and steps the
 // chrome aside; let go far enough and it goes home.
 
@@ -90,7 +90,9 @@ struct FeedMediaViewer: View {
                     // for …" are drawn here, over the foot, where the reader is. The spacer takes
                     // its height — the foot does not move.
                     CoverLane()
-                    foot
+                    // First claim on the height: a stack offers its flexible children equal shares,
+                    // and a post's whole words would otherwise stop at half the screen.
+                    foot.layoutPriority(1)
                 }
                 .opacity(1 - away * 1.6)
                 .transition(.opacity)
@@ -114,7 +116,7 @@ struct FeedMediaViewer: View {
     private var top: some View {
         HStack {
             Button { dismiss() } label: {
-                Image(systemName: "xmark")
+                AppGlyph(systemName: "xmark")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(FeedStage.ink)
                     .frame(width: Self.closeGlyph, height: Self.closeGlyph)
@@ -144,14 +146,17 @@ struct FeedMediaViewer: View {
                     .lineLimit(1)
                 if model.showsOfficialMark { ConfirmedMark(size: 15) }
                 Text(Copy.Feed.afterDot(model.stamp))
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(FeedStage.ink.opacity(0.6))
                     .fixedSize()
             }
-            Text(model.sentence)
+            // The post's own words, whole (`FeedPostModel.body`), as X's viewer carries them — not a
+            // three-line clip. Not `fixedSize`: only a foot taller than the screen (the largest
+            // text sizes) ends its words early, rather than pushing the close button off the top.
+            Text(model.body)
                 .type(ThemeType.feedNote)
                 .foregroundStyle(FeedStage.ink.opacity(0.92))
-                .lineLimit(3)
+                .readingLines(FeedPostLayout.lineHeight)
             PostActionBar(model: model, onDark: true, onComment: { dismiss(); onComment() })
                 .padding(.top, ThemeSpace.x0_5)
             // Remind while notifications are not allowed: the primer the feed row would draw — it

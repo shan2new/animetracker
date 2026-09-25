@@ -3,7 +3,7 @@ import UIKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// The brand's identity at launch: the lit ribbon, the name beneath it, the one light behind them.
+/// The brand's identity at launch: the lit board ("P."), the name beneath it, the one light behind them.
 ///
 /// The launch film lands on it and the sign-in gate is drawn around it, so there is ONE geometry and
 /// one set of views for both. A signed-out launch then hands the mark to the gate without a seam:
@@ -12,8 +12,10 @@ import UniformTypeIdentifiers
 /// (25 Sep, on the SE and the Pro Max). The film lands on pictures of these same views
 /// (`LaunchLockup.images`), so the match is by construction, not by measurement.
 enum LaunchLockup {
-    static let markWidth: CGFloat = 56
-    static var markHeight: CGFloat { markWidth * MarkGeometry.aspect }
+    /// The board's width (the axle pins overhang it; `LaunchLockup.markBleed` makes room). The
+    /// launch flips THIS board (`SplashFlapFilm`), so the film and the gate share the frame.
+    static let markWidth: CGFloat = 120
+    static var markHeight: CGFloat { markWidth * FlapGeometry.aspect }
     /// From the mark's foot to the top of the name's line.
     static let nameGap: CGFloat = ThemeSpace.x5
     /// The mark's centre, as a share of the screen's height. Signed out, the identity stands on the
@@ -39,7 +41,7 @@ enum LaunchLockup {
 
     // MARK: The views
 
-    /// The mark as the gate draws it: the icon's ribbon with its material at scale.
+    /// The mark as the gate draws it: the icon's board with its material at scale.
     static var mark: some View { PreviouslyMark(width: markWidth, lit: true) }
 
     /// The name, in the brand's own weight (SemiBold, the wordmark's), at display size.
@@ -142,7 +144,7 @@ enum LaunchLockup {
     // MARK: The cache
 
     /// Bump when any of the views above changes, so no launch lands on an old picture.
-    private static let design = "v3"
+    private static let design = "v4-flap"
 
     private static func cacheDirectory(scale: CGFloat, typeSize: DynamicTypeSize) -> URL? {
         guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }

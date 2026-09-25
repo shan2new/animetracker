@@ -135,12 +135,11 @@ struct LibraryView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             .previouslyRefreshable { await appModel.reload() }
         }
-        // BOTTOM only for ours; the TOP is Today's flush bar.
-        .scrollEdgeChromeBody(top: false, bottom: true)
+        // The TOP is Today's flush bar; the bottom is the app's (`AppTabBar`).
         .flushTopBar(ThemeMetrics.inlineBarBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
-        .navigationTitle(Copy.Library.title)
+        .brandNavigationTitle(Copy.Library.title)
         // Inline on every root — Schedule's model. A large title collapses on the first scroll and
         // moves the top safe area ~50 pt mid-flight; an inline one holds still.
         .navigationBarTitleDisplayMode(.inline)
@@ -154,7 +153,7 @@ struct LibraryView: View {
                     // read as a fact, and it is the only door to the unfiltered list).
                     HStack(spacing: 4) {
                         Text(Copy.titles(appModel.library.count))
-                        Image(systemName: "chevron.forward")
+                        AppGlyph(systemName: "chevron.forward")
                             .font(.system(size: 12, weight: .semibold))
                     }
                 }
@@ -179,6 +178,7 @@ struct LibraryView: View {
                                                 heroItems: appModel.watchingShelf.filter { $0.resumePart != nil }),
                            onOpenDetail: onOpenDetail, onAddShow: onAddShow)
                 .perfScreen("AllTitles")
+                .tabBarReserve()
         }
         .onAppear {
             #if DEBUG
@@ -840,7 +840,6 @@ struct LibraryAllView: View {
         }
         // Flat, as the root and Today are (25 Sep, `flushTopBar`).
         .background(ThemeColor.canvas.ignoresSafeArea())
-        .scrollEdgeChromeBody(top: false, bottom: true)
         .flushTopBar(searchChromeBottom)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
@@ -851,7 +850,7 @@ struct LibraryAllView: View {
         // artwork, and a tap near a poster's right edge could be swallowed by the rail's gesture.
         .environment(\.listTrailingInset, rail ? LibraryAllView.railLane : 0)
         .overlay(alignment: .trailing) { if rail { indexRail(sections) } }
-        .navigationTitle(Copy.Heading.allTitles)
+        .brandNavigationTitle(Copy.Heading.allTitles)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .searchable(text: $query, isPresented: $searchPresented,
@@ -867,7 +866,7 @@ struct LibraryAllView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showArrange = true } label: {
-                    Image(systemName: "line.3.horizontal.decrease")
+                    AppGlyph(systemName: "line.3.horizontal.decrease")
                 }
                 // Accent is selection here, and only here: an idle filter control is not the
                 // screen's primary action and has no business being the loudest thing on it.
@@ -1537,7 +1536,7 @@ private struct ArrangeSheet: View {
                     .lineLimit(1)
                 // The pop-up glyph, not `chevron.forward`: this row opens a menu in place, it does
                 // not push a screen, and iOS has one symbol for each.
-                Image(systemName: "chevron.up.chevron.down")
+                AppGlyph(systemName: "chevron.up.chevron.down")
                     .font(.system(size: ArrangeMetrics.popupGlyphSize, weight: .semibold))
                     .foregroundStyle(ThemeColor.textDisabled)
             }

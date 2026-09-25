@@ -2,7 +2,7 @@ import Foundation
 
 // The Today feed's view model and its one row rule (spec §1.7). Everything a post row draws is
 // computed HERE, once per memo key (`AppModel.feedRows`), never in a body: the headline, the
-// sentence, the stamp, the art, the share text. The composer is pure — no singleton reads, no
+// sentence, the post's whole text (`body`), the stamp, the art, the share text. The composer is pure — no singleton reads, no
 // clock of its own — so `FeedRegression` can hold it to its rules with JSON fixtures.
 //
 // Also here: the model layer's small supporting types (spec §1.6.1), so the stored properties in
@@ -117,9 +117,22 @@ struct FeedPostModel: Identifiable, Equatable, Sendable {
     let isOwned: Bool
     /// `franchise.displayTitle`.
     let showName: String
+    /// The name line's shorter spelling when the whole will not fit beside the installment and the
+    /// time: the title's identity half ("Demon Slayer" of "Demon Slayer: Kimetsu no Yaiba",
+    /// `shelfShortened(fitting:)`); `showName` itself when the title has no such half.
+    let shortName: String
     let headline: String
     /// The post's one line.
     let sentence: String
+    /// What the post SAYS, wherever it is read — the timeline, the post page, the picture viewer,
+    /// the composer's quote: the sentence, then the research's note as its next paragraph. ONE
+    /// text, drawn whole, as an X post is. A rumour's is the sentence alone: its note is its
+    /// Community Note (`RumourNote`).
+    let body: String
+    /// X's timeline cut of `body` when it runs past 280 characters — to the last word inside them,
+    /// then "…", and the row ends on "Show more" (`FeedComposer.timelineCut`); nil when the body is
+    /// short enough to draw whole. The post page always draws `body`.
+    let clippedBody: String?
     /// "2h", "3d", "12 Sep".
     let stamp: String
     /// "Premieres tomorrow" when the post carries a premiere still to come (nil once its day has
@@ -142,7 +155,8 @@ struct FeedPostModel: Identifiable, Equatable, Sendable {
     /// What an `.equatable()` row draws: the words, the picture and the name — a library copy or a
     /// detail graft that changes a post's art or `displayTitle` must redraw the row.
     static func == (a: Self, b: Self) -> Bool {
-        a.id == b.id && a.stamp == b.stamp && a.sentence == b.sentence && a.isOwned == b.isOwned
+        a.id == b.id && a.stamp == b.stamp && a.sentence == b.sentence && a.body == b.body
+            && a.isOwned == b.isOwned
             && a.fresh == b.fresh && a.premiereLine == b.premiereLine
             && a.media == b.media && a.showName == b.showName
             && a.showsOfficialMark == b.showsOfficialMark && a.readOn?.url == b.readOn?.url
@@ -392,18 +406,53 @@ enum FeedComposer {
             media = .art(wideArt(part: post.part, show: show))
         }
 
+        // The research's note is the post's second paragraph (the timeline used to draw the
+        // sentence alone and lose it) — except on a rumour, which has no media: there the note is
+        // the Community Note under the words.
+        let note: String? = {
+            if case .none = media { return nil }
+            guard let trimmed = post.note?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+                return nil
+            }
+            return trimmed
+        }()
+        let body = note.map { "\(sentence)\n\n\($0)" } ?? sentence
+        let clippedBody = timelineCut(body)
+
         let readOn = post.sources.first { isHTTPS($0.url) }
         let primaryURL = post.sources.first { $0.primary && isHTTPS($0.url) }?.url
         let shareURL = primaryURL ?? readOn?.url
 
         return FeedPostModel(
             post: post, show: show, franchise: franchise, isOwned: owned, showName: showName,
-            headline: headline, sentence: sentence, stamp: stamp, premiereLine: premiereLine,
+            shortName: franchise.title.shelfShortened(fitting: nameLineBudget),
+            headline: headline, sentence: sentence, body: body, clippedBody: clippedBody,
+            stamp: stamp, premiereLine: premiereLine,
             media: media, fresh: fresh,
             showsOfficialMark: post.isOfficial && post.kind != .rumour,
             readOn: readOn, shareURL: shareURL,
             shareText: "\(showName): \(sentence)",
-            accessibilityLabel: Copy.Feed.postAccessibility(show: showName, sentence: sentence, stamp: stamp))
+            accessibilityLabel: Copy.Feed.postAccessibility(show: showName, sentence: sentence, note: note,
+                                                            stamp: stamp))
+    }
+
+    /// X's timeline limit: a longer post is cut there and ends on "Show more".
+    static let timelineLimit = 280
+    /// A title longer than this offers its identity half to the name line (`shortName`).
+    static let nameLineBudget = 18
+
+    /// X's timeline cut: `text` to the last word inside `limit` characters, with what would dangle
+    /// before the ellipsis (a space, a paragraph break, a comma or a dash) taken off; a cut that ends
+    /// a sentence keeps its full stop and takes no ellipsis. Nil when `text` fits whole.
+    static func timelineCut(_ text: String, limit: Int = timelineLimit) -> String? {
+        guard text.count > limit else { return nil }
+        let head = text.prefix(limit)
+        var cut = String(head[..<(head.lastIndex(where: \.isWhitespace) ?? head.endIndex)])
+        while let last = cut.last, last.isWhitespace || ",;:\u{2013}\u{2014}-".contains(last) {
+            cut.removeLast()
+        }
+        if let last = cut.last, ".!?".contains(last) { return cut }
+        return cut + "\u{2026}"
     }
 
     /// A trailer's headline: the provider's title without the show's name, "[Subtitled]" or its

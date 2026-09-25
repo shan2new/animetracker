@@ -157,8 +157,44 @@ to `news:` with every social row, in one transaction, when research adopts the p
   `releaseSortKey`, `isFutureInstallment`, sort keys like `nextAiringSortKey`/`lastAiredSortKey`)
   from the raw API status/release fields. Keep this logic in the model layer, not the views, and
   reuse the existing sort-key accessors instead of re-inlining `?? .max` / `?? 0` sentinels.
+- **Home is the landing, the feed is a tab (26 Sep: "the today screen should become Feed… feed should
+  not be the home screen for sure", owner).** Tabs: **Home · Feed · Library · Discover** (`AppTab`:
+  `home`, `today` = the FEED — the case kept its name so every route and flag meaning the feed still
+  does; `-openTab today|feed`). Schedule left the bar: Home's calendar glyph and "This week ›" push it
+  (`HomeRoute.schedule`; `-openTab schedule` lands on Home and pushes it). Profile opens from Home's
+  disc as well as the feed's. `HomeView` + `HomeParts` (Features/Home) — the departures board the
+  mark stands for, each show in the FIRST place that carries it (`HomeCompose`, memoised on
+  `scheduleFeedKey`):
+  - **The billboard, full bleed** ("let's make it like the full bleed art it was earlier", then "make
+    the art take more height"): the retired Today billboard's grammar at 0.84 × the window —
+    `ArtHeader` on `billboardArt` (portrait-first, textless, drifting; a name set in TYPE starts its
+    poster under the bar), `HeroTopVeil`, the restored `HeroCopyScrim` (Features/Home), then centred:
+    `HeroBadge` ("New episode", "2 episodes behind" while airing, "3 episodes LEFT" in a finished
+    season), the logo else the name, "Season 4 · Episode 22", the season bar, "Episode 24 aired
+    yesterday" under a backlog, and X's white "Mark as watched" pill. The pick: a drop you have not
+    seen (`freshCount` — `outNow`'s test WITHOUT its still-releasing gate: a finale's season stops
+    releasing the moment it airs), else tonight's airing, else the top of the queue, else the week's
+    first airing. It stretches on a pull (`visualEffect`, no body re-run); its copy rises in once.
+  - **The page sits in the show's hue** ("maybe add subtle gradient too", owner): `HomeGround` — the
+    scrim lands on `DetailTint.ground(tint, groundTopLightness)` and the page eases to canvas over
+    520 pt, one faint pool of the tint; the bar's solid ground is that colour, and it turns solid the
+    moment the billboard's COPY reaches it (`HomeChrome.trackCopy`), never with words under its glyphs.
+  - **Recently aired** ("what about previous week / unmarked episodes?", owner): the last seven days'
+    aired, unmarked episodes, newest first, as Schedule's agenda rows with the ring (a batch confirms
+    its count). **Up next**: the rest of the queue (Library's Continue rule) as the LIBRARY's poster
+    card (`HomeUpNextTile` = `ArtworkPoster` 150 pt, 2:3) with the bar under the poster, a NEW tag on
+    a fresh drop and the mark as the corner disc (`HomeMarkDisc` — For you's add, with a check). The
+    16:9 episode cards it replaced composited covers in boxes for most anime ("utter trash", owner).
+    **This week**: the next seven days' airings in the agenda row; "›" opens Schedule.
+  - **A mark is an event**: the control holds its marked state for `commitBeat` (0.55 s), then the
+    write lands inside `uiSettle` and what changed ROLLS (`.contentTransition(.numericText())` on the
+    badge, the episode, the caption), a finished row or tile leaves, and a caught-up billboard hands
+    over (`.handoff`). The launch hands off on the billboard's picture (`HomeView.markArtReady`).
+  - The four "directions" (tray / card / both / deck) were photographed on the owner's library on a
+    second simulator before this; the full-bleed billboard won. `-homeAnchor recent|upnext|week`
+    (DEBUG) scrolls a capture to a section.
 - **Today is the feed (25 Sep — the build brief's decisions are final; ios-spec's iD1–iD21 are the
-  ones this build added).** `FeedView` (Features/Feed) is the Today root: `FeedHeader` (the leading
+  ones this build added; since 26 Sep it is the FEED tab, not the landing — see Home above).** `FeedView` (Features/Feed) is the Today root: `FeedHeader` (the leading
   account disc → the Profile sheet, which is the ONLY way into Profile — settings, sign-out and
   account deletion live there; the centred wordmark → scroll to top; the bell → `ActivitySheet`),
   the Following / For you tabs, the stories tray, then the server's posts (`GET /me/feed`) with
@@ -212,8 +248,9 @@ to `news:` with every social row, in one transaction, when research adopts the p
     (`feedDismissals`), then pushes. Feed pages are path VALUES (`FeedRoute`, `DiscoverRoute`) so a
     re-tap of Today and the alert route clear them (iD12); a sheet opens a feed page through
     `\.openFeedRoute` (Profile → Saved → a post).
-  - The splash's `LaunchHandoff.artReady` is `FeedView.markArtReady()` (the first post's art, a
-    settled no-post state, or 0.35 s), which also marks PerfProbe's `feed-ready`. The show page now
+  - The splash's `LaunchHandoff.artReady` was `FeedView.markArtReady()` while the feed was the
+    landing; since 26 Sep it is Home's billboard picture (`HomeView.markArtReady`, `home-ready`) —
+    the feed still marks it if a launch opens on it (`-openTab today`). The show page now
     writes the loading frame's remembered tint (`RememberedTint`, Palette.swift — the key stays
     `"today.heroTint"` so the stored value carries over, iD18).
   - Sign-out (`clearFeedAndSocial`) deletes `feed-cache.json`, `social-pending.json`, the persisted
@@ -221,7 +258,8 @@ to `news:` with every social row, in one transaction, when research adopts the p
   - Capture flags (DEBUG, read once per screen in `Features/Feed/FeedCapture.swift`): `-feedTab
     foryou`, `-feedAnchor top|stories|suggested|caughtup|trending|<post id prefix>`, `-feedSkeleton 1`,
     `-feedPinHeader 1`, `-feedStory first|<franchiseId>` + `-feedStoryFrame N` (clock frozen),
-    `-feedMedia first`, `-feedThread first|<postId>` + `-feedThreadAnchor replies|sources`,
+    `-feedMedia first`, `-feedTrailer inline|full` (the first trailer post, played as a tap does,
+    then full screen), `-feedThread first|<postId>` + `-feedThreadAnchor replies|sources`,
     `-feedCompose "<text>"` (never sends), `-feedActivity 1`, `-feedConstrained 1` (the Low Data
     path), `-openProfile 1`, `-openSaved 1`, `-discoverGenre <key>` (with `-openTab discover`),
     `-dumpAlerts 1`, and `-verifyFeed 1` (`FeedRegression`, prints `FEED_VERIFY_PASS`). A flag may
@@ -240,8 +278,8 @@ to `news:` with every social row, in one transaction, when research adopts the p
     it under 25 %; YouTube's IFrame API in a page of our own with the player THREE FRAMES TALL so
     its title bar, logo and "more videos" card fall outside the frame; the still stays up until
     0.4 s of play; muted, X's time chip and sound disc, "Watch again"; never with Auto-Play Video
-    Previews off, Low Data, Low Power, a cover, a push or the background; the stage picks up at the
-    inline position via `embedURL(startingAt:)`). News that carries its own trailer shows the
+    Previews off, Low Data, Low Power, a cover, a push or the background; a TAP watches it in place —
+    see "A trailer is WATCHED WHERE IT IS"). News that carries its own trailer shows the
     trailer, not the key art. The post page's reply bar OPENS IN PLACE (`InlineReplyComposer`, the
     sheet's gate and send policy — `ReplySend`); a reply to a reply opens it on that person; the
     full composer quotes what you answer with X's thread rule (`ReplyContextBlock`). Post page:
@@ -251,7 +289,8 @@ to `news:` with every social row, in one transaction, when research adopts the p
     `OptionalAction`) rebuilt the media when a trailer started and tore its player down — keep the
     condition inside `accessibilityActions { }`; and a lazy stack DROPS a duplicate `.id` — the
     post page's rule and the thread's sort row were both "replies", so the thread never loaded.
-    The floating tab bar still never hides (the owner's rule), unlike X's. **The feed's bars are
+    On the feed the bottom bar scrolls away WITH the header, as X's does (see "The bottom bar is
+    the APP'S"); everywhere else it stays. **The feed's bars are
     FLUSH** — the header (`FeedHeaderGround`) and the post page's reply bar are opaque canvas, the
     one exception to "bars are material": a material under canvas at 0.74 read as a lighter band
     over the canvas with nothing under it ("the header area in both X and Instagram is flush",
@@ -277,8 +316,15 @@ to `news:` with every social row, in one transaction, when research adopts the p
     card on black. No badge, no 34-pt title, no amber capsule, no lock sentence, no "Show page" hint
     (the lift still opens the show). The tray's rings carry Instagram's LIVE tag as **NEW / 2 NEW**
     (`StoryRingTag`, `Copy.Stories.ringTag`) while the show has an aired episode you have not
-    watched — independent of the ring's seen state — because a ring alone "doesn't feel like a new
-    episode is out" (owner); never "EP 18" (the copy audit bans the abbreviation). **The roots are FLAT like Today** ("remove the header gradient
+    watched, because a ring alone "doesn't feel like a new episode is out" (owner); never "EP 18"
+    (the copy audit bans the abbreviation). **A SEEN reel LEAVES the tray** ("No need to keep the
+    story once it has been seen. The whole point of it is being an alert for a new episode. It is
+    something to wait for!", owner): the tray draws `AppModel.trayReels` — `storyReels` minus every
+    reel viewed to its end (`hasViewed`, persisted in `feed-cache.json`) or with nothing unwatched —
+    and a reel comes back only when a newer episode airs (`latestAired` passes the viewed stamp). No
+    grey rings at rest; an empty tray (no row at all) is the normal state. While the viewer is up the
+    tray HOLDS its snapshot (`FeedView.trayHeld`) so the close flight lands in its own bubble; a beat
+    (`trayReleaseBeat`, 0.22 s) after it lands, the seen bubbles sink away and the rest close the gap. **The roots are FLAT like Today** ("remove the header gradient
     from every other screen (except details)", owner): Schedule, Library, All titles, Discover and
     the Profile sheet carry no `ArtBackdrop`/`ProfileWash` any more, and their top chrome is
     `flushTopBar(hold)` — opaque canvas to the bar's bottom, no soft veil, no ramp, no material —
@@ -287,13 +333,53 @@ to `news:` with every social row, in one transaction, when research adopts the p
     serve only them. **Discover is X's and Instagram's Explore** ("Discover UX needs an overhaul to
     match this new awesome Today UX", owner — `DiscoverExplore.swift`): the system field under the
     title stays; under it X's tabs For you · Trending · Genres (`ExploreTabs`, Today's underline
-    numbers, a real pager, `PagerProgress` read only by the row); For you is Instagram's Explore
-    wall (`ExploreGrid`: three columns 2 pt apart, edge to edge, 2:3 cells, a two-by-two feature
-    tile every other block carrying the recommendation's reason, trending filling the wall); Trending
-    is X's list (`TrendRow`: "1 · Anime · Trending", bold title, one fact, a small poster); Genres is
-    every genre tile (`DiscoverGenres(limit: nil, header: false)`). The scope is the bar's menu
+    numbers, a real pager, `PagerProgress` read only by the row); **For you is NETFLIX's home**
+    (`ForYouShelves`, 25 Sep — the Instagram wall that shipped first, an anonymous grid of cropped
+    posters with the reason on one tile in six, was "extremely poorly built. I just don't like it at
+    all"; three directions were photographed on the owner's own recommendations — a Today-style feed
+    of recommendation posts, X's "Who to follow" rows, Netflix shelves — and the owner chose the
+    SHELVES): the top pick as one big card (the poster, the show's logo else its name — a name is
+    always drawn, `.embedded` notwithstanding — what it is, why, "Add to Planned" + "Details" side
+    by side), the notification primer UNDER it (above, it pushed the card's buttons under the bar),
+    a shelf per show of yours the rest come from ("Because you're watching …" / "More like …",
+    `ForYouGroup`: two titles or more, else "More for you"), then "Trending now"; every tile
+    IS the Library's poster card (26 Sep, "should be identical to what is in the Library", owner):
+    `ShelfPosterTile` wraps `ArtworkPoster` at the Library shelf's 150 pt (210 AX) — the 2:3 poster, its
+    edge and shadow, `PosterCaptionText` with ONE fact (`tileFacts`, "Anime · 2019"; the genres wrapped
+    it to a second row) — its add control the card's `cornerMark` (above its open target, never
+    inside it), the shelf snapping `.viewAligned` as the Library's does, and the long-press answers
+    (`ForYouMenu`); Trending
+    is X's list (`TrendRow`: "1 · Anime · Trending", bold title, one fact, a small poster); **Genres
+    is Apple Music's Browse grid** (25 Sep, "I wanted something like this. Spotify UX isnt good",
+    owner, with Apple Music's Search; it replaced the same day's Spotify tiles, which had replaced a
+    collage of four posters under a scrim): `GenreTile` — 16:9, two across (one at the
+    accessibility sizes), the picture FULL-BLEED, the name bottom-left in white `genreName`
+    (Outfit SemiBold 17 — Bold 18 read chunky, "poorly built", owner 26 Sep) over a soft pool of shade
+    at the tile's foot-left (one `EllipticalGradient`, no mask, no text shadow), no count (VoiceOver keeps it). The
+    picture is the genre's OWN art, graded into ONE colour by its importer (Apple Music's duotone;
+    the hue and depth per genre live in `GENRES` in `icon/genres/import.py`, the only palette) —
+    `icon/genres/src/<anime|tv>/<key>.png` → `genre-<key>-<flavour>` (`GenreArt`; the brief is
+    `icon/genres/README.md`, which Codex generates from). **Two flavours** (owner: "TV and Anime
+    versions of assets separately… a toggle to change personalisation" later): anime art is an
+    illustration, TV art a photograph, in the same colour; the Anime scope draws anime, TV draws TV,
+    All draws the `genreArt` defaults key (nothing writes it yet — the toggle will; `-genreArt tv`
+    for a capture), and a genre one catalogue holds has only that picture. A genre with no art
+    leads with a trending poster under a wash of its colour (`GenreTile.vivid`, `leads`). The scope is the bar's menu
     (`scopeMenu`); the explore stays MOUNTED under the search surface (recents / results), which
-    only fades it. The billboard top pick, the shelves and the resting scope chips are gone from
+    only fades it. **At rest Discover's bar is its OWN, and it slides away like Today's** (25 Sep,
+    "Discover also needs the scroll treatment like in Today", owner): `DiscoverExplore` draws X's
+    Explore header — the search PILL (`surfaceRaised` capsule, the scope's prompt) and the scope
+    menu, then the tabs — over pages that run under it (the feed's anatomy: the pager ignores the
+    vertical safe area, each page `safeAreaPadding`s the WINDOW's status band and starts with a
+    header-tall spacer, its probe feeds `DiscoverChromeState.track`, idle settles it). The system
+    navigation bar is HIDDEN at rest and comes up only to search (`.toolbar(searching ? .visible :
+    .hidden)`): the pill sets `fieldPresented`, and the system field, recents, results, Cancel and
+    scopes are exactly as before. The system bar's EXIT leaves the page in front 59 pt low (stale
+    insets, unclamped until the next touch — filmed at 20 fps), so the pages are PARKED when the
+    field comes up and put back when it goes (`restorePages`: a half-point `insetNudge` re-lays
+    them out on four beats across the bar's exit, then the reader's top anchor or the page's
+    `ScrollPosition`); the inset the explore uses is `ThemeMetrics.topSafeInset`, never the
+    container's, which the system bar inflates. The billboard top pick, the shelves and the resting scope chips are gone from
     Discover (their views still serve other screens). Search's results are X's account rows
     (`mediaRow`: the show's face in a 48-pt `ShowAvatar`, bold name, one grey `FactLine` with the
     amber airing lead, X's Follow pill as `AddControlPlacement.pill` — "Add" on white, "Added" in
@@ -302,11 +388,109 @@ to `news:` with every social row, in one transaction, when research adopts the p
     poster (`ExploreTile`, `ArtworkLogo`) — and the LOCAL server has no logos at all: every logo,
     textless poster and backdrop comes from TMDB enrichment, and `TMDB_ACCESS_TOKEN` is unset in
     `server/.env`, so a build pointed at localhost shows every poster bare (production has them).
+    **The feed's chrome is OUTFIT, the app's face** ("our app's font is Outfit not whatever X has.
+    Don't change the damn identity of the app", owner) — names, handles, stamps, tabs, buttons,
+    titles. **A post's and a reply's WORDS are SF Pro** (26 Sep, "I don't think Outfit is the right
+    font for reading the tweet text", owner): `feedBody` SF 15, `feedBodyLarge` SF 17, `feedNote` SF
+    15, `composeField` SF 17 — Regular, tracking 0, Dynamic Type — held at X's 15-on-20 / 17-on-24
+    by `readingLines` (GlassHelpers: iOS 26's `lineHeight`; a Hindi entry in the language list made
+    SF's lines 23 pt). Other prose that borrowed those tokens keeps Outfit (`feedSubhead`,
+    `feedLight`). The X pass that went with it ("ours feels like a cheap knock-off", owner): the name
+    `feedPostName` Outfit SemiBold 15 on the avatar's top edge; the action bar in equal slots with no
+    holes (reply when on, like, remind; bookmark and share pinned right) and the server's REAL counts
+    beside them, zeros hidden; media at a 16-pt radius inside its one-pixel border; `shortName`
+    ("Demon Slayer") where a name is "Title: Subtitle"; a body over 280 characters cut at a word
+    with X's "Show more" (the post page always whole). Every post shows its whole body (the sentence
+    + the research note) — the timeline showed only the sentence until 26 Sep ("why are we
+    unnecessarily clipping text", owner). A glyph sized to the text reads `feedMeta.font`.
   - **Android has not mirrored the feed yet** (brief §15): no feed, no social layer, no Discover
     genres there. Where the bullets below say "Android mirrors this", they predate the feed.
   The bullets below that describe Today's billboard, its Up next shelf or its recap are the history
   of a retired screen; their rules still bind where the same view lives on (Detail's billboard and
   `HeroLockup`, `HeroBadge` on a story frame, `ProgressBanner` in Library).
+- **The bottom bar is the APP'S, and it is X's (25 Sep: "iOS nav is too large and it competes with
+  the content too… We need a deep overhaul of this… Use X's not insta's", owner).** `AppTabBar`
+  (App/AppTabBar.swift), measured off X on the owner's iPhone: a 49-pt band above the home
+  indicator, FLUSH with the page (canvas), one physical pixel of `feedSeparator` on top, four equal
+  slots across the full width, ICONS ONLY, every glyph in one ink (`feedText`) — the selected tab
+  is told apart by its glyph alone, FILLED where the rest are outlines (Discover's magnifier goes
+  heavier; nothing to fill). No amber on the bar any more: X draws no colour there, so the old
+  "a selected tab is state, so it is amber" rule is retired with the pill. Glyphs are Tabler
+  icons (26 Sep — see "Every icon is a Tabler icon"): outline at rest, Tabler's own filled form when
+  selected — `home` (Home), `device-tv` (the Feed), `library`, `search` (`TabHome/Today/Library/
+  Discover` + `Fill`; `TabSchedule` stays in the catalogue unused), redrawn by icon/tabler/icons.py
+  with 1.5 units of air so the ink lands ~21 pt in the 28-pt frame. Drawn at 28 pt: ~20-pt
+  ink, centred 24.5 pt under the rule (X: 20.7 / 24.5). What it replaced: iOS 26's floating
+  glass pill — ~62 pt of labelled capsule lifted over the content, amber selection.
+  **How it is wired, and why:** the `TabView` stays (each tab's stack, state and lifecycle) with
+  its bar HIDDEN (`systemTabBarHidden()` on every tab's stack and again in `pushedScreenChrome`);
+  the bar is drawn ONCE over the `TabView` in `MainTabView` (it holds still through pushes and tab
+  switches), and every page RESERVES its height at its foot (`tabBarReserve()`: on each tab root,
+  inside `pushedScreenChrome`, and on Library's All titles, which pushes without it). A
+  `safeAreaInset` on the `TabView` or on a tab's `NavigationStack` never reaches the pages — each
+  is hosted in the system's own controller — so the bar COVERED the post page's reply bar instead
+  of the page making room (measured twice before the reserve). Every scroll view therefore ends
+  above the bar by its own safe area: `tabBarClearance` is 12 pt of breathing room now (was 76,
+  pill + ramp), `tabBarVisualHeight` is band + home indicator for WINDOW-coordinate maths only
+  (the autoplay viewport), and `centredState`'s clearance defaults to 0. There is no bottom
+  scroll-edge band anywhere: `ScrollEdgeChrome` is top-only, and `bottomUnderfill`,
+  `bottomChromeHeight`, `systemOwnsBottom`, `toastClearance`, the modifier behind
+  `scrollEdgeChromeBody` and the iOS 26.1 `tabViewBottomAccessory` lane are gone. **The keyboard
+  covers the bar, as on X** (`KeyboardPresence`, read from the keyboard's FRAME with a 120-pt
+  floor, so the launch warm-up's zero-height keyboard and a hardware keyboard's shortcut bar never
+  blink it): the bar leaves and every reserve folds on the keyboard's own curve, so a reply field
+  sits ON the keyboard. **On the FEED and on DISCOVER it scrolls away with the header** ("it
+  should vanish… Like X… Only in Feed", owner, same day — X's own frames, captured on the owner's
+  phone, show the header AND the bar gone mid-scroll and both back on the way up; then "Discover
+  also needs the scroll treatment like in Today"): `MainTabView` owns the feed header's
+  `FeedChromeState` and Discover's `DiscoverChromeState` (each screen takes its own as `chrome:`)
+  and hands the bar whichever is in front as `scrollAway` (`ScrollAwayChrome.awayFraction`), so the
+  bar slides down by the fraction the header has slid up — point for point with the finger,
+  settling with it. Every other tab and every
+  page pushed from the feed keep the bar; arriving on the feed from another tab, or popping back to
+  it, reveals the header (and so the bar); the hand-off slides (an implicit animation keyed on the
+  SOURCE, never on the offset, so a scroll is never animated behind the finger); VoiceOver keeps
+  the bar. The page reserves stay put while it is away — the feed draws under them to the edge.
+  The receipt lane is always `LaneFallback`, floating 12 pt above the bar on
+  the gutter (`ToastHost`'s lift is the bar's height while the bar is up). VoiceOver reads a real
+  tab bar (`.isTabBar` on the row, `.isSelected` on the tab); a long press shows the large content
+  viewer at the accessibility sizes. Re-tapping the selected tab pops it to its root (Today also
+  goes to its top) — and the feed root now SAYS its navigation bar is hidden: popping by path from
+  a show page (which shows its bar) left that bar's 54 pt in the feed's top inset. The QA sim on
+  this Mac cannot draw a software keyboard (no Simulator.app ships in this Xcode, and idb's
+  companion registers a hardware keyboard — `HardwareKeyboardLastSeen`): the keyboard path was
+  checked with a synthetic `keyboardWillChangeFrame` in a throwaway build.
+- **The show page is the show's X PROFILE (25 Sep — "Details screen.", owner; three directions were
+  photographed on the owner's shows — Netflix's title page, the show as an X profile, the billboard
+  kept but lighter with tabs — and the owner chose the profile).** `FranchiseDetailView` +
+  `ShowProfileParts.swift`: a BANNER (the show's landscape, 16:9 rather than X's 3:1 so the art
+  leads; `PullStretch` on a pull, `HeroTopVeil` for the clock and the floating back/`···`), the
+  show's FACE (the feed's rounded-square `ShowAvatar`, 84 pt, ringed in the page's ground) over its
+  foot, and X's FOLLOW pill as the status (`ShowFollowPillLabel`: "Add" — or "Add to Planned" for a
+  recommendation — on white; the status in a one-pixel outline that opens the status menu; the bar
+  no longer carries a status capsule). Then the name (`feedProfileName`, Outfit Bold 22), the
+  identity line where X prints the handle, the synopsis as the bio (3 lines, X's "Show more"), X's
+  meta row (`ShowFactsFlow`: the next airing, the seasons, where to watch as the link), X's counts
+  ("96 Watched   99 Episodes" — the story's parts for BOTH numbers, or extras made "115 Watched"
+  of 99), and for a recommended show X's "Followed by…" (the seed shows' faces + the reason). X's
+  TABS — Posts · Episodes · Media · About (`ShowTabsRow`) — pin under the bar once they reach it (a
+  copy in an overlay; `DetailVeils` grows to cover them; a switch while pinned re-pins through
+  `anchor-tabs`, whose background reaches `pinTop` above the row; the tab content has a min height
+  so a short tab can stay pinned). POSTS = the next episode PINNED (`ShowPinnedPost`, X's "Pinned"
+  line, the mark as X's white pill, batch verbs in the post's `···`; a Planned show's "Start with
+  Season 1 · Episode 1" + Start watching, a finished one's "You finished all 89 episodes" + Start
+  rewatch, a caught-up one's next airing) over the show's own posts from the feed (Following for a
+  library show, For you for a trending one — `showPosts`; a post opens its page through
+  `DetailPush.post`). A show in neither feed shows only the pin; a per-show posts route on the
+  server is the follow-up. EPISODES = the season pill, the bar, "Mark all N…", `EpisodeList`,
+  Movies & extras. MEDIA = every trailer full width, each playing in place. ABOUT = themes, watch
+  history, "Because you finished", where to watch, cast & crew, more like this. The bar docks the
+  name when the page's name passes under it (a Bool geometry flip). DELETED with the billboard:
+  `hero`, `heroLockup`, the poster staging on this page, `HeroLockup`, `HeroCopyScrim`,
+  `AuthoredHeroArt`, `MarkSplitButton`, `HeroTitle`, `FadesUnderBar`, the hero's spoiler eye, the
+  bar's status pill — the notes below about Detail's billboard, its lockup and its capsule are
+  history. `-detailTab posts|episodes|media|about` opens a tab; `-detailAnchor` now selects the
+  anchor's tab first.
 - **Cohesion rules (2026-08-30 pass, header/hero/veil rules revised 2026-09-02):** one ambient-wash
   spec app-wide (`ThemeMetrics.rootWashHeight/rootWashIntensity` — never a private height/intensity
   pair); **one section-header family: `SectionHeaderRow`** — `ThemeType.sectionTitle` (Outfit
@@ -364,24 +548,44 @@ to `news:` with every social row, in one transaction, when research adopts the p
   second concurrent resolve of the SAME URL with nil — and `resolve` turned nil into the fallback
   for good — and Detail asks for the poster twice (`tint` and `heroTint`, the billboard being
   portrait-first); `resolveIfAvailable` keeps a `Task` per in-flight URL and the second caller
-  awaits it. **A trailer is a STAGE (4 Sep):** `VideoSheet` is a `fullScreenCover` the tapped
-  `TrailerCard` zooms into (`matchedTransitionSource` / `navigationTransition(.zoom)`, iOS 18):
-  the show's art blurred and breathing across the screen (`ambientArt`, lit a beat after the zoom
-  lands), the billboard lockup (`HeroBadge` "TRAILER", `displayXL` title, one line), the trailer's
-  still at the screen's width with a glow in the show's colour (`tint`), close and provider glyphs
-  in glass circles. `VideoEmbed` sets `allowsInlineMediaPlayback = false`, so the moment YouTube
-  autoplays the SYSTEM presents its own full-screen player (transport, scrubbing, AirPlay); the
-  still stays ON TOP of the page until then (the provider's loading chrome never shows), a refused
-  autoplay uncovers the inline player after 5 s, and `fullscreenState` (KVO) dismisses the stage
-  when the viewer leaves the player. The half sheet with a small embed at its top and nothing
-  under it was "utter trash"; the black cover "better but not quite there"; the brief was
-  "surreal according to 2026 standards. Immersive… absolute bliss to watch" (user). **The app is
-  portrait; only the system player rotates (5 Sep):** `project.yml` lists the landscape
-  orientations so WebKit's full-screen video controller may rotate, and `App/OrientationGate.swift`
-  (an `AppDelegate` reached through `@UIApplicationDelegateAdaptor`, one delegate method) answers
-  `.portrait` everywhere except while the trailer stage is up — `VideoSheet` opens the gate on
-  appear and closes it on disappear, and the gate calls
-  `setNeedsUpdateOfSupportedInterfaceOrientations()` so a phone left on its side comes back upright.
+  awaits it. **A trailer is WATCHED WHERE IT IS (25 Sep: "It should not open full screen by a mere
+  click, player should be inline. The full screen experience is utter trash", owner).** One
+  player per trailer (`TrailerPlayback`, Features/Trailer): YouTube's IFrame API in a page of our
+  own (a neutral origin — a bare embed URL gets "Video player configuration error", a youtube.com
+  base "unavailable · 152-4"), THREE frames tall behind an exact 16:9 window so YouTube's title
+  bar, logo and "more videos" card fall outside it, driven by our own controls
+  (`TrailerInlineControls`: the play/pause disc, "0:42 / 2:31", the sound, full screen, and a
+  scrubber whose drag wins over the feed's scroll and the pager). A TAP on a trailer — a post (the
+  feed, a post page) or a show page's `TrailerCard` — plays it THERE with its sound and the
+  controls; another tap shows or hides them; they leave after 2.6 s of play. **Full screen only
+  when asked for** (`TrailerFullScreen`): the controls' switch, or the phone turned on its side
+  while a trailer is being watched (YouTube's way — turning it upright closes a full screen it
+  opened), and it is the SAME player: the one web view is re-parented from the post's surface into
+  the full screen's (`TrailerSurface`, `presenting`), so there is no reload, no rebuffer and no gap
+  in the sound, in or out. Black, the picture at 16:9; close · the show and the video's name · open
+  on YouTube along the top; back 10 · play/pause · forward 10 in the middle; the scrubber, the
+  time, the sound and the way out along the foot; the status bar and the home indicator leave with
+  the controls; it turns with the phone; a drag down carries it home, still playing (the picture
+  viewer's drag — the zoom transition's own dismiss never fired). The list's director
+  (`FeedAutoplay`: the feed and the post page preview by themselves, a show page's waits for a
+  tap) owns the player and is FROZEN while the full screen holds it — a cover's disappearance, a
+  suspension or a frame reported meanwhile would otherwise tear the player down under the full
+  screen. The buttons ride ABOVE the post's own taps (`InlineTrailerControlsLayer`, the card's
+  overlay): nested inside them, the post's double-tap-to-like took every button's tap (the
+  full-screen switch only hid the controls). A video the provider refuses to embed, once tapped,
+  opens where it can be (`watchURL`). Retired with the stage: `VideoSheet` (blurred ambient art, a
+  lockup and a glow, then the SYSTEM's full-screen player via `allowsInlineMediaPlayback = false`
+  — two full-screen transitions and a reload for one tap), `VideoEmbed` and `embedURL`. **The app
+  is portrait; only the trailer's full screen turns:** `project.yml` lists the landscape
+  orientations and `App/OrientationGate.swift` (an `AppDelegate` reached through
+  `@UIApplicationDelegateAdaptor`, one delegate method) answers `.portrait` everywhere except while
+  `TrailerFullScreen` is up — it opens the gate on appear and closes it on disappear, the gate asks
+  every controller in the window (the presented ones too) to re-evaluate, and `follow(_:)` turns
+  the interface with a phone that opened it sideways. The local feed rarely carries a trailer post
+  (they need a video published in the last 200 days): the post page opens any DATED trailer by id
+  (`-feedThread trailer:<franchiseId>:youtube:<videoId>`); locally Delicious in Dungeon's
+  (`91c825c7…:youtube:qRrXciq7-88`) has a date. The sim cannot turn (no rotate tool here), so the
+  sideways path is the phone's to check.
   After `xcodegen generate`, pass BOTH `API_BASE_URL=` and `CLERK_PUBLISHABLE_KEY=` on the
   `xcodebuild` line for a production capture build and check the built `Info.plist`
   (`PlistBuddy -c "Print :APIBaseURL" -c "Print :ClerkPublishableKey"`) — a build came out with
@@ -547,6 +751,30 @@ to `news:` with every social row, in one transaction, when research adopts the p
   2 Sep, twice). Amber selection is legal
   STATE except where amber already means something else in the same control (Schedule's ticker —
   see `ThemeColor.interactive` docs).
+- **Every icon is a TABLER icon (26 Sep: "Replace ALL ICONS (SF/HugeIcons/etc) -> Tablar", owner).**
+  Nothing calls `Image(systemName:)`: every icon is `AppGlyph(systemName:)` / `AppGlyphLabel`
+  (ios/Shared — also compiled into the Live Activity), whose SF-style name is only a KEY into
+  `AppGlyphCatalog` for a `Glyph-…` asset in ios/Shared/AppSymbols.xcassets. icon/tabler/icons.py maps
+  every key to a Tabler icon (`GLYPHS`) and redraws those assets as template VECTOR PDFs, so a new icon
+  is: add the key to the catalog, map it in `GLYPHS`, rerun (it refuses a key without a mapping). The
+  vendored SVGs are icon/tabler/svg; the full set is the npm package @tabler/icons (3.48.0), not in the
+  repo. The hand-drawn set (icon/glyphs, 25 Sep) is retired — its generate.py refuses to run without
+  `--force`. Tabler is MIT (icon/tabler/LICENSE): the app still owes it an acknowledgement (the owner's call
+  where). The share icon is `share-2` (iOS's box-and-arrow); Library's tab is `library` (`playlist` read as music).
+- **A numbered glyph's numeral is CUT OUT of its disc** (`AppGlyph`'s `N.circle.fill`: the numeral
+  `.destinationOut` in a `.compositingGroup()`): the Tabler disc is a template in the caller's ink,
+  and a numeral in that same ink was a blank grey disc (the Community rules' bullets, 26 Sep). The
+  verified mark is the same idea — `ConfirmedMark` is the rosette in `accent` alone, its check a
+  hole; a template asset takes ONE style, so `.symbolRenderingMode(.palette)` on an `AppGlyph`
+  paints the whole glyph in the first colour (it hid the check on black).
+- **A navigation bar's title is `.brandNavigationTitle(_:)`, never a bare `.navigationTitle`** (26 Sep:
+  "Why does Library and Schedule still have SF font in the title?", owner). SwiftUI draws its own bars'
+  titles in SF whatever UIKit's appearance proxies say — `titleTextAttributes` and the default
+  `UINavigationBarAppearance`s were both tried and photographed, and neither reached a bar with
+  `.toolbarBackground(.hidden)` — so the modifier draws the title as the PRINCIPAL item in Outfit
+  (`bodyEmphasis`, iOS 26's glass capsule dropped) and keeps `.navigationTitle` for VoiceOver and back
+  buttons. Detail and the post page fill the principal slot themselves. The tab items still get
+  Outfit through `AniTrackApp.applyBrandFont` (UIKit's proxy works there).
 - Shared design system lives in `Sources/DesignSystem/` — reuse it, never re-invent:
   `ThemeTokens.swift` (`ThemeColor` / `ThemeSpace` / `ThemeRadius` / `ThemeType` + `.type(_:)` /
   `ThemeMotion` + `pick(_:reduceMotion:)` / `FeedbackCoordinator` — **every haptic goes through it,
@@ -567,8 +795,8 @@ to `news:` with every social row, in one transaction, when research adopts the p
   "press this": Detail drew an amber "+ Add" directly above an amber "Episode 14 next", and Library
   put an amber "See all" over amber "Returns Oct 2" captions. This diverges from iOS deliberately —
   Apple tints "See All"; here amber is spent on the fact. Settled 2 Sep (polish pass): the root is
-  `.tint(ThemeColor.interactive)`, the `TabView` re-tints `.accent` (a selected tab is state) and
-  every tab's `NavigationStack` re-tints `.interactive` again — so back chevrons, alert buttons,
+  `.tint(ThemeColor.interactive)` and every tab's `NavigationStack` re-tints `.interactive` (the
+  bar itself is the app's and draws no amber since 25 Sep) — so back chevrons, alert buttons,
   the search field's Cancel and caret are ink, and only toggles/pickers that mean state carry an
   explicit `.tint(ThemeColor.accent)`.
 - **Write rules** (`AppModel`, `AppModel+Writes.swift`): a progress mark never rolls back — a failure
@@ -596,20 +824,11 @@ to `news:` with every social row, in one transaction, when research adopts the p
   (`pendingRoute` → `FeedRoute`, see "Today is the feed"). Alerts: three per watching anime show from `part.airings`,
   round-robin so every show keeps its soonest before any gets its second, armed the moment the
   primer's Allow lands (`alertsWereAllowed`). A Schedule-routed `focus` pushes the season list
-  once (`focusConsumed`) — it used to re-push on every pop and trap the user. **The tab bar is STATIC** (8 Sep):
-  `tabBarMinimizeBehavior(.onScrollDown)` and its shim are gone — the bar's ground is
-  `bottomUnderfill`'s 180 pt of opaque canvas (the glass pill needs something to refract that is
-  not live body copy), that ground is full width, and a minimised bar is a 60-pt disc on the
-  leading edge, so every downward scroll ended on a bare black band with one circle floating in it
-  ("what is this trash blackish footer man?", user). A ground is invisible only while the thing it
-  was drawn for stands on it. **And on iOS 26 that ground never landed anyway** — from 26 the bar is
-  a floating pill the layout is NOT inset by, so the 244-pt bottom band (`ScrollEdgeChrome(side:
-  .bottom)`) sits 180 pt below the screen's bottom edge; a build with the underfill painted red put
-  a 2-pt sliver of its last stop on the edge and nothing else on screen, while the pill refracted a
-  live "Announced" header. So the BOTTOM edge is the SYSTEM's from 26
-  (`ScrollEdgeChrome.systemOwnsBottom`: our band draws only where there is no system effect, i.e. on
-  the iOS 18 floor, `chromeScrollEdgeHidden(.top)` is the only edge a root suppresses — the top band
-  is a BAR, not a blur, and stays ours — and a pushed screen suppresses nothing). Docked bar titles (Detail,
+  once (`focusConsumed`) — it used to re-push on every pop and trap the user. **The tab bar is
+  the app's own since 25 Sep** (see "The bottom bar is the APP'S"): static everywhere but the feed,
+  where it scrolls away with the header like X's (the 8 Sep "I don't want the floating nav to
+  collapse while scrolling" was about the system pill's minimise); the pill's minimise behaviour,
+  its 180-pt underfill and the bottom band that landed below the screen on iOS 26 went with it. Docked bar titles (Detail,
   Season, History) use `displayTitle`. Watch sessions live in `RewatchStore` (device-local JSON).
 - **Auth hand-off:** `AuthManager.bootstrap()` waits (≤3 s) for `Clerk.shared.isLoaded`, then
   follows `Clerk.shared.auth.events` for session changes; the splash leaves only when both its
@@ -619,6 +838,36 @@ to `news:` with every social row, in one transaction, when research adopts the p
   and Detail's `load()` ignore it, and `loadError` flips inside `withAnimation(uiGentle)` so every
   "couldn't refresh" footnote fades in instead of shoving the content under it.
 - `API_BASE_URL` is a build setting in `project.yml` → `Info.plist` → `AppConfig.apiBaseURL`.
+- **Schedule is TONIGHT over an agenda (25 Sep rebuild — "We need to Overhaul the Schedule Screen
+  completely for this new awesome UX", owner; three directions were spiked on the real calendar —
+  X timeline posts, X's compact agenda, a card over the agenda — the owner chose the card, then
+  "tonight still feels cluttered").** Day 0 opens with ONE card (`ScheduleTonightCard`,
+  `pickHero`): the newest unwatched drop of today's, then yesterday's ("OUT NOW" + X's white "Mark
+  as watched" pill; a card you marked holds its place until you leave the screen — `heldHero`),
+  else today's next airing, else the next day's first. Its eyebrow is the app's one ladder
+  (`TemporalCopy.airs`: "Airs in 9 min", "Sunday at 4:30 PM"), an evening airing today said as
+  "Tonight at 7:30 PM" (`Copy.Schedule.tonightAt`, `Formatting.isEvening`); its row leaves the
+  agenda (a day whose only airing is on the card is a 1-pt anchor, and a grid tap on it lands on
+  the card). The agenda is `ScheduleAgendaRow` (ScheduleRows.swift): the 38-pt date column on a
+  day's FIRST row only (amber only on today), a 40-pt `FeedAvatar`, the name in `feedName`,
+  "Episode 14 · 4:30 PM" in grey `feedMeta` (the season only where `namesPart`), the ladder's slot
+  — no day banners and no rules; a day's break is 12 pt of space (the spike's 20-pt day headings
+  were the 7 Sep 40 %-banner fault again, and its amber lines and an empty "Today" heading under a
+  card that already said tonight were the rest of the clutter). A month is named
+  (`ScheduleEyebrow`) only where the feed crosses into one; Later rows put the MONTH in the date
+  column ("OCT" over "19"); an empty today, or a day picked on the grid, is `ScheduleEmptyDayRow`
+  beside its date. The landing no longer steps back to yesterday — an unwatched yesterday drop is
+  ON the card. **A watched row's disc UNDOES** (in the library): one tap marks it unwatched, the
+  exact count confirmed first when later episodes would go with it (`toggleWatched`) — the first
+  cut drew it inert ("a schedule is a record") and a mistaken mark had no way back ("Unable to
+  mark as unwatched… in the Schedule", owner, 25 Sep). **Every word on the screen is Outfit** (`feedEyebrow`, `feedDate` — the month
+  grid's weekday letters and numerals too): SF caps and digits beside Outfit names read as a second
+  font, the feed's own lesson. At the accessibility sizes the row unfolds (face beside the date,
+  words full width beneath) and the card's name gets a third line. `ScheduleDateRow`, the week
+  rail, the artwork cards (`ScheduleAiringCard`, `ScheduleDayHeading`, `ScheduleWatchToggle`,
+  `WatchedArtworkButton`) and the spike's directions are deleted. Android has not mirrored this.
+  The bullet below is the history that still binds (the window, the grid, the ladder, the
+  landing); where it describes the tile row, it is superseded.
 - **Schedule is an agenda** (reworked 2026-08-24, unfolded 2026-09-04, rebuilt 2026-09-06): a plain
   sectioned `LazyVStack`, one section per day that carries something, empty days omitted, the aired
   days simply ABOVE today (the "Earlier" fold and its "3 to watch" row are gone; the feed lands on
@@ -732,8 +981,9 @@ to `news:` with every social row, in one transaction, when research adopts the p
   haze; and the trailing slot could not tell watched from upcoming, since both drew nothing there.
   Jellyfin's #706 is the same bug with better contrast. Now ONE column at a fixed x, which every
   row reserves whether or not it has a control: `upcoming` an empty slot with the clock in accent;
-  `toWatch` the accent `MarkRing(style: .quiet, lead: true)` with its episode numeral, the only lit
-  thing in the column; `watched` a settled disc with the check, the title a step quieter and the
+  `toWatch` the accent `MarkRing(style: .quiet, lead: true)`, the only lit thing in the column — with
+  NO numeral since 26 Sep ("episode number for watch toggle is useless duplication", owner; the row
+  says "Episode 14" beside it); `watched` a settled disc with the check, the title a step quieter and the
   tile under a flat `canvas` veil (a veil, never `.saturation`/`.blur` — those are per-frame passes
   on a scrolling list). The urgency stops being inverted: the accent buys the RING on an aired row,
   not the clock on one you can do nothing about.
@@ -831,7 +1081,7 @@ to `news:` with every social row, in one transaction, when research adopts the p
   a TMDB backdrop and every billboard was a zoomed slice ("supposed to be portrait", "everything
   so zoomed", user) — the rule is wrong for a tall frame, and Android had never left cover-first.
   Landscape stays the choice of every 16:9 surface (`ProgressBanner`, `BannerCard`,
-  `ScheduleDateRow`'s tile, the Up next cards, episode tiles). Grids, rows and shelves stay `portraitArt`-first. **The
+  the Up next cards, episode tiles). Grids, rows and shelves stay `portraitArt`-first. **The
   billboard's NAME is the show's LOGO, and the lockup is CENTRED (5 Sep, settled by a placement
   spike):** `HeroTitle` draws `billboardLogo` (`artwork.logos.first`, the server's rank) inside a
   box of ≤ 88 % of the copy run × ≤ 120 pt — EVERY logo, circular emblems (Slime, Demon Slayer)
@@ -989,17 +1239,15 @@ to `news:` with every social row, in one transaction, when research adopts the p
   episode)`, under the caption) — Today's hero and Up next hosts went with TodayView (25 Sep), and a
   hero capsule's own drawn check is its receipt — the write site calls `.placed(at:)` (`presentUndo(_:host:)` on
   Android); a season reset stays on the lane (every ring clears, no row can hold it). The episode LIST has had no receipt since 6 Sep — its ring is the receipt (see the Episodes bullet). **THE LANE**
-  — `ReceiptLane` (poster or glyph, the fact, the show, Undo/none) as the tab bar's bottom accessory
-  on iOS 26.1 (`chromeBottomAccessory(isEnabled:)` → `tabViewBottomAccessory(isEnabled:)`, the lane
-  Music's mini player lives in; a conditionally EMPTY accessory still reserves its lane, Apple
-  forums 803428, so the enabled flag is the switch) and `LaneFallback` attached above the bar below
-  26.1 / on Android (`LaneHost` in `Toast.kt`): a removal, a move, an add from Search, a caught-up
+  — `ReceiptLane` (poster or glyph, the fact, the show, Undo/none) in `LaneFallback`'s glass,
+  floating just above the app's bar (it was the system bar's iOS 26.1 accessory until 25 Sep) / on
+  Android (`LaneHost` in `Toast.kt`): a removal, a move, an add from Search, a caught-up
   from a context menu, the two-second notices ("Episode alerts on") and the write failures — one
   `LaneItem` at a time (`AppModel.laneItem`: error, else a lane-placed undo, else the notice). The
   fact is `UndoState.receipt` ("Episode 19 watched", "Removed from Library" — `Copy.Toast.removedShort`;
   the full sentence stays in `message` for VoiceOver), never the show's name in the fact when the
   poster or the line beneath already says it. `ErrorToast`/`UndoToast` are retired; `ToastHost`
-  keeps the persistent `SyncBanner` and, below 26.1, the lane. Capture with `-toastDemo mark|lane|notice`
+  keeps the persistent `SyncBanner` and the lane. Capture with `-toastDemo mark|lane|notice`
   (`-toastDemoFranchise <id>`): a receipt that writes nothing. The shipped toast was one grey capsule
   for all of these, fading in with a 4-pt rise, 330 pt below the capsule it confirmed and over the
   shelf, spending two lines on the show's full name under a hero that already said it. Detail fetches `?country=AppRegion.current`
@@ -1007,10 +1255,8 @@ to `news:` with every social row, in one transaction, when research adopts the p
   section, never an error), grafts the detail read onto the live library copy field by field
   (`Franchise.grafting` — the library payload was read at launch, before enrichment may have run)
   and re-reads once after 6 s when the row `looksUnenriched`. Its sections, after Movies & extras,
-  in Apple TV's order: **Trailers** (`TrailerCard` → `VideoSheet`, a WKWebView `<iframe>` of the
-  YouTube embed inside a page with a neutral base URL — a bare embed URL gets "Video player
-  configuration error", a youtube.com base URL gets "unavailable · 152-4"; the bar's `arrow.up.right`
-  opens the provider), **Cast & crew** (`PersonCard`: 72-pt disc, name, role — not a control),
+  in Apple TV's order: **Trailers** (`TrailerCard`, played in the card — see "A trailer is
+  WATCHED WHERE IT IS"), **Cast & crew** (`PersonCard`: 72-pt disc, name, role — not a control),
   **More like this** (`ShelfCard`s; `franchiseId` → `push(.detail)`, else an exact-title search
   materialises it or `Copy.Notice.notInCatalogue`), **Where to watch** (drawn only for
   `status == .available`: provider marks, the header opens `link`, the JustWatch attribution as a
@@ -1024,6 +1270,39 @@ to `news:` with every social row, in one transaction, when research adopts the p
   Sea"); `EpisodeStill` falls back still → landscape art → cover under the number. Every optimistic
   progress copy goes through `FranchisePart.withProgress` — the hand-built copy it replaced dropped
   `airings`, so one local mark took a show off the calendar until the next reload.
+- **The identity is the SPLIT-FLAP mark (26 Sep): "P." on a departures board — what arrives
+  next.** Chosen after five rounds (a folded-ribbon P "not easily recognizable"; the five gels as a
+  gradient icon "just blatant Instagram copied"; twelve flat directions "2026 standards"; then as
+  Liquid Glass objects), and A (dark) + D (light) refined through three rounds before it shipped.
+  ONE geometry: `DesignSystem/FlapGeometry.swift` (design units, the board 708 × 620: two flap
+  modules split by a hinge seam, round axle pins, a P DRAWN FOR THE BOARD — its bowl ends 3 units
+  above the seam, so the top flap carries the bowl and the bottom flap the stem — and the coral
+  stop on its own flap). Every drawing reads it: the app icon (`Resources/AppIcon.icon` = icon A,
+  generated by `design/app-icon-splitflap/src` and rendered by Icon Composer), `PreviouslyMark`
+  (`.board` — the gate, the launch's landing, the colophon; `.glyph` — the cut P with the stop
+  kerned under its bowl, where the mark is ~20 pt: the feed header, the account disc) and the
+  launch film. **An iOS 26 icon has at most FOUR glass groups** — actool refuses more ("Too many
+  visible groups") although Icon Composer's own renderer draws six happily; the flaps and their
+  pins share one. **The pairing (D in light mode) is not wired:** this Mac's ictool ignores every
+  appearance specialisation (fill, image, hidden), so it cannot be rendered or verified here — do
+  it in Icon Composer's editor. D's letter is printed ink (not glass), and D still washes out in
+  TINTED light — tinted must come from A. The feed header draws the glyph where the name was (X's
+  logo in the middle of the bar). The ribbon (`RibbonShape`, `RibbonFill`, `MarkGeometry`) is the
+  retired mark, kept only for the films behind `-splashDirection` and the old ident.
+- **The launch is the board FLIPPING to "P." (26 Sep — `SplashFlapFilm`, App/Splash/SplashFlap.swift; the
+  default `SplashDirection.flap`).** Pure Core Animation, every move a keyframe track built once in
+  `build` (the render server plays it; nothing per frame on the main thread): the blank board fades up
+  (0–0.18 s), the letter module flips blank → L → N → P like a real board — the old top half falling
+  toward the viewer about the seam, the new bottom half swinging down on the flap's back with one
+  damped bounce, shade as a flap turns edge-on, a soft shadow on the lower flap while one passes — the
+  flips slowing into the P (lands 0.61 s); the stop's module turns 80 ms later; the gate's light comes up
+  and the name rises in (0.88–1.28); the film crossfades onto the gate's own board picture
+  (`LaunchLockup`) and lands at 1.44 s. L and N, not A: an Outfit Bold A is as wide as it is tall and
+  runs to the flap's edges. The exit fades the lockup (0.16 s) and lifts the canvas only after it
+  (0.14–0.42 s) — overlapping, the name and the arriving feed showed as a double exposure. On the sim a
+  warm launch plays at 60 fps; the first launch after an install stalls ~0.45 s (the sim, not the film).
+  The paragraphs below describe Align, the film it replaced (still behind `-splashDirection align`); its
+  hand-off rules (landing seen, auth, art, ceiling, Reduce Motion's still lockup) still bind.
 - **The launch is a short film, "Align" (25 Sep).** The launch screen is the bare canvas
   (`UILaunchScreen` = `LaunchBackground` = `ThemeColor.canvas`, no image). `SplashView`
   (App/Splash/SplashStage.swift) mounts `SplashStageView` over the app from the first frame; the film
@@ -1075,7 +1354,7 @@ to `news:` with every social row, in one transaction, when research adopts the p
   `-splashReduceMotion 1` / `-splashVoiceOver 1` (force those paths), `-splashDumpPictures 1`
   (the lockup's pictures to Documents/splash-pictures/) and `-splashDirection <name>`; `-openDetail <franchiseId>` lands on a show page (the alert-tap route);
   on it, `-detailAnchor trailers|people|related|watch` scrolls to a catalogue shelf,
-  `-detailTrailer 1` opens the first trailer's sheet and `-detailOpenRelated N` opens the Nth
+  `-detailTrailer inline|full` plays the first trailer in its card (then full screen) and `-detailOpenRelated N` opens the Nth
   related title — the way to photograph the show page when the simulator cannot be touched (on
   3 Sep System Events saw no Simulator window and `screencapture` was refused, so cliclick had
   nothing to hit; `xcrun simctl io screenshot` still works). The feed's capture flags (`-feedTab`, `-feedAnchor`,

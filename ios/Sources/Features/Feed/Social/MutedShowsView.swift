@@ -16,7 +16,7 @@ struct MutedShowsView: View {
     var body: some View {
         content
             .background(ThemeColor.canvas.ignoresSafeArea())
-            .navigationTitle(Copy.Social.mutedTitle)
+            .brandNavigationTitle(Copy.Social.mutedTitle)
             .navigationBarTitleDisplayMode(.inline)
             .task { await load() }
     }

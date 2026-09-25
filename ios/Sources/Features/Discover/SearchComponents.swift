@@ -130,7 +130,7 @@ private struct AddMenuContent<OwnedMenu: View>: View {
         if owned {
             ownedMenu()
         } else {
-            Button(action: add) { Label(Copy.Search.addToLibrary, systemImage: "plus") }
+            Button(action: add) { AppGlyphLabel(Copy.Search.addToLibrary, systemName: "plus") }
         }
     }
 }
@@ -163,17 +163,18 @@ private struct AddGlyph: View {
             Label {
                 Text(owned ? Copy.Search.added : (asks ? Copy.Search.addAsks : Copy.Search.add))
             } icon: {
-                Image(systemName: owned ? "checkmark" : "plus")
+                AppGlyph(systemName: owned ? "checkmark" : "plus", decorative: true)
                     .foregroundStyle(owned ? ThemeColor.accent : ThemeColor.textPrimary)
             }
             .fixedSize(horizontal: true, vertical: false)
         } else {
-        Image(systemName: owned ? "checkmark" : "plus")
+        AppGlyph(systemName: owned ? "checkmark" : "plus")
             // Text styles, not point sizes: caption (12) in the disc, subheadline (15) in the
             // square, so the glyph tracks Dynamic Type with the row it sits in.
             .font(.system(placement == .overArt ? .caption : .subheadline, weight: .bold))
             .foregroundStyle(owned ? ThemeColor.accent : ThemeColor.textPrimary)
-            .contentTransition(.symbolEffect(.replace.downUp))
+            // A Tabler picture, not an SF Symbol: the plus crossfades to the check.
+            .contentTransition(.opacity)
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: owned)
             .modifier(AddControlShape(placement: placement, owned: owned))
         }

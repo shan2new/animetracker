@@ -1,16 +1,14 @@
 import SwiftUI
 
-// The Previously. identity, drawn from the app icon's own geometry
-// (design/app-icon-v2/glass/x9-final.icon): a ribbon hanging by its top edge, gold at the top-left
-// falling to coral at the tails, and — where the composition calls for it — the coral full stop
-// beside the tails. Every drawing of the mark in the app goes through this file: the launch
-// ident, the wordmark, the sign-in gate and the account disc all draw THIS ribbon, so the tile on
-// the home screen, the object that arrives at launch and the mark beside the name are one thing.
+// The Previously. identity. Since 26 Sep it is the Split-Flap mark — "P." on a departures board
+// (`FlapGeometry`; the icon is design/app-icon-splitflap) — and every drawing of it in the app goes
+// through `PreviouslyMark` at the foot of this file: the gate, the wordmark, the account disc and the
+// feed's header, so the tile on the home screen, the board the launch flips and the mark beside the
+// name are one thing.
 //
-// The rules the icon settled (4 Sep) hold here: flat, stroke-built, one hue-shifting ramp, no
-// sphere, no glow. Where the mark is the subject (the launch, the gate) it is `lit:` — the icon's
-// own material at scale: a hairline rim where the light catches the edge, the volume of the
-// ramp, and the coloured shadow the ribbon casts on the canvas. Beside a name it is flat.
+// The ribbon above it (`MarkGeometry`, `RibbonShape`, `RibbonFill`, `PeriodBead`) is the RETIRED
+// mark (4–25 Sep, design/app-icon-v2/glass/x9-final.icon). It stays only for the launch films kept
+// behind `-splashDirection` for comparison and the old ident; nothing a person sees draws it.
 
 /// The mark's anatomy in fractions of the ribbon's width, so one number sizes every use of it.
 enum MarkGeometry {
@@ -266,27 +264,106 @@ struct PeriodBead: View {
     }
 }
 
-/// The identity: the ribbon, and with `period:` the icon's composition of ribbon and full stop.
+// MARK: - The Split-Flap mark (26 Sep)
+
+/// The identity: "P." on a departures board (`FlapGeometry`, the icon's own numbers).
 ///
-/// `lit:` is the icon's material at scale (rim, coloured shadow) — for the launch and the sign-in
-/// gate, where the mark is the subject; beside a name the ribbon is flat.
+/// `.board` is the icon's two flap modules — the launch, the gate, the colophon. `.glyph` is the
+/// letter alone, its seam kept, the full stop kerned under its bowl — where the mark stands at
+/// twenty-odd points (the feed's header, the account disc): at that size the flaps are noise and
+/// the cut letter is the brand. `width` is the board's (the axle pins overhang it by a few points,
+/// outside the layout) or the glyph's. `lit:` is the board at scale where it is the subject (the
+/// launch, the gate): light on the flaps' crowns and edges, a soft shadow under them. Drawn in one
+/// `Canvas` — static, so it is drawn once.
 struct PreviouslyMark: View {
+    enum Style { case board, glyph }
+
     let width: CGFloat
-    var period = false
+    var style: Style = .board
     var lit = false
+    /// The glyph's letter (the feed's header draws it in its own ink). The board's is the icon's.
+    var ink: Color = FlapGeometry.ink
 
     var body: some View {
-        let height = width * MarkGeometry.aspect
-        let bead = width * MarkGeometry.periodDiameter
-        ZStack(alignment: .topLeading) {
-            RibbonFill(material: lit ? 1 : 0, castShadow: lit ? 1 : 0, width: width)
-                .frame(width: width, height: height)
-            if period {
-                PeriodBead(diameter: bead, lit: lit)
-                    .position(x: width * MarkGeometry.periodCenterX, y: width * MarkGeometry.periodCenterY)
+        switch style {
+        case .board: board
+        case .glyph: glyph
+        }
+    }
+
+    private var board: some View {
+        let s = width / FlapGeometry.span
+        let h = width * FlapGeometry.aspect
+        let pad = max((FlapGeometry.pinOffset + FlapGeometry.pinRadius) * s, lit ? width * 0.14 : 0)
+        return Canvas { ctx, _ in
+            let o = CGPoint(x: pad, y: pad)
+            func y(_ units: CGFloat) -> CGFloat { o.y + units * s }
+            let flaps = (0..<FlapGeometry.modules.count).map {
+                (top: Path(FlapGeometry.flapPath($0, upper: true, scale: s, origin: o)),
+                 bottom: Path(FlapGeometry.flapPath($0, upper: false, scale: s, origin: o)))
+            }
+            if lit {
+                // The shadow the board casts, from the flaps' own shapes (the gaps between them stay
+                // clear); a filter inside a static canvas is drawn once.
+                ctx.drawLayer { layer in
+                    layer.addFilter(.shadow(color: .black.opacity(0.55), radius: width * 0.05, x: 0, y: width * 0.03))
+                    for f in flaps { layer.fill(f.top, with: .color(.black)); layer.fill(f.bottom, with: .color(.black)) }
+                }
+            }
+            for f in flaps {
+                ctx.fill(f.top, with: .linearGradient(Gradient(colors: [FlapGeometry.flapTopHigh, FlapGeometry.flapTopLow]),
+                                                      startPoint: CGPoint(x: 0, y: y(0)), endPoint: CGPoint(x: 0, y: y(FlapGeometry.seamTop))))
+                ctx.fill(f.top, with: .linearGradient(Gradient(colors: [.white.opacity(lit ? 0.09 : 0.06), .clear]),
+                                                      startPoint: CGPoint(x: 0, y: y(0)), endPoint: CGPoint(x: 0, y: y(44))))
+                ctx.fill(f.bottom, with: .linearGradient(Gradient(colors: [FlapGeometry.flapBottomHigh, FlapGeometry.flapBottomLow]),
+                                                         startPoint: CGPoint(x: 0, y: y(FlapGeometry.seamBottom)),
+                                                         endPoint: CGPoint(x: 0, y: y(FlapGeometry.height))))
+                // The top flap's shadow on the lower, at the seam.
+                ctx.fill(f.bottom, with: .linearGradient(Gradient(colors: [.black.opacity(0.32), .clear]),
+                                                         startPoint: CGPoint(x: 0, y: y(FlapGeometry.seamBottom)),
+                                                         endPoint: CGPoint(x: 0, y: y(FlapGeometry.seamBottom + 56))))
+                if lit {
+                    ctx.stroke(f.top, with: .linearGradient(Gradient(colors: [.white.opacity(0.16), .white.opacity(0.02)]),
+                                                            startPoint: CGPoint(x: 0, y: y(0)), endPoint: CGPoint(x: 0, y: y(FlapGeometry.seamTop))),
+                               lineWidth: max(0.5, s * 2))
+                }
+            }
+            var letter = ctx
+            letter.clip(to: Path { p in
+                p.addRect(CGRect(x: 0, y: 0, width: width + pad * 2, height: y(FlapGeometry.seamTop)))
+                p.addRect(CGRect(x: 0, y: y(FlapGeometry.seamBottom), width: width + pad * 2, height: h + pad))
+            })
+            letter.fill(Path(FlapGeometry.letterPath(scale: s, origin: o)), with: .color(FlapGeometry.ink), style: FillStyle(eoFill: true))
+            ctx.fill(Path(ellipseIn: FlapGeometry.stopRect(scale: s, origin: o)), with: .color(FlapGeometry.stopInk))
+            let r = FlapGeometry.pinRadius * s
+            for c in FlapGeometry.pinCentres(scale: s, origin: o) {
+                ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)), with: .color(FlapGeometry.pin))
             }
         }
-        .frame(width: period ? width * MarkGeometry.lockupWidth : width, height: height, alignment: .topLeading)
+        .frame(width: width + pad * 2, height: h + pad * 2)
+        .padding(-pad)
+        .accessibilityHidden(true)
+    }
+
+    private var glyph: some View {
+        let b = FlapGeometry.glyphBounds
+        let s = width / b.width
+        let h = b.height * s
+        return Canvas { ctx, size in
+            let o = CGPoint(x: -b.minX * s, y: -b.minY * s)
+            let seamTop = o.y + FlapGeometry.seamTop * s
+            // At least a point of seam: the board's 12 units are a hairline at 20 pt, and a seam
+            // that vanishes leaves a plain P.
+            let seamBottom = max(o.y + FlapGeometry.seamBottom * s, seamTop + 1)
+            var letter = ctx
+            letter.clip(to: Path { p in
+                p.addRect(CGRect(x: 0, y: 0, width: size.width, height: seamTop))
+                p.addRect(CGRect(x: 0, y: seamBottom, width: size.width, height: size.height - seamBottom))
+            })
+            letter.fill(Path(FlapGeometry.letterPath(scale: s, origin: o)), with: .color(ink), style: FillStyle(eoFill: true))
+            ctx.fill(Path(ellipseIn: FlapGeometry.stopRect(scale: s, origin: o, glyph: true)), with: .color(FlapGeometry.stopInk))
+        }
+        .frame(width: width, height: h)
         .accessibilityHidden(true)
     }
 }

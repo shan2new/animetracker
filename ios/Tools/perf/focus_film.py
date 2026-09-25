@@ -141,7 +141,7 @@ else:
     wait_today()
     time.sleep(4.0 if scenario == 'warm' else 0.2)
     start_rec()
-    t = tap(338, 812); phases.append({'phase': 'tab-search', 'kind': 'tab', 'tap': t, 'seen': None, 'end': None})
+    t = tap(344, 794); phases.append({'phase': 'tab-search', 'kind': 'tab', 'tap': t, 'seen': None, 'end': None})
     phases[-1]['seen'] = wait_ready('rest', timeout=12); phases[-1]['end'] = now(); print('   tab-search', flush=True)
     time.sleep(0.4)
     for n in range(1, 3):

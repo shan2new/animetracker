@@ -39,7 +39,7 @@ for name, x, y in TAPS:
     if not frames: results.append({'tap': name, 'error': 'no frames'}); continue
     base = Image.open(f'{fd}/{frames[0]}').convert('L')
     W, H = base.size
-    bar = (0, int(H * 0.905), W, int(H * 0.965))       # the tab pill
+    bar = (0, int(H * 0.903), W, int(H * 0.960))       # the app's bar (769–818 pt of 852)
     body = (0, int(H * 0.14), W, int(H * 0.82))        # the content
     def diff(img, box):
         a = base.crop(box); b = img.crop(box)

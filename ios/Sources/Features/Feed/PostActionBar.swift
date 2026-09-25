@@ -1,9 +1,14 @@
 import SwiftUI
 
-/// X's action bar, measured (round 3): reply at the column start, then one slot per 68 pt (like,
-/// remind), save and share together at the trailing edge. Outline glyphs and small counts in X's
-/// grey, 5 pt apart. A like fills pink and bursts; a reminder rings the bell amber (STATE — the
-/// reminder is set — never an action colour); a save fills and drops; share is the system's sheet.
+/// X's action bar, measured off the owner's X (26 Sep): reply, repost, like and views in equal
+/// ~70-pt beats from the text column's start, then bookmark and share pinned to the trailing edge,
+/// 32 pt apart. A post here has fewer: reply (while replies are on), like and remind share the room
+/// before the pinned pair in EQUAL slots, each glyph at its slot's leading edge with its count
+/// beside it — so the bar never has a hole where X's repost and views would be (the fixed 68-pt
+/// slots left one of 180 pt with replies off). Outline glyphs and small counts in X's grey, 8 pt
+/// from the glyph; a zero prints nothing, as X's does. A like fills pink and bursts; a
+/// reminder rings the bell amber (STATE — the reminder is set — never an action colour); a save
+/// fills and drops; share is the system's sheet. The post page spreads every item evenly.
 ///
 /// Every item is a 44-pt target (the spike's were 36). The bar reads the social overlay itself
 /// (`appModel.isLiked` …), so a like re-evaluates this bar and nothing else. No haptic here: the
@@ -32,8 +37,8 @@ struct PostActionBar: View {
     @State private var rings = 0
     @State private var drops = 0
 
-    /// Glyph → count.
-    private static let countGap: CGFloat = 5
+    /// Glyph → count: 8 pt from the glyph's ink, X's.
+    private static let countGap: CGFloat = 6
 
     var body: some View {
         let id = model.id
@@ -41,21 +46,24 @@ struct PostActionBar: View {
         HStack(spacing: 0) {
             if comments {
                 reply(count: appModel.commentCount(id))
-                    .frame(width: large ? nil : FeedMetrics.actionSlot, alignment: .leading)
+                    .frame(maxWidth: large ? nil : .infinity, alignment: .leading)
                 if large { Spacer(minLength: 0) }
             }
             like(liked: appModel.isLiked(id), count: appModel.likeCount(id))
-                .frame(width: large ? nil : FeedMetrics.actionSlot, alignment: .leading)
+                .frame(maxWidth: large ? nil : .infinity, alignment: .leading)
             if large { Spacer(minLength: 0) }
             remind(on: appModel.isReminded(id))
-                .frame(width: large ? nil : FeedMetrics.actionSlot, alignment: .leading)
-            Spacer(minLength: 0)
+                .frame(maxWidth: large ? nil : .infinity, alignment: .leading)
+            if large { Spacer(minLength: 0) }
             save(on: appModel.isSaved(id))
-                .frame(width: large ? nil : FeedMetrics.actionSlotSmall, alignment: .center)
+                .frame(width: large ? nil : FeedMetrics.actionSlotSmall * pinnedScale)
             if large { Spacer(minLength: 0) }
             share
-                .frame(width: large ? nil : FeedMetrics.actionSlotSmall, alignment: .trailing)
+                .frame(width: large ? nil : FeedMetrics.actionSlotSmall * pinnedScale)
         }
+        // The pinned pair's glyphs centre in their slots, and the pair steps into the row's inset
+        // to sit where X's bookmark and share do.
+        .padding(.trailing, large ? 0 : -FeedMetrics.actionPinnedPull * pinnedScale)
         .frame(minHeight: FeedMetrics.actionHitHeight)
     }
 
@@ -67,6 +75,11 @@ struct PostActionBar: View {
         return min(large ? glyphLargeScaled : glyphScaled, base * FeedMetrics.actionGlyphMaxScale)
     }
 
+    /// The pinned pair's slots and step grow with the glyphs (Dynamic Type), so at the accessibility
+    /// sizes the bookmark and the share keep X's air between them and the share stays inside the
+    /// column.
+    private var pinnedScale: CGFloat { glyph / FeedMetrics.actionGlyph }
+
     private var ink: Color { onDark ? FeedStage.ink.opacity(0.92) : ThemeColor.feedSecondary }
 
     // MARK: Items
@@ -74,7 +87,7 @@ struct PostActionBar: View {
     private func reply(count: Int) -> some View {
         Button(action: onComment) {
             HStack(spacing: Self.countGap) {
-                Image(systemName: "bubble.left")
+                AppGlyph(systemName: "bubble.left")
                     .font(FeedGlyph.font(glyph))
                     .foregroundStyle(ink)
                 countText(count, tint: ink)
@@ -106,11 +119,12 @@ struct PostActionBar: View {
             appModel.toggleRemind(model)
             if turningOn, !reduceMotion { rings += 1 }
         } label: {
-            Image(systemName: on ? "bell.fill" : "bell")
+            AppGlyph(systemName: on ? "bell.fill" : "bell")
                 .font(FeedGlyph.font(glyph))
                 .foregroundStyle(on ? ThemeColor.accent : ink)
-                .symbolEffect(.wiggle, options: .nonRepeating, value: rings)
-                .contentTransition(.symbolEffect(.replace))
+                // A Tabler picture, not an SF Symbol: the ring is a transform, the swap a fade.
+                .glyphRing(trigger: rings)
+                .contentTransition(.opacity)
                 .modifier(ActionTarget())
         }
         .buttonStyle(FeedIconPressStyle())
@@ -124,11 +138,11 @@ struct PostActionBar: View {
             appModel.toggleSave(model)
             if turningOn, !reduceMotion { drops += 1 }
         } label: {
-            Image(systemName: on ? "bookmark.fill" : "bookmark")
+            AppGlyph(systemName: on ? "bookmark.fill" : "bookmark")
                 .font(FeedGlyph.font(glyph))
                 .foregroundStyle(on ? (onDark ? FeedStage.ink : ThemeColor.feedText) : ink)
-                .symbolEffect(.bounce.down, options: .nonRepeating, value: drops)
-                .modifier(ActionTarget(minWidth: FeedMetrics.actionHitHeight))
+                .glyphDrop(trigger: drops)
+                .modifier(ActionTarget(minWidth: FeedMetrics.actionHitHeight, alignment: .center))
         }
         .buttonStyle(FeedIconPressStyle())
         .accessibilityLabel(on ? Copy.Feed.unsave : Copy.Feed.save)
@@ -136,10 +150,10 @@ struct PostActionBar: View {
     }
 
     @ViewBuilder private var share: some View {
-        let label = Image(systemName: "square.and.arrow.up")
+        let label = AppGlyph(systemName: "square.and.arrow.up")
             .font(FeedGlyph.font(glyph))
             .foregroundStyle(ink)
-            .modifier(ActionTarget(minWidth: FeedMetrics.actionHitHeight, alignment: large ? .center : .trailing))
+            .modifier(ActionTarget(minWidth: FeedMetrics.actionHitHeight, alignment: .center))
         if let url = model.shareURL {
             ShareLink(item: url, subject: Text(model.showName), message: Text(model.shareText)) { label }
                 .buttonStyle(FeedIconPressStyle())

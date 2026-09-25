@@ -44,7 +44,7 @@ struct CommentThreadSection: View {
                         .type(ThemeType.feedNoteTitle)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
-                    Image(systemName: "chevron.right")
+                    AppGlyph(systemName: "chevron.right")
                         .font(ThemeType.feedSmall.font.weight(.bold))
                         .accessibilityHidden(true)
                 }
@@ -134,7 +134,7 @@ struct CommentThreadSection: View {
                     HStack(spacing: ThemeSpace.x1) {
                         Text(Copy.Social.sortTitle(sort))
                             .type(ThemeType.feedName)
-                        Image(systemName: "chevron.down")
+                        AppGlyph(systemName: "chevron.down")
                             .font(ThemeType.feedSmall.font.weight(.bold))
                             .accessibilityHidden(true)
                     }
@@ -161,17 +161,17 @@ struct CommentThreadSection: View {
                 HStack(spacing: ThemeSpace.x2) {
                     ProgressView().controlSize(.small).tint(ThemeColor.feedSecondary)
                     Text(Copy.Stories.savingProgress)
-                        .type(ThemeType.feedNote)
+                        .type(ThemeType.feedSubhead)
                         .foregroundStyle(ThemeColor.feedSecondary)
                 }
                 .accessibilityElement(children: .combine)
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-                    Image(systemName: "lock.fill")
-                        .font(ThemeType.feedNote.font)
+                    AppGlyph(systemName: "lock.fill")
+                        .font(ThemeType.feedSubhead.font)
                         .accessibilityHidden(true)
                     Text(thread?.access == .unaired ? Copy.Stories.lockedUnaired(n) : Copy.Stories.lockedUnwatched(n))
-                        .type(ThemeType.feedNote)
+                        .type(ThemeType.feedSubhead)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .foregroundStyle(ThemeColor.feedSecondary)
@@ -196,7 +196,7 @@ struct CommentThreadSection: View {
                 .type(ThemeType.feedName)
                 .foregroundStyle(ThemeColor.feedText)
             Text(Copy.Social.beFirst)
-                .type(ThemeType.feedNote)
+                .type(ThemeType.feedSubhead)
                 .foregroundStyle(ThemeColor.feedSecondary)
         }
         .multilineTextAlignment(.center)

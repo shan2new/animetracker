@@ -39,6 +39,8 @@ struct DiscoverView: View {
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String) -> Void
     /// "Recommended for you ›" — the longer list, on this tab's stack.
     var onOpenRecommendations: (() -> Void)? = nil
+    /// The Explore header's scroll state, held by the tab so the bottom bar can ride it.
+    let chrome: DiscoverChromeState
 
     /// The wire marker for a catalogue that failed (`docs/api-contract.md`, `sources`). Not copy.
     private static let failedMarker = "failed"
@@ -66,6 +68,8 @@ struct DiscoverView: View {
     /// The user has answered the primer once. iOS only ever shows its own alert once per install,
     /// so the primer is one-shot too: it is the thing that earns that one alert.
     @AppStorage("previously.notifPrimerAnswered") private var primerAnswered = false
+    /// The viewer's leaning for the genre art in All (`GenreArt.leaningKey`; a toggle will set it).
+    @AppStorage(GenreArt.leaningKey) private var genreLeaning = GenreArt.Flavour.anime.rawValue
     /// Resolved from `UNUserNotificationCenter`: only `.notDetermined` can still be asked.
     @State private var canAskForNotifications = false
     @State private var primerVisible = false
@@ -114,8 +118,11 @@ struct DiscoverView: View {
             DiscoverExplore(recommendations: scopedRecommendations,
                             trending: trending,
                             genres: DiscoverCatalog.shared.genres(for: appModel.mediaFilter),
+                            genreFlavour: GenreArt.flavour(for: appModel.mediaFilter, leaning: genreLeaning),
                             reason: { appModel.spokenReason($0) },
-                            caption: { gridCaption($0) },
+                            trendFacts: { trendFacts($0) },
+                            trendTrailing: { AnyView(addControl($0, placement: .pill)) },
+                            trendAdd: { AnyView(addControl($0, placement: .overArt)) },
                             spoken: { spoken($0, ambiguous: []) },
                             onOpenRecommendation: { openRecommendation($0) },
                             onOpenShow: { open($0, zoom: "trend/\($0.id)") },
@@ -123,7 +130,12 @@ struct DiscoverView: View {
                                 await appModel.refreshTrending()
                                 await catalog.loadGenres(api: api, filter: filter, force: true)
                             },
-                            header: primerVisible ? AnyView(notificationPrimer) : nil)
+                            header: primerVisible ? AnyView(notificationPrimer) : nil,
+                            chrome: chrome,
+                            searchPrompt: Copy.Search.prompt(for: appModel.mediaFilter),
+                            onSearch: { fieldPresented = true },
+                            scope: AnyView(scopeMenu),
+                            searching: searching)
                 .opacity(searching ? 0 : 1)
                 .allowsHitTesting(!searching)
                 .accessibilityHidden(searching)
@@ -177,8 +189,9 @@ struct DiscoverView: View {
         // from the very top of the screen — over the wash the navigation container paints
         // (`rootWash`): the launchpad used to open on flat near-black while every other root
         // carried its art.
-        .scrollEdgeChromeBody(top: false, bottom: true)
-        .flushTopBar(searchChromeBottom)
+        // Only while searching: at rest the Explore header is the bar, and it slides away with the
+        // page (Today's treatment, 25 Sep) — a flush band here would cover what it slid off.
+        .flushTopBar(searching ? searchChromeBottom : 0)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
         // Inline on every root (user decision): the field is the screen's identity here, and a
@@ -187,7 +200,10 @@ struct DiscoverView: View {
         // VoiceOver hears "Discover" for the screen and "Search anime and TV" for the field.
         .navigationTitle(Copy.Discover.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        // At rest the bar is the Explore header's own (`DiscoverExplore`: X's search pill, the
+        // scope, the tabs), sliding away with the page as Today's does; the system bar and its
+        // field come up only to SEARCH — the pill hands over to them.
+        .toolbar(searching ? .visible : .hidden, for: .navigationBar)
         // The scope (All / Anime / TV) is a menu in the bar, as Schedule's filter is — X's Explore
         // keeps its settings there; the resting chips went with the launchpad.
         .toolbar {
@@ -261,6 +277,10 @@ struct DiscoverView: View {
         .onChange(of: fieldPresented) { _, presented in
             PerfProbe.mark(presented ? "search-presented" : "search-dismissed")
         }
+        // Searching, the header (and the bottom bar riding it) is all there again.
+        .onChange(of: searching) { _, now in
+            if now { chrome.reveal() }
+        }
         .markAllConfirmation($markAll, appModel: appModel)
         .modifier(DiscoverCapture(onOpenDetail: onOpenDetail))
         .task(id: appModel.library.count) { await refreshNotificationEligibility() }
@@ -292,7 +312,7 @@ struct DiscoverView: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Image(systemName: appModel.mediaFilter == .all
+            AppGlyph(systemName: appModel.mediaFilter == .all
                   ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
         }
         .tint(appModel.mediaFilter == .all ? ThemeColor.textPrimary : ThemeColor.accent)
@@ -337,7 +357,7 @@ struct DiscoverView: View {
             : AnyLayout(HStackLayout(alignment: .center, spacing: ThemeMetrics.artGap))
         layout {
             HStack(alignment: .center, spacing: ThemeMetrics.artGap) {
-                Image(systemName: "bell.badge")
+                AppGlyph(systemName: "bell.badge")
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(ThemeColor.textTertiary)
                     .frame(width: 28)
@@ -373,7 +393,7 @@ struct DiscoverView: View {
 
     private var primerDismiss: some View {
         Button { answerPrimer(turnOn: false) } label: {
-            Image(systemName: "xmark")
+            AppGlyph(systemName: "xmark")
                 .font(.system(.caption2, weight: .bold))
                 .foregroundStyle(ThemeColor.textTertiary)
                 .frame(width: Metrics.dismissDisc, height: Metrics.dismissDisc)
@@ -575,6 +595,28 @@ struct DiscoverView: View {
         return SearchRow(key: key) { AnyView(gridCardBody(item, caption: caption)) }.equatable()
     }
 
+    /// A chart row's facts: WHY it is trending now — a show on air says when its next episode lands
+    /// (amber: the list's `when`), a show with a next installment names it ("Season 2 · Jan 2027",
+    /// grey), else nothing is invented — and WHAT it is: the kind and its themes, else the kind
+    /// and the year it began.
+    private func trendFacts(_ item: FranchiseSummary) -> TrendFacts {
+        let what: [String] = {
+            let themes = item.themes.prefix(2)
+            let parts = [item.source.kindWord] + (themes.isEmpty ? [item.year.map(String.init) ?? ""] : Array(themes))
+            return parts.filter { !$0.isEmpty }
+        }()
+        if let airs = when(item) {
+            return TrendFacts(now: airs, nowLeads: true, what: what)
+        }
+        if let up = item.upcoming, up.isFutureInstallment, !up.hasArrived(now: now),
+           let next = up.next?.trimmingCharacters(in: .whitespacesAndNewlines), !next.isEmpty {
+            return TrendFacts(now: Copy.Discover.trendNext(installment: next, window: up.release,
+                                                           rumoured: up.status == "rumored"),
+                              nowLeads: false, what: what)
+        }
+        return TrendFacts(now: nil, nowLeads: false, what: what)
+    }
+
     /// The card's ONE caption. A show whose next episode airs THIS WEEK says so — the row's own
     /// `when` ("Airs Sunday", amber), so the grid and the accessibility row stop disagreeing about
     /// one show ("One Piece · Anime · 1999" in the grid, "Airs Sunday" in the row, review 23 Sep).
@@ -646,7 +688,7 @@ struct DiscoverView: View {
                                     appModel.removeRecentItem(item.id)
                                 }
                             } label: {
-                                Label(Copy.Search.removeRecent, systemImage: "trash")
+                                AppGlyphLabel(Copy.Search.removeRecent, systemName: "trash")
                             }
                         })
                     }
@@ -709,7 +751,7 @@ struct DiscoverView: View {
         let column = aligned ? PosterSize.row.size.width : 24
         return Button { appModel.searchQuery = term } label: {
             HStack(spacing: ThemeMetrics.artGap) {
-                Image(systemName: "magnifyingglass")
+                AppGlyph(systemName: "magnifyingglass")
                     .font(.system(.body, weight: .regular))
                     .foregroundStyle(ThemeColor.textSecondary)
                     .frame(width: column)
@@ -721,7 +763,7 @@ struct DiscoverView: View {
                     // than lose its tail.
                     .lineLimit(isAX ? 2 : 1)
                 Spacer(minLength: ThemeSpace.x3)
-                Image(systemName: "arrow.up.backward")
+                AppGlyph(systemName: "arrow.up.backward")
                     .font(.system(size: Metrics.chevronSize, weight: .semibold))
                     .foregroundStyle(ThemeColor.textTertiary)
                     .frame(width: Metrics.chevronColumn, alignment: .trailing)
@@ -748,7 +790,7 @@ struct DiscoverView: View {
                     appModel.removeRecentSearch(term)
                 }
             } label: {
-                Label(Copy.Search.removeRecent, systemImage: "trash")
+                AppGlyphLabel(Copy.Search.removeRecent, systemName: "trash")
             }
         }
     }
@@ -1049,7 +1091,7 @@ struct DiscoverView: View {
                         appModel.addToLibrary(franchiseId: item.id, title: item.title, isReleasing: item.isReleasing)
                     })
                 } label: {
-                    Label(Copy.Action.removeFromLibrary, systemImage: "trash")
+                    AppGlyphLabel(Copy.Action.removeFromLibrary, systemName: "trash")
                 }
             }
         }

@@ -16,7 +16,7 @@ struct XPageTitle: View {
     var body: some View {
         HStack(spacing: Self.gap) {
             Button(action: onBack) {
-                Image(systemName: "arrow.left")
+                AppGlyph(systemName: "arrow.left")
                     .font(ThemeType.feedPageTitle.font.weight(.regular))
                     .foregroundStyle(ThemeColor.feedText)
                     .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight, alignment: .leading)

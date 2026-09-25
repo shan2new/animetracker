@@ -23,7 +23,7 @@ struct FranchiseContextMenu: View {
                 Button {
                     onMarkAll(part, target)
                 } label: {
-                    Label(Copy.Action.markAll(target - part.progress), systemImage: "text.append")
+                    AppGlyphLabel(Copy.Action.markAll(target - part.progress), systemName: "text.append")
                 }
             }
         }
@@ -32,7 +32,7 @@ struct FranchiseContextMenu: View {
             Button {
                 appModel.setStatus(franchiseId: f.id, status: option)
             } label: {
-                Label(option.displayName, systemImage: status == option ? "checkmark" : option.menuGlyph)
+                AppGlyphLabel(option.displayName, systemName: status == option ? "checkmark" : option.menuGlyph)
             }
         }
         Divider()
@@ -67,7 +67,7 @@ struct RemoveFromLibraryButton: View {
         Button(role: .destructive) {
             appModel.removeWithUndo(franchise, reduceMotion: reduceMotion)
         } label: {
-            Label(Copy.Action.removeFromLibrary, systemImage: "trash")
+            AppGlyphLabel(Copy.Action.removeFromLibrary, systemName: "trash")
         }
     }
 }

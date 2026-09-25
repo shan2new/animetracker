@@ -145,11 +145,11 @@ struct ForYouMenu: View {
                 // "I've watched it" did nothing and "Not interested" dismissed a show on your
                 // Planned list (review i5, N10).
                 Button(role: .destructive) { appModel.removeWithUndo(owned, reduceMotion: reduceMotion) } label: {
-                    Label(Copy.ForYou.removeFromPlanned, systemImage: "minus.circle")
+                    AppGlyphLabel(Copy.ForYou.removeFromPlanned, systemName: "minus.circle")
                 }
             } else {
                 Button { appModel.addRecommendation(item) } label: {
-                    Label(Copy.ForYou.addToPlanned, systemImage: "plus")
+                    AppGlyphLabel(Copy.ForYou.addToPlanned, systemName: "plus")
                 }
                 // Seen it elsewhere: the app's own series mark, on the title's page — the count,
                 // Cancel and one Undo every series mark has; it joins the library as Watched and
@@ -163,12 +163,12 @@ struct ForYouMenu: View {
                             onOpen()
                         }
                     } label: {
-                        Label(Copy.Action.markSeriesWatched, systemImage: "checkmark.circle")
+                        AppGlyphLabel(Copy.Action.markSeriesWatched, systemName: "checkmark.circle")
                     }
                 }
                 // Reversible (the lane's Undo), so not the destructive red Remove wears.
                 Button { appModel.hideRecommendation(item, seen: false) } label: {
-                    Label(Copy.ForYou.notInterested, systemImage: "hand.thumbsdown")
+                    AppGlyphLabel(Copy.ForYou.notInterested, systemName: "hand.thumbsdown")
                 }
             }
         }
@@ -191,7 +191,7 @@ struct TileAddDisc: View {
             ZStack {
                 Circle().fill(ThemeColor.scrimStrong)
                 Circle().strokeBorder(ThemeColor.posterEdge, lineWidth: FeedMetrics.hairline)
-                Image(systemName: "plus")
+                AppGlyph(systemName: "plus")
                     .font(.system(size: disc * 0.46, weight: .bold))
                     .foregroundStyle(ThemeColor.textPrimary)
             }
@@ -388,7 +388,7 @@ struct RecommendationsView: View {
         }
         .scrollIndicators(.hidden)
         .background(ThemeColor.canvas)
-        .navigationTitle(Copy.ForYou.shelf)
+        .brandNavigationTitle(Copy.ForYou.shelf)
         .navigationBarTitleDisplayMode(.inline)
         .task { longer = await appModel.longerRecommendations() }
     }

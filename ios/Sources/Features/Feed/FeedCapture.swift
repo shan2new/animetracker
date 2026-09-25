@@ -16,6 +16,7 @@ import Foundation
 //   -feedStory first|<franchiseId>      open the story viewer on a reel, clock frozen
 //   -feedStoryFrame N                   … on frame N
 //   -feedMedia first                    open the first picture post's viewer
+//   -feedTrailer inline|full            play the first trailer post in its post (then full screen)
 //   -feedThread first|<postId>          push a post page
 //   -feedThreadAnchor replies|sources   on that page, scroll to the replies / open the trail
 //   -feedCompose "<text>"               on a pushed page, open the composer prefilled (never sends)
@@ -42,6 +43,9 @@ enum FeedCapture {
     static var storyFrozen: Bool { story != nil }
     /// `-feedMedia first`: open the first picture post's viewer.
     static let media: String? = string("feedMedia")
+    /// `-feedTrailer inline|full`: scroll to the first trailer post and play it there, as a tap
+    /// does (then, with `full`, open its full screen).
+    static let trailer: String? = string("feedTrailer")
     /// `-feedThread first|<postId>`: push a post page.
     static let thread: String? = string("feedThread")
     /// `-feedThreadAnchor replies|sources`: where a pushed post page lands.

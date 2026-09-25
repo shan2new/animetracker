@@ -148,7 +148,12 @@ enum FeedRegression {
         if let show, let res = response(tab: "following", posts: [
             post("d1", fid: "fa", kind: "dated", installment: "Season 2", time: now - hour,
                  premiere: ["at": now + day, "precision": "exact"]),
-            post("r1", fid: "fa", kind: "rumour", installment: "Season 3", time: now - hour, official: true),
+            post("r1", fid: "fa", kind: "rumour", installment: "Season 3", time: now - hour, official: true,
+                 note: "Two trade reports cite production staff."),
+            // The research's note: the post's second paragraph, trimmed — and nothing when blank.
+            post("n1", fid: "fa", kind: "announced", installment: "Season 6", time: now - hour,
+                 note: "  The studio announced it after the finale.\n"),
+            post("n2", fid: "fa", kind: "announced", installment: "Season 7", time: now - hour, note: " \n "),
             post("a1", fid: "fa", kind: "announced", installment: "The Movie", isMovie: true, time: now - hour),
             post("t1", fid: "fa", kind: "trailer", installment: "", time: now - hour,
                  video: ["id": "abc123", "site": "youtube", "kind": "trailer", "title": "Alpha - Official Trailer [Subtitled]",
@@ -210,6 +215,29 @@ enum FeedRegression {
             check(models["s1"]?.readOn?.publisher == "Studio", "Read on names the source")
             check(models["d1"]?.shareURL == nil && models["d1"]?.readOn == nil, "no https source: nothing to open")
             check(models["s1"]?.shareText == "Alpha: \(models["s1"]?.sentence ?? "")", "share text is show and sentence")
+
+            // ONE body — the sentence, then the note — whole on the post page, and in the timeline up
+            // to X's 280 characters; past them the row draws X's cut and ends on "Show more".
+            let finale = "The studio announced it after the finale."
+            check(models["n1"]?.clippedBody == nil, "a short body is drawn whole in the timeline")
+            let long = String(repeating: "Season two arrives soon, ", count: 16)
+            let cut = FeedComposer.timelineCut(long) ?? ""
+            check(cut.hasSuffix("soon\u{2026}") && cut.count <= FeedComposer.timelineLimit + 1,
+                  "a long body is cut at a word inside 280 characters, its comma dropped for the ellipsis: \(cut)")
+            check(FeedComposer.timelineCut(String(repeating: "a", count: FeedComposer.timelineLimit)) == nil,
+                  "280 characters are drawn whole")
+            check("Demon Slayer: Kimetsu no Yaiba".shelfShortened(fitting: FeedComposer.nameLineBudget) == "Demon Slayer",
+                  "a long name offers the name line its identity half")
+            check(models["n1"].map { $0.body == "\($0.sentence)\n\n\(finale)" } == true,
+                  "a post's body is its sentence, then its note as a paragraph: \(models["n1"]?.body ?? "nil")")
+            check(models["n1"]?.accessibilityLabel.contains(finale) == true, "VoiceOver reads the note the row draws")
+            check(models["n2"].map { $0.body == $0.sentence } == true, "a blank note adds no paragraph")
+            check(models["d1"].map { $0.body == $0.sentence } == true, "no note: the body is the sentence")
+            check(models["r1"].map { $0.body == $0.sentence } == true,
+                  "a rumour's body is its sentence: the note is its Community Note")
+            check(models["r1"]?.accessibilityLabel.contains("Two trade reports") == false,
+                  "a rumour's label leaves its note to the note's own box")
+            check(models["n1"]?.shareText == "Alpha: \(models["n1"]?.sentence ?? "")", "share text stays the sentence")
             check(models["d1"]?.stamp == Copy.Feed.stampHours(1), "the stamp")
 
             let pastWhen = TemporalCopy.premiereWhen(now - 2 * day, anchor: .local, now: now)
@@ -382,13 +410,14 @@ enum FeedRegression {
     private static func post(_ id: String, fid: String, kind: String = "announced", fresh: Bool = false,
                              installment: String = "Season 2", isMovie: Bool = false, time: Int64,
                              premiere: [String: Any]? = nil, video: [String: Any]? = nil, official: Bool = false,
-                             sources: [[String: Any]] = [], window: [String: Any]? = nil) -> [String: Any] {
+                             sources: [[String: Any]] = [], window: [String: Any]? = nil,
+                             note: String? = nil) -> [String: Any] {
         [
             "id": id, "kind": kind, "origin": kind == "trailer" ? "video" : "research", "franchiseId": fid,
             "installment": installment, "isMovie": isMovie, "part": NSNull(),
             "time": ["at": time, "dateOnly": false, "basis": "observed"],
             "discoveredAt": time, "fresh": fresh,
-            "premiere": premiere ?? NSNull(), "window": window ?? NSNull(), "note": NSNull(),
+            "premiere": premiere ?? NSNull(), "window": window ?? NSNull(), "note": note ?? NSNull(),
             "video": video ?? NSNull(), "sources": sources, "isOfficial": official,
             "viewer": ["liked": false, "saved": false, "reminded": false],
             "counts": ["likes": 2, "comments": 1],

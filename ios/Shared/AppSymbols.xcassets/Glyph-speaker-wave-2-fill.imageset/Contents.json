@@ -1,0 +1,16 @@
+{
+  "images": [
+    {
+      "idiom": "universal",
+      "filename": "Glyph-speaker-wave-2-fill.pdf"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "template-rendering-intent": "template",
+    "preserves-vector-representation": true
+  }
+}

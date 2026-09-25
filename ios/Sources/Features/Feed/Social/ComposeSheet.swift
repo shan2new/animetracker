@@ -153,11 +153,12 @@ struct ComposeSheet: View {
             AccountDisc(identity: auth.identity, diameter: FeedMetrics.composeAvatar, quiet: true)
             VStack(alignment: .leading, spacing: ThemeSpace.x2) {
                 Text(replyingLine)
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .fixedSize(horizontal: false, vertical: true)
                 TextField(fieldPlaceholder, text: $draft, axis: .vertical)
                     .type(ThemeType.composeField)
                     .foregroundStyle(ThemeColor.feedText)
+                    .readingLines(FeedPostLayout.lineHeightLarge)
                     .lineLimit(3...10)
                     .focused($fieldFocused)
                     .onChange(of: draft) {
@@ -197,7 +198,7 @@ struct ComposeSheet: View {
     /// Who can read it (the spoiler rule for an episode room), and the ring.
     private var foot: some View {
         HStack(spacing: ThemeSpace.x2) {
-            Image(systemName: episode == nil ? "globe" : "eye.slash")
+            AppGlyph(systemName: episode == nil ? "globe" : "eye.slash")
                 .font(ThemeType.feedSmall.font)
                 .accessibilityHidden(true)
             Text(episode.map(Copy.Social.episodeAudience) ?? Copy.Social.everyoneCanReply)
@@ -350,13 +351,14 @@ private final class FirstAnswerGate {
 // MARK: - What you are answering
 
 /// X's composer opens on what you are answering: the reply (the person, their words) or the post
-/// (the show as the account, its sentence), with a rule from its avatar down to yours — the
-/// thread you are adding to. An episode room names the episode. Nothing when nothing is known.
+/// (the show as the account, its words — `FeedPostModel.body`, as the timeline draws them), with a
+/// rule from its avatar down to yours — the thread you are adding to. The words are whole, as X
+/// quotes them (the composer scrolls). An episode room names the episode. Nothing when nothing is
+/// known.
 struct ReplyContextBlock: View {
     let target: ComposeTarget
 
     @Environment(AppModel.self) private var appModel
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     /// The rule joining the two avatars (X's: 2 pt, the separator grey).
     private static let rule: CGFloat = 2
@@ -372,7 +374,7 @@ struct ReplyContextBlock: View {
             block(avatar: AnyView(ShowAvatar(franchise: post.franchise, size: FeedMetrics.composeAvatar)),
                   name: post.showName,
                   meta: Copy.Feed.separated([post.post.installment, post.stamp].filter { !$0.isEmpty }),
-                  words: post.sentence)
+                  words: post.body)
         } else if let room = ThreadSubject.parseEpisode(target.subject) {
             block(avatar: AnyView(ShowAvatar(candidates: showCandidates, size: FeedMetrics.composeAvatar)),
                   name: target.franchiseTitle,
@@ -394,13 +396,13 @@ struct ReplyContextBlock: View {
             VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
                 HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x1) {
                     Text(name)
-                        .type(ThemeType.feedName)
+                        .type(ThemeType.feedPostName)
                         .foregroundStyle(ThemeColor.feedText)
                         .lineLimit(1)
                         .layoutPriority(1)
                     if !meta.isEmpty {
                         Text(meta)
-                            .type(ThemeType.feedMeta)
+                            .type(ThemeType.feedSubhead)
                             .foregroundStyle(ThemeColor.feedSecondary)
                             .lineLimit(1)
                     }
@@ -408,7 +410,7 @@ struct ReplyContextBlock: View {
                 Text(words)
                     .type(ThemeType.feedBody)
                     .foregroundStyle(ThemeColor.feedText)
-                    .lineLimit(typeSize.isAccessibilitySize ? nil : 6)
+                    .readingLines(FeedPostLayout.lineHeight)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.bottom, ThemeSpace.x4)

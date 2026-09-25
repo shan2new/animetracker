@@ -18,7 +18,7 @@ struct BlockedAccountsView: View {
     var body: some View {
         content
             .background(ThemeColor.canvas.ignoresSafeArea())
-            .navigationTitle(Copy.Social.blockedTitle)
+            .brandNavigationTitle(Copy.Social.blockedTitle)
             .navigationBarTitleDisplayMode(.inline)
             .task { await load() }
     }

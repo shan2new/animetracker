@@ -42,7 +42,7 @@ struct StartRewatchSheet: View {
                  trailing: {
                      // Reserved whether or not the row is selected, so a tick landing never
                      // reflows the row it lands on.
-                     Image(systemName: "checkmark")
+                     AppGlyph(systemName: "checkmark")
                          .font(.system(size: 15, weight: .semibold))
                          .foregroundStyle(ThemeColor.accent)
                          .opacity(selected ? 1 : 0)
@@ -132,7 +132,7 @@ struct StartRewatchSheet: View {
                 // `chromeGlass` honours.
                 .chromeGlass(in: Rectangle())
             }
-            .navigationTitle(Copy.Action.startRewatch)
+            .brandNavigationTitle(Copy.Action.startRewatch)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -259,7 +259,7 @@ struct WatchHistoryView: View {
         // A real navigation bar with a real material, and the show's own name on it: the shipped
         // screen was a hand-built row over hidden chrome, titled "Watch history" and nothing else,
         // so the name of the show whose history it was never appeared anywhere on it.
-        .navigationTitle(franchise?.displayTitle ?? Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
+        .brandNavigationTitle(franchise?.displayTitle ?? Copy.Action.viewWatchHistory.replacingOccurrences(of: "View ", with: "").capitalizedFirst())
         .chromeNavigationSubtitle(historySubtitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarRole(.editor)
@@ -269,11 +269,11 @@ struct WatchHistoryView: View {
                 if !sessions.isEmpty {
                     Menu {
                         Button(role: .destructive) { confirmDeleteAll = true } label: {
-                            Label(Copy.Action.deleteWatchHistory, systemImage: "trash")
+                            AppGlyphLabel(Copy.Action.deleteWatchHistory, systemName: "trash")
                         }
                     } label: {
                         // The toolbar item supplies the material; no local glass disc inside it.
-                        Image(systemName: "ellipsis")
+                        AppGlyph(systemName: "ellipsis")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(ThemeColor.textPrimary)
                             .frame(width: 44, height: 44)
@@ -573,7 +573,7 @@ struct SessionDetailView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             .background(ThemeColor.canvasRaised.ignoresSafeArea())
-            .navigationTitle(session.title)
+            .brandNavigationTitle(session.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

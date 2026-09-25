@@ -25,3 +25,16 @@ qa-shots/
 # ios/Resources/AppIcon.icon and android/app/src/main/res — so these are regenerable scratch.
 design/app-icon-v2/**/*.png
 design/app-icon-tv/**/*.png
+
+# Discover's genre art INPUTS (≈50 MB): the Codex-generated sources, the importer's QA renders and
+# its contact sheets. What ships is the graded output in ios/Resources/Assets.xcassets/Genres
+# (committed), made from these by icon/genres/import.py (committed, with the brief in its README).
+icon/genres/src/
+icon/genres/qa/
+icon/genres/sheet-*.png
+
+# The Split-Flap icon's renders and in-context previews — regenerable from design/app-icon-splitflap/src
+# (committed); the icon that ships is ios/Resources/AppIcon.icon.
+design/app-icon-splitflap/renders/
+design/app-icon-splitflap/handover.png
+design/app-icon-splitflap/src/*.png

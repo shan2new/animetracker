@@ -39,12 +39,12 @@ struct EpisodeDiscussionView: View {
         switch presentation {
         case .page:
             content
-                .navigationTitle(Copy.Stories.discussionTitle(episode))
+                .brandNavigationTitle(Copy.Stories.discussionTitle(episode))
                 .navigationBarTitleDisplayMode(.inline)
         case .sheet:
             NavigationStack {
                 content
-                    .navigationTitle(Copy.Stories.discussionTitle(episode))
+                    .brandNavigationTitle(Copy.Stories.discussionTitle(episode))
                     .navigationBarTitleDisplayMode(.inline)
             }
             .presentationDetents([.medium, .large])
@@ -162,11 +162,11 @@ struct EpisodeDiscussionView: View {
             .accessibilityHint(onOpenShow == nil ? "" : Copy.Feed.goTo(showTitle))
 
             Text(Copy.Stories.discussionTitle(episode))
-                .type(ThemeType.feedBodyLarge)
+                .type(ThemeType.feedLightLarge)
                 .foregroundStyle(ThemeColor.feedText)
                 .padding(.top, ThemeSpace.x3 + ThemeSpace.x0_5)
             Text(Copy.Stories.spoilers(episode))
-                .type(ThemeType.feedNote)
+                .type(ThemeType.feedSubhead)
                 .foregroundStyle(ThemeColor.feedSecondary)
                 .padding(.top, ThemeSpace.x1)
                 .padding(.bottom, ThemeSpace.x4)
@@ -228,10 +228,10 @@ struct EpisodeDiscussionView: View {
 
     private func lockLine(_ text: String, glyph: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-            Image(systemName: glyph)
+            AppGlyph(systemName: glyph)
                 .font(.footnote.weight(.semibold))
             Text(text)
-                .type(ThemeType.feedNote)
+                .type(ThemeType.feedSubhead)
         }
         .foregroundStyle(ThemeColor.feedSecondary)
         .frame(maxWidth: .infinity)

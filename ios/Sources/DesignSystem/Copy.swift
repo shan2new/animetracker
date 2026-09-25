@@ -217,6 +217,8 @@ enum Copy {
         /// also shows a behind-count and a latest-aired date left the reader to work out which of
         /// three numbers the button would touch.
         static func markEpisodeWatched(_ n: Int) -> String { "Mark \(Copy.episodeInSentence(n)) as watched" }
+        /// The same control once its episode is marked (Schedule's card, whose pill then reads "Watched").
+        static func markEpisodeUnwatched(_ n: Int) -> String { "Mark \(Copy.episodeInSentence(n)) as unwatched" }
         /// "Mark episodes 2–5 as watched…" — a batch command STATES ITS RANGE. "Mark through episode
         /// 5" named only its endpoint, so under a hero saying "Episode 1 next · 9 behind" the 5 read
         /// as an unexplained third number rather than as first-unwatched + 4. A range confirms, so
@@ -796,6 +798,7 @@ extension Copy {
     /// Every table string, with a representative argument for the parameterised ones.
     static var allSampleStrings: [String] {
         var out = Action.commands.map(\.label)
+        out += Home.samples
         out += Confirm.buttons
         out += [
             Toast.marked(episode: 19), Toast.batchMarked(3), Toast.removed,
@@ -824,6 +827,12 @@ extension Copy {
         // The feed, stories, social layer and Discover (spec §1.9): each namespace lists one sample
         // per constant and per function, and a package that adds a string adds its sample with it.
         out += Feed.sampleStrings + Stories.sampleStrings + Social.sampleStrings + Discover.sampleStrings
+        out += Video.sampleStrings
+        out += ShowPage.sampleStrings
+        out += [ForYou.becauseWatching("Re:ZERO"), ForYou.becauseWatched("Frieren"), ForYou.moreLike("One Piece"),
+                ForYou.moreForYou, ForYou.topPick, ForYou.details,
+                Schedule.outNow, Schedule.tonightAt("7:30 PM"), Schedule.episodeRange(5, 8),
+                Action.markEpisodeUnwatched(19)]
         for copy in [EmptyStateCopy.emptyAccount, .emptyToday, .emptySchedule,
                      .noWatching, .offlineCached, .offlineNoData,
                      .searchFailed, .searchLaunchpad, .noSessions,

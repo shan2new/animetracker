@@ -32,8 +32,19 @@ extension Copy {
         static let tabForYou = "For you"
         static let tabTrending = "Trending"
         static let tabGenres = "Genres"
-        /// X's trend eyebrow: "1 · Anime · Trending".
-        static func trendEyebrow(rank: Int, kind: String) -> String { "\(rank) \u{00B7} \(kind) \u{00B7} Trending" }
+        /// A chart row's rank numeral.
+        static func trendRank(_ rank: Int) -> String { "\(rank)" }
+        /// A trending show's next installment: "Season 2 · Jan 2027"; with no window yet,
+        /// "Season 2 announced"; a rumour says so ("Season 2 rumoured").
+        static func trendNext(installment: String, window: String?, rumoured: Bool) -> String {
+            if rumoured { return "\(installment) rumoured" }
+            guard let window, !window.isEmpty, window.uppercased() != "TBA" else { return "\(installment) announced" }
+            return "\(installment) \u{00B7} \(window)"
+        }
+        /// A chart row, spoken: "3, Trapped in a Dating Sim, Airs Sunday, Anime · Isekai".
+        static func trendA11y(rank: Int, title: String, facts: [String]) -> String {
+            ([String(rank), title] + facts.filter { !$0.isEmpty }).joined(separator: ", ")
+        }
         /// The scope menu in the bar: its spoken name, and the section heading inside it.
         static let scopeMenu = "Show"
 
@@ -45,7 +56,10 @@ extension Copy {
                 title, topPick, recommended, browseByGenre, genreCount(1), genreCount(24),
                 genreA11y(name: "Action", count: 1), genreA11y(name: "Action", count: 24),
                 genreFailed, owned, tabForYou, tabTrending, tabGenres,
-                trendEyebrow(rank: 1, kind: "Anime"), scopeMenu,
+                trendRank(1), trendNext(installment: "Season 2", window: "Jan 2027", rumoured: false),
+                trendNext(installment: "Season 2", window: nil, rumoured: false),
+                trendNext(installment: "Season 2", window: nil, rumoured: true),
+                trendA11y(rank: 3, title: "Frieren", facts: ["Airs Sunday", "Anime \u{00B7} Fantasy"]), scopeMenu,
             ]
         }
     }

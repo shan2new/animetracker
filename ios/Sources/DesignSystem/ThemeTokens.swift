@@ -163,6 +163,9 @@ struct ShadowToken {
     static let card = ShadowToken(color: .black.opacity(0.45), radius: 18, y: 10)
     /// Artwork: posters and stills read as physical objects, so their shadow is tighter and darker.
     static let art = ShadowToken(color: .black.opacity(0.55), radius: 12, y: 7)
+    /// Art laid ON a coloured tile (Discover's genre tiles, Spotify's): a light contact edge — the
+    /// tile's colour, not the shadow, is what separates it.
+    static let artOnTile = ShadowToken(color: .black.opacity(0.35), radius: 6, y: 3)
     /// A hero poster, which is the largest object on its screen.
     static let artHero = ShadowToken(color: .black.opacity(0.60), radius: 26, y: 14)
     /// Toast, sync banner, anything that floats over content it must not be mistaken for.
@@ -237,34 +240,16 @@ enum ThemeMetrics {
     static let artGap: CGFloat = 14
     /// Below a hero, before the first content block.
     static let heroClearance: CGFloat = 26
-    /// Bottom inset that clears the floating tab bar AND the whole scroll-edge ramp above it.
-    ///
-    /// The rule is `bottomChromeHeight` + one gutter, and it is only ever that. At 152 against a
-    /// 140-pt ramp the clearance was itself the bug it was defending against: it cost every screen
-    /// 152 pt of vertical space *and* still let the ramp erase live content, because the ramp was
-    /// the thing that was too tall. With the ramp cut to the pill's own height (64) the honest
-    /// clearance is 76 — and ~76 pt of reading space comes back on all six screens.
-    static let tabBarClearance: CGFloat = bottomChromeHeight + ThemeSpace.x3
-    /// The tab bar's VISUAL height — pill plus the home-indicator strip under it.
-    ///
-    /// This is the divisor for optically centring a state block, and it is *not* `tabBarClearance`:
-    /// subtracting a scroll inset when centring pushed every empty state ~81 pt above true centre
-    /// on Today and Schedule.
-    static let tabBarVisualHeight: CGFloat = 90
-    /// How far above the SAFE AREA's bottom edge a floating toast sits, so it clears the tab bar
-    /// instead of landing on it: the 52-pt pill plus a 10-pt gap. (The 34-pt home-indicator strip is
-    /// already excluded — the toast's host respects the safe area; measured on device, a toast with
-    /// this inset lands at 812–860 pt against a pill whose top edge is at 875.)
-    ///
-    /// The token was defined and referenced nowhere while `ToastHost` was inset 12 pt — the toast
-    /// measured 858–935 against a pill at 873–935 and covered it outright, on Today, Library and
-    /// Search (where it also covered the field with the user's query still in it).
-    ///
-    /// One value for all four tabs. The search island was assumed to be taller than the pill and
-    /// measured on device is not: the pill occupies 882–923 pt and the search field 887–920, so a
-    /// second, larger constant for that tab would have moved the toast 24 pt for no reason and
-    /// made one tab's chrome sit differently from the other three.
-    static let toastClearance: CGFloat = 62
+    /// The breathing room under a scroll view's last row. NOT a clearance for the bar: the app's
+    /// bar (`AppTabBar`, 25 Sep) is a safe-area inset, so every scroll view already ends above it.
+    /// (It was 76 — the floating glass pill plus the ramp that gave it a ground — when the layout
+    /// was not inset by the system's iOS 26 bar.)
+    static let tabBarClearance: CGFloat = ThemeSpace.x3
+    /// The bar's VISUAL height, from the window's bottom edge: its band plus the home-indicator
+    /// strip under it. For a measurement taken in WINDOW coordinates — the feed's pager, which
+    /// ignores the safe area, and the autoplay's viewport; a view laid out inside the safe area is
+    /// already clear of the bar.
+    static var tabBarVisualHeight: CGFloat { AppTabBar.height + bottomSafeInset }
 
     // Row heights. A row's height is set by its ART, not by a hairline grid: 68 pt everywhere is
     // what makes a media app look like a list of settings.
@@ -304,6 +289,23 @@ enum ThemeMetrics {
         // Only cache a real measurement; a pre-window 59 must not become permanent.
         if value != 59 { cachedTopInset = value }
         return value
+    }
+
+    nonisolated(unsafe) private static var cachedBottomInset: CGFloat?
+
+    /// The home-indicator strip (34 pt on a Face ID phone, 0 on a Home-button one), read once from
+    /// the key window like `topSafeInset`. The WINDOW's inset: it never includes the app's bar.
+    static var bottomSafeInset: CGFloat {
+        if let cachedBottomInset { return cachedBottomInset }
+        guard Thread.isMainThread else { return 34 }
+        let value = MainActor.assumeIsolated { () -> CGFloat? in
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+            return (scene?.windows.first(where: \.isKeyWindow) ?? scene?.windows.first)?.safeAreaInsets.bottom
+        }
+        // Only cache a real measurement (a window exists); before one, assume a Face ID phone.
+        if let value { cachedBottomInset = value }
+        return value ?? 34
     }
 
     /// How far BELOW the status bar the veil takes to disappear. Short and hard on purpose: it
@@ -407,42 +409,6 @@ enum ThemeMetrics {
     }
     /// The billboard copy's run: the window less both gutters.
     static var billboardCopyWidth: CGFloat { windowWidth - 2 * gutter }
-    /// The ramp that carries content out of sight before it reaches the floating tab bar.
-    ///
-    /// 116 started the ramp ~100 pt above the tab pill's top edge, so half of it did nothing but
-    /// dim readable content, while the pill's own glass rim still had un-occluded body copy to
-    /// refract (the mirrored/upside-down text on `finished.png`, `search.png`, `ax-schedule.png`,
-    /// which reads as GPU corruption). It now starts where the pill does and finishes opaque.
-    ///
-    /// 140 said the same thing in a comment and did not do it: the material lift began ~137 pt
-    /// above a pill whose top edge is at 873 pt, so at rest, with no scrolling, the ramp erased
-    /// Today's `WATCHING` label (1.26:1), an interactive `See all` (1.42:1), four lines of Detail's
-    /// synopsis (4.39 → 1.04:1) and Search's sixth `+` button (131 vs 241 for the identical enabled
-    /// control one row higher). Apple's own scroll-edge effect fades ~30–54 pt directly behind an
-    /// opaque bar and never erases 140 pt of visible text.
-    ///
-    /// 64 is the pill's own height. Nothing more than ~29 pt above the pill's top edge is touched
-    /// at all (see `ScrollEdgeChrome.veil`), and the ramp still reaches full canvas before the
-    /// glass rim so there is never un-occluded copy left for it to refract.
-    static let bottomChromeHeight: CGFloat = 64
-
-    /// Solid canvas painted BELOW the ramp, i.e. behind the tab bar and across the home-indicator
-    /// strip.
-    ///
-    /// A `TabView` insets its children's safe area by the bar, so a `.bottom`-aligned overlay's
-    /// bottom edge is the bar's TOP edge, not the screen's — and `ignoresSafeArea` can only give
-    /// that overlay back the window's own 34-pt inset, never the bar's height on top of it. That
-    /// gap is exactly consequence (b): content rendering at full brightness underneath the bar
-    /// (236/255 on Library against 59 one row above it) with live chevrons in the home-indicator
-    /// strip. Over-drawing past the layout's edge is the only honest fix; the tab bar is drawn by
-    /// the `TabView` above its children, so this passes underneath it and gives its glass an
-    /// opaque ground to refract.
-    ///
-    /// **iOS 18's story only** (8 Sep): from iOS 26 the tab bar is a floating pill the layout is not
-    /// inset by, this whole band lands 180 pt below the screen's bottom edge (measured with it
-    /// painted red), and the bottom edge is the system's — see `ScrollEdgeChrome.systemOwnsBottom`.
-    static let bottomUnderfill: CGFloat = 180
-
     /// The ambient art wash under a TAB ROOT's inline navigation bar — Schedule, Library, Search.
     /// One height and one strength: the three roots shipped with 300/0.3, 380–520/0.5–0.68 and
     /// 400/0.68, so the same atmosphere was a whisper on one tab and a stain on the next — and by

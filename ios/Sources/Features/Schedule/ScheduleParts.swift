@@ -85,7 +85,8 @@ enum ScheduleDebug {
 ///
 ///   · `upcoming` — an empty slot, and the time in accent. Nothing to do; the fact is the clock.
 ///   · `toWatch`  — the accent RING with its episode numeral. The only lit thing in the column.
-///   · `watched`  — a settled DISC with a check, and the art dimmed a step below the ink.
+///   · `watched`  — a settled DISC with a check, and the art dimmed a step below the ink. A tap
+///                  on the disc marks it unwatched again (in the library).
 ///
 /// The urgency also stops being inverted: the ring, not the clock, is what the accent buys on an
 /// aired row, and a watched row gives up its picture's brightness rather than a tenth of its alpha.
@@ -124,19 +125,28 @@ struct AiringStateControl: View {
                 // schedule every unwatched aired row is a next step, so every one of them leads;
                 // the episode list's "one accent ring in the column" rule is about a column of
                 // episodes of ONE show, which this is not.
+                // No numeral in the ring (26 Sep, "episode number for watch toggle is useless
+                // duplication", owner): the row says "Episode 14" beside it.
                 MarkRing(marked: committing,
                          style: .quiet,
                          lead: true,
-                         episode: episode,
+                         episode: nil,
                          committing: committing,
                          label: batch ? "Mark \(Copy.episodes(count)) of \(title) as watched"
                                       : "Mark \(Copy.episode(episode)) of \(title) as watched",
                          markedLabel: Copy.Progress.episodeWatched(episode),
                          action: action)
+            case .watched where canMark:
+                // The disc UNDOES — the episode list's rule, and what the 20 Sep card's toggle did:
+                // one tap marks this airing unwatched, and the exact count is confirmed first when
+                // later episodes would go with it (`ScheduleView.toggleWatched`). Drawn inert, the
+                // 25 Sep agenda left a mistaken mark with no way back on this screen ("Unable to
+                // mark as unwatched… in the Schedule", owner).
+                MarkRing(marked: true, style: .settled, episode: nil,
+                         markedLabel: "Mark \(Copy.episode(episode)) of \(title) as unwatched",
+                         action: action)
             case .watched:
-                // The receipt, kept: a disc with the check, the form the episode list settles
-                // into. Not a control here — a schedule is a record, and the row's own long-press
-                // menu already carries the corrections.
+                // A catalogue row (not in the library): the record, with nothing to undo.
                 MarkRing(marked: true, style: .settled, episode: nil, action: {})
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -148,330 +158,16 @@ struct AiringStateControl: View {
     }
 }
 
-// MARK: - Weekly rail
-
-/// The at-rest calendar: one quiet, borderless week. Release marks are neutral dashes, not
-/// badges; the only filled object is the selected date. The week follows the day being read, so
-/// yesterday naturally reveals the previous week without adding paging chrome.
-struct ScheduleWeekRail: View {
-    let todayNoon: Int64
-    let selected: Int
-    let counts: [Int: Int]
-    /// Days with something still to come or still to watch — their dashes are amber.
-    var live: Set<Int> = []
-    let window: ClosedRange<Int>
-    /// The Later group's days — known, as on the month grid.
-    var extraDays: Set<Int> = []
-    let onPick: (Int) -> Void
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var weekStart: Int {
-        let selectedNoon = todayNoon + Int64(selected) * Formatting.D
-        return selected - Formatting.localParts(selectedNoon).wd
-    }
-
-    private var offsets: [Int] { Array(weekStart..<(weekStart + 7)) }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(offsets, id: \.self) { offset in
-                ScheduleWeekDay(
-                    noon: todayNoon + Int64(offset) * Formatting.D,
-                    isSelected: offset == selected,
-                    isToday: offset == 0,
-                    isLive: live.contains(offset),
-                    releaseCount: counts[offset] ?? 0,
-                    isKnown: window.contains(offset) || extraDays.contains(offset),
-                    action: { onPick(offset) }
-                )
-            }
-        }
-        .padding(.horizontal, ThemeSpace.x3)
-        .frame(height: 82)
-        .id(weekStart)
-        .transition(.opacity)
-        .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: weekStart)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(Copy.Schedule.ticker)
-    }
-}
-
-private struct ScheduleWeekDay: View {
-    let noon: Int64
-    let isSelected: Bool
-    var isToday: Bool = false
-    var isLive: Bool = false
-    let releaseCount: Int
-    let isKnown: Bool
-    let action: () -> Void
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    /// At the accessibility sizes a seventh of the screen cannot hold "MON" — the rail printed
-    /// "M…" beside "TUE" (review i3) — so the locale's one-letter form takes over.
-    private var weekday: String {
-        let wd = Formatting.localParts(noon).wd
-        return (typeSize.isAccessibilitySize ? Formatting.weekdayLetter(wd) : Formatting.weekdayShort(wd))
-            .localizedUppercase
-    }
-
-    private var numeral: String { "\(Formatting.localParts(noon).d)" }
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: ThemeSpace.x1) {
-                Text(weekday)
-                    .type(ThemeType.caption)
-                    .foregroundStyle(isToday ? ThemeColor.accent : ThemeColor.textSecondary)
-                    .lineLimit(1)
-
-                ZStack {
-                    // The selection is a quiet disc; TODAY is the amber numeral — amber already
-                    // means "today" in this control, so it cannot also mean "selected".
-                    if isSelected {
-                        Circle().fill(ThemeColor.surfaceFloating)
-                    }
-                    Text(numeral)
-                        .type(ThemeType.time)
-                        .foregroundStyle(isToday ? ThemeColor.accent
-                                         : (releaseCount > 0 || isSelected ? ThemeColor.textPrimary : ThemeColor.textSecondary))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-                .frame(width: 36, height: 36)
-
-                HStack(spacing: ThemeSpace.x1) {
-                    ForEach(0..<min(2, releaseCount), id: \.self) { _ in
-                        Capsule()
-                            .fill(isLive ? ThemeColor.accent : ThemeColor.textTertiary)
-                            .frame(width: 14, height: 3)
-                    }
-                }
-                .frame(height: 3)
-            }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(CalendarCellPressStyle())
-        .disabled(!isKnown)
-        .opacity(isKnown ? 1 : 0.32)
-        .accessibilityLabel(Date(timeIntervalSince1970: Double(noon) / 1000)
-            .formatted(.dateTime.weekday(.wide).day().month(.wide)))
-        .accessibilityValue(releaseCount == 0 ? Copy.Schedule.noEpisodes : Copy.episodes(releaseCount))
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-// MARK: - Spacious schedule cards
-
-/// One date heading above its artwork cards. Relative language is reserved for today, tomorrow,
-/// and yesterday; every other group is simply a weekday and numeral.
-struct ScheduleDayHeading: View {
-    let relative: String?
-    let weekday: String
-    let numeral: String
-    /// Half the heading's cap height: the dot sits on the capitals' middle, the way a typeset
-    /// middot does. Centred ON the baseline it read as a full stop — "TOMORROW . FRI 25".
-    @ScaledMetric(relativeTo: .body) private var dotLift: CGFloat = 6
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
-            if let relative {
-                Text(relative)
-                    .type(ThemeType.bodyEmphasis)
-                    .foregroundStyle(relative == "TODAY" ? ThemeColor.accent : ThemeColor.textSecondary)
-                Circle()
-                    .fill(relative == "TODAY" ? ThemeColor.accent : ThemeColor.textTertiary)
-                    .frame(width: 4, height: 4)
-                    .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + dotLift }
-            }
-            Text("\(weekday.localizedUppercase) \(numeral)")
-                .type(ThemeType.bodyEmphasis)
-                .foregroundStyle(ThemeColor.textPrimary)
-        }
-        .lineLimit(1)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
-    }
-}
-
-/// Landscape identity and the episode/action group share the card's lower edge.
-struct ScheduleAiringCard<Trailing: View>: View {
-    let title: String
-    let episodeText: String
-    let time: String?
-    /// The time is ahead of us — amber, the app's forward-looking fact; an aired time is quiet.
-    var timeIsLead: Bool = false
-    let art: WideArt
-    let poster: String?
-    let name: BillboardName
-    let hasReminder: Bool
-    let zoomID: String
-    @ViewBuilder var trailing: () -> Trailing
-    let action: () -> Void
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    private let radius: CGFloat = ThemeRadius.card
-    private var aspectRatio: CGFloat { typeSize.isAccessibilitySize ? 1.05 : 1.65 }
-
-    /// "E24 · 7:30 PM" as ONE text that wraps between words. As an `HStack` of three runs each
-    /// run was squeezed on its own, and at the accessibility sizes the card printed "7:30 P" over
-    /// "M" (review i3); the clock's own space is bound so it never splits.
-    private var facts: Text {
-        var t = Text(episodeText)
-        if let time {
-            // On ART the aired time stays white (20 Sep) — grey read at ~2:1 over a bright key
-            // visual; ahead of us it is amber.
-            t = t + Text(" \u{00B7} ").foregroundStyle(ThemeColor.textTertiary)
-                + Text(time.replacingOccurrences(of: " ", with: "\u{00A0}")).monospacedDigit()
-                    .foregroundStyle(timeIsLead ? ThemeColor.accent : ThemeColor.textPrimary)
-        }
-        if hasReminder {
-            t = t + Text("\u{00A0}\u{00A0}") + Text(Image(systemName: "bell.fill")).font(.system(size: 10, weight: .semibold))
-        }
-        return t
-    }
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        Color.clear
-            .aspectRatio(aspectRatio, contentMode: .fit)
-            .overlay {
-                GeometryReader { geometry in
-                    ZStack(alignment: .bottom) {
-                        Button(action: action) {
-                            ArtworkScene(art: art, poster: poster, name: name, title: title)
-                                .contentShape(shape)
-                        }
-                        .buttonStyle(OverArtPressStyle())
-                        .accessibilityLabel(title)
-                        .accessibilityHint(Copy.Accessibility.opensTheShowHint)
-
-                        // 196: the "Mark as watched" capsule is ~188 pt on one line; at 164 it
-                        // overflowed the column and ran into the card's edge with no inset (review
-                        // i4, N6). The logo gives way instead.
-                        ArtworkSceneCaption(name: name, title: title, contentMinWidth: 196,
-                                            protection: HeroProtection.strength(lightness: PaletteCache.shared.lightness(for: art.url)),
-                                            typedName: !art.portraitSource) {
-                            Button(action: action) {
-                                facts
-                                    .type(ThemeType.cardFact)
-                                    .foregroundStyle(ThemeColor.textPrimary)
-                                    .multilineTextAlignment(typeSize.isAccessibilitySize ? .leading : .center)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    // The contact shadow every fact on art carries (review i4, N1).
-                                    .shadow(.art)
-                            }
-                            .buttonStyle(.plain)
-                        } actions: {
-                            trailing()
-                        }
-                        .padding(ThemeSpace.x4)
-                        .padding(.leading, art.portraitSource && !name.hasGraphicLogo ? 140 : 0)
-                        .frame(width: geometry.size.width)
-                    }
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                }
-            }
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-        .cardShadow(.art, shape: shape)
-        .zoomSource(zoomID)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel([title, episodeText, time].compactMap { $0 }.joined(separator: ", "))
-    }
-}
-
-/// The card's reach-friendly watched toggle. White is the action/state system here; amber stays
-/// out of the content surface and remains available to the app's truly exceptional states.
-struct ScheduleWatchToggle: View {
-    let watched: Bool
-    let title: String
-    let episode: Int
-    let action: () -> Void
-
-    var body: some View {
-        WatchedArtworkButton(watched: watched, action: action)
-        .accessibilityLabel(watched
-            ? "Mark \(Copy.episode(episode)) of \(title) as unwatched"
-            : "Mark \(Copy.episode(episode)) of \(title) as watched")
-        .accessibilityValue(watched ? "Watched" : "Not watched")
-    }
-}
-
-// Schedule's row — the date rides it (7 Sep).
-//
-// The complaint: "The Schedule page looks good but it is ultra dense and extremely confusing."
-// Measured on the production account — 5 airings, 2 shows, a 22-day window:
-//
-//   · SIX full-width date bands for FIVE rows. A band costs ~48 pt (24 gap + label + 10 labelGap)
-//     against a 59–80 pt row, so roughly 40 % of the feed's height was a banner introducing exactly
-//     one row. The 6 Sep pass saw the symptom ("a feed of one-row days was half header by area")
-//     and treated it by shrinking the gap 30 → 24, which is a spacing answer to a structural fault.
-//   · Of "7:30 PM · Season 4 · Episode 22", TWO of the three facts are constant for that show
-//     across the whole window: a weekly show cannot leave Season 4 inside 22 days, and it airs at
-//     the same minute every week. Only the episode number varied — and it sat LAST on the line,
-//     the least-scanned position on the row.
-//   · "That Time I Got Reincarnated as a Slime" was printed three times, two lines each, with the
-//     same tile beside it three times.
-//   · Fifteen middot-joined fragments on one screen, about five of which carried news. No fact had
-//     a fixed x, so the screen was READ line by line instead of scanned down a column.
-//
-// So the screen was not dense with content — it was dense with repetition. Three shapes were built
-// behind `-scheduleShape` and photographed side by side on the real account (the method that
-// settled the month grid, the compact rows and the state ladder), and the user chose THIS one:
-//
-//   A ✓ the date rides the row      — Google Calendar's Schedule view / Fantastical's agenda
-//   B ✗ the bands stay, rows empty  — fixed the caption, left the 40 % of banners untouched
-//   C ✗ one block per show          — no repetition at all, but today vanished from the screen
-//                                     and the dates ran 2, 9, 16, 4, 11, 18 down the page
-//
-// B and C are deleted, not flagged off.
-//
-// THE WIDTH BUDGET, because every question about this row is really a question about it. On a
-// 393-pt screen: 16 gutter + date + art + lane + 44 ladder + 16 gutter, with 8–12 pt between.
-// "Reincarnated as a Slime" measures 184 pt in Outfit SemiBold 17, so the title needs a lane of at
-// least ~184 to keep the two-line break it has today (189 pt). That leaves ~95 pt for the date
-// column AND the art together — which is why the art here is a small PORTRAIT rather than the
-// 104×59 landscape tile the band-and-row shape carried: a landscape wide enough to read (88 pt)
-// leaves a 159-pt lane, and the title then breaks onto three ragged lines, unevenly, since a short
-// name like "Re:ZERO" still takes one. The portrait gives every row the same 72-pt floor.
-
-// MARK: - Ink
-
-/// The clock says WHEN, and its ink says which side of now that is: accent while the episode is
-/// ahead (the app's one colour rule for a future time), ink the moment it has aired and you have
-/// not seen it, tertiary once it is spent.
-private func clockInk(_ state: AiringState) -> Color {
-    switch state {
-    case .upcoming: return ThemeColor.accent
-    case .toWatch:  return ThemeColor.textPrimary
-    case .watched:  return ThemeColor.textTertiary
-    }
-}
-
-private func metaInk(_ state: AiringState) -> Color {
-    state.isWatched ? ThemeColor.textTertiary : ThemeColor.textSecondary
-}
-
-private func titleInk(_ state: AiringState) -> Color {
-    state.isWatched ? ThemeColor.textSecondary : ThemeColor.textPrimary
-}
-
-/// A reminder is armed for this exact episode — passive, never a control; the row's spoken value
-/// says it.
-private func bell() -> Text {
-    Text(" ") + Text(Image(systemName: "bell.fill"))
-        .font(.system(size: 9, weight: .semibold))
-        .foregroundStyle(ThemeColor.textTertiary)
-}
+// The date RIDES THE ROW (7 Sep, kept by the 25 Sep rebuild — `ScheduleAgendaRow`). "The Schedule
+// page looks good but it is ultra dense and extremely confusing" (user): measured then, six
+// full-width day bands for five rows, ~40 % of the feed's height a banner introducing one row. The
+// day is printed once, in its first row's date column, and a day's break is space. The 25 Sep
+// spike's day headings made the same mistake again at 20 pt ("tonight still feels cluttered").
 
 // MARK: - The date column
 
-/// "WED" over "9" — the weekday as the app's eyebrow, the numeral in the calendar grid's own `time`
-/// face, so the column reads as the same instrument the month grid does. Today is accent, the one
+/// "WED" over "9" — the weekday in Schedule's caps, the numeral in the month grid's own face
+/// (`feedDate`), so the column reads as the same instrument the grid does. Today is accent, the one
 /// rule this screen already follows for today. Empty on the second and later airings of a day: the
 /// date is printed once and its rows stack under it, as every agenda does.
 struct ScheduleDateColumn: View {
@@ -480,19 +176,20 @@ struct ScheduleDateColumn: View {
     let isToday: Bool
     @ScaledMetric(relativeTo: .subheadline) private var scale: CGFloat = 1
 
-    /// Capped for the same reason the tile is: uncapped it reaches ~70 pt at the accessibility
-    /// sizes and eats the lane it exists to protect.
-    private var w: CGFloat { min(RowMetrics.dateW * scale, RowMetrics.dateW + 16) }
+    /// Capped: uncapped it reaches ~70 pt at the accessibility sizes and eats the lane the names
+    /// need.
+    private static let width: CGFloat = 38
+    private var w: CGFloat { min(Self.width * scale, Self.width + 16) }
 
     var body: some View {
         VStack(alignment: .center, spacing: 1) {
             if let weekday, let numeral {
                 Text(weekday)
-                    .type(ThemeType.sectionLabel)
+                    .type(ThemeType.feedEyebrow)
                     .textCase(.uppercase)
                     .foregroundStyle(isToday ? ThemeColor.accent : ThemeColor.textTertiary)
                 Text(numeral)
-                    .type(ThemeType.time)
+                    .type(ThemeType.feedDate)
                     .foregroundStyle(isToday ? ThemeColor.accent : ThemeColor.textSecondary)
             }
         }
@@ -503,162 +200,11 @@ struct ScheduleDateColumn: View {
     }
 }
 
-// MARK: - The row
-
-/// One airing: the date at a fixed x, the show's art, the show, what varies about this episode, and
-/// the state ladder's slot. No day band — the dates ARE the calendar at rest, and the month grid
-/// behind the bar's glyph is still there for the shape of a month.
-/// The width budget, resolved. See the header: the date column and the tile together may not
-/// exceed ~95 pt or the title loses its lane, and a tile narrower than ~88 stops being a picture.
-/// Three lines is what that costs the longest names, and it is the cheaper loss. (File scope, not
-/// nested: `ScheduleDateRow` is generic over its trailing view, and a generic type may not carry
-/// static stored properties.)
-private enum RowMetrics {
-    static let dateW: CGFloat = 38
-    static let tileW: CGFloat = 88
-    static let tileH: CGFloat = 50
-    static let titleLines = 3
-}
-
-struct ScheduleDateRow<Trailing: View>: View {
-
-    /// Nil on the second and later airings of one day.
-    let weekday: String?
-    let numeral: String?
-    let isToday: Bool
-    let franchise: Franchise
-    /// What VARIES — "Episode 16". No season: it cannot change inside the window.
-    let episodeText: String
-    let time: String?
-    let state: AiringState
-    let hasReminder: Bool
-    let zoomID: String
-    var receiptHost: String? = nil
-    @Environment(AppModel.self) private var appModel
-    @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .subheadline) private var artScale: CGFloat = 1
-    @ViewBuilder var trailing: () -> Trailing
-    let action: () -> Void
-
-    /// The tile scales with Dynamic Type, but only so far: uncapped it eats the lane it sits
-    /// beside, and the title then breaks inside a word.
-    private var artW: CGFloat { min(RowMetrics.tileW * artScale, RowMetrics.tileW * 1.35) }
-    private var artH: CGFloat { min(RowMetrics.tileH * artScale, RowMetrics.tileH * 1.35) }
-
-    var body: some View {
-        Group {
-            if typeSize.isAccessibilitySize { stacked } else { inline }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel([dateSpoken, franchise.title, episodeText, time]
-            .compactMap { $0 }.joined(separator: ", "))
-    }
-
-    /// Date, tile, words, ladder — four columns at four fixed x's.
-    private var inline: some View {
-        HStack(alignment: .top, spacing: ThemeSpace.x3) {
-            HStack(alignment: .top, spacing: ThemeSpace.x2) {
-                ScheduleDateColumn(weekday: weekday, numeral: numeral, isToday: isToday)
-                artButton
-            }
-            words
-            trailing()
-        }
-        .frame(minHeight: artH)
-    }
-
-    /// At the ACCESSIBILITY sizes the row UNFOLDS: the date, the tile and the ladder keep one line
-    /// and the words take the screen's full width beneath them.
-    ///
-    /// Four columns cannot survive that type. Measured at AX-XL: the date column reaches 54, the
-    /// tile 119 and the ladder keeps 44, which leaves the words a ~112-pt lane against a ~28-pt
-    /// face — and the row printed "Re:ZER / O" broken inside the word, "That Time I Got Reinc…"
-    /// truncated (a row may grow at these sizes; it may not lie about which show it is) and pushed
-    /// the ladder off the screen entirely. Unfolded, the words have ~361 pt and every part
-    /// survives. The same fault, and the same answer, as the clock column this row replaced.
-    private var stacked: some View {
-        VStack(alignment: .leading, spacing: ThemeSpace.x2) {
-            HStack(alignment: .center, spacing: ThemeSpace.x3) {
-                ScheduleDateColumn(weekday: weekday, numeral: numeral, isToday: isToday)
-                artButton
-                Spacer(minLength: 0)
-                trailing()
-            }
-            words
-        }
-    }
-
-    private var artButton: some View {
-        Button(action: action) { artwork.contentShape(Rectangle()) }
-            .buttonStyle(OverArtPressStyle())
-    }
-
-    private var words: some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: ThemeSpace.x0_5) {
-                Text(franchise.displayTitle)
-                    .type(ThemeType.rowTitle)
-                    .foregroundStyle(titleInk(state))
-                    .lineLimit(typeSize.isAccessibilitySize ? 4 : RowMetrics.titleLines)
-                    .multilineTextAlignment(.leading)
-                if let receiptHost, ReceiptLine.isLive(appModel, host: receiptHost) {
-                    ReceiptLine(host: receiptHost, compact: true, inline: true)
-                } else {
-                    caption
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(RowPressStyle())
-    }
-
-    /// A watched airing gives up its PICTURE — a flat veil inside the clipped shape, never
-    /// `.saturation`/`.blur`, which are per-frame passes on a scrolling list (the 5 Sep rule).
-    private var artwork: some View {
-        let shape = RoundedRectangle(cornerRadius: ThemeRadius.episodeStill, style: .continuous)
-        let wide = franchise.wideArt
-        return ZStack {
-            shape.fill(ThemeColor.surfaceRaised)
-            LandscapeArt(url: wide.url, portraitSource: wide.portraitSource,
-                         maxPixel: wide.ultraWide ? 1900 : 420, ultraWide: wide.ultraWide)
-        }
-        .frame(width: artW, height: artH)
-        .clipShape(shape)
-        .overlay { if state.isWatched { shape.fill(ThemeColor.canvas.opacity(0.55)) } }
-        .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-        .zoomSource(zoomID)
-    }
-
-    /// "Episode 16 · 6:30 PM" — the fact that VARIES leads, the clock follows it. ONE concatenated
-    /// `Text`, never an `HStack` of two: as a stack one run holds `layoutPriority` and the other
-    /// carries `lineLimit(1)`, so at the accessibility sizes the row printed a bare clock and never
-    /// said which episode — the one fact it exists to give (measured 6 Sep, on the row this
-    /// replaces). Concatenated, the run wraps like prose and every part survives.
-    private var caption: some View {
-        var line = Text(episodeText).foregroundStyle(metaInk(state))
-        if let time {
-            line = line + Text(" · ").foregroundStyle(ThemeColor.textTertiary)
-            line = line + Text(time).foregroundStyle(clockInk(state)).monospacedDigit()
-            if hasReminder { line = line + bell() }
-        }
-        return line
-            .type(ThemeType.rowMeta)
-            .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
-            .multilineTextAlignment(.leading)
-    }
-
-    private var dateSpoken: String? {
-        guard let weekday, let numeral else { return nil }
-        return "\(weekday) \(numeral)"
-    }
-}
-
 // MARK: - The calendar
 
 /// The month grid, behind the bar's calendar button.
 ///
-/// At rest the screen has NO date chrome — the feed's day headers are the calendar, which is what
+/// At rest the screen has NO date chrome — the rows' dates are the calendar, which is what
 /// animeschedule.net and Trakt v3 do. The grid is what the reader asks for, which is where
 /// Fantastical (pull the DayTicker down) and Google Calendar (the month dropdown) both put it; it
 /// is a TAP here rather than a pull because this screen already owns the pull gesture for refresh.
@@ -739,7 +285,7 @@ struct ScheduleMonthGrid: View {
                     ForEach(0..<7, id: \.self) { col in
                         // Sunday-first: column 0 is Sunday whatever the device's region says.
                         Text(Formatting.weekdayLetterMonFirst((col + 6) % 7))
-                            .type(ThemeType.caption)
+                            .type(ThemeType.feedEyebrow)
                             .textCase(.uppercase)
                             .foregroundStyle(ThemeColor.textTertiary)
                             .frame(maxWidth: .infinity)
@@ -833,7 +379,7 @@ struct ScheduleMonthGrid: View {
                 monthAnchor = target
             }
         } label: {
-            Image(systemName: glyph).font(.system(size: 15, weight: .semibold))
+            AppGlyph(systemName: glyph).font(.system(size: 15, weight: .semibold))
         }
         .frame(width: 44, height: 34)
         .tint(ThemeColor.interactive)
@@ -883,7 +429,7 @@ struct ScheduleMonthGrid: View {
                         Circle().fill(ThemeColor.surfaceFloating)
                     }
                     Text("\(Formatting.localParts(ts).d)")
-                        .type(ThemeType.time)
+                        .type(ThemeType.feedDate)
                         .foregroundStyle(numeralInk(isToday: isToday, hasContent: n > 0))
                         // The numeral gives way inside the capped disc rather than pushing it.
                         .lineLimit(1)

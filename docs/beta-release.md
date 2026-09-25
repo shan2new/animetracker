@@ -26,6 +26,11 @@ old splash's `SplashShaders.metal` went with the 4 Sep launch rebuild), so the s
 no Metal toolchain download; if one is ever added back, Xcode 26 stopped bundling `metal` and
 needs `xcodebuild -downloadComponent MetalToolchain` once.
 
+**26 Sep 2026:** the machine now has ONE Xcode, `/Applications/Xcode.app` = Xcode 27.0 (27A266a,
+iOS 27.0 SDK) — the release that shipped with iOS 27 — and `xcode-select` points at it. Archives are
+built with it; if App Store Connect ever answers "built with a beta SDK", this line is wrong and the
+release Xcode must be installed before archiving.
+
 ## 1. Legal pages — served by the landing site, not the backend
 
 The app's Privacy Policy and Terms URLs point at the **landing site** (`landing/`, deployed to
@@ -122,9 +127,18 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -exportArchi
   -exportPath build/export -allowProvisioningUpdates
 ```
 
-The CLI *upload* (`xcrun altool --upload-app`) additionally needs an App Store Connect API key
-(Users and Access → Integrations → App Store Connect API → generate, download the `.p8` once).
-Worth doing for the second build; the Organizer is less setup for the first.
+**Upload from the CLI with no API key** (26 Sep, build 3): `-exportArchive` with
+`ios/ExportOptions-upload.plist` (the same options plus `destination: upload`) exports AND uploads,
+authenticating as the Apple ID signed in to Xcode → Settings → Accounts:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -exportArchive \
+  -archivePath build/Previously.xcarchive -exportOptionsPlist ExportOptions-upload.plist \
+  -exportPath build/upload -allowProvisioningUpdates    # ends "Upload succeeded."
+```
+
+`xcrun altool --upload-app` is the other CLI path and needs an App Store Connect API key (Users and
+Access → Integrations → App Store Connect API → generate, download the `.p8` once).
 
 **Bump `CURRENT_PROJECT_VERSION` in `ios/project.yml` before every upload** — App Store Connect
 rejects a build number it has already seen, and `manageAppVersionAndBuildNumber` is deliberately
@@ -262,6 +276,15 @@ is fixed:
 
 The server change is additive for older app builds (TestFlight builds already installed keep
 working against the new server), so there is no lockstep: server first, app second, always.
+
+## Shipping the Home build (1.0 build 3, 26 Sep): app only
+
+Home becomes the landing (the departures board: billboard, Recently aired, Up next, This week), the
+feed moves to its own tab with SF Pro post words and the X pass, Schedule is pushed from Home, and
+the Split-Flap icon and flip launch ship. **No server change**: `git diff --stat fb76a9e -- server/`
+is empty and every route the build calls is on production (`/me/feed`, `/discover/genres` answer
+401, never 404). So the order is just: archive, export, upload, add the build to the tester group.
+App Privacy answers are unchanged (nothing new is collected).
 
 ## Comments stay off until you switch them on
 

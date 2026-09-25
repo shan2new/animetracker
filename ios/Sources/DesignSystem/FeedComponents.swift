@@ -216,7 +216,7 @@ struct PersonDisc: View {
                     .minimumScaleFactor(0.6)
                     .padding(size * 0.1)
             } else {
-                Image(systemName: "person.fill")
+                AppGlyph(systemName: "person.fill")
                     .font(.system(size: size * 0.44, weight: .semibold))
                     .foregroundStyle(ThemeColor.onAccent)
             }
@@ -262,16 +262,21 @@ struct FeedFaceCrop: View {
 /// X's gold organisation check — here, "from the studio or network". Amber is the app's gold, and
 /// here it is a STATE (official), never an action. Callers draw it only for an official lead
 /// source (`isOfficial`); a trade-press post has no mark, a rumour carries a note instead.
+///
+/// ONE ink. The glyph is Tabler's `rosette-discount-check-filled`, a TEMPLATE picture (26 Sep), not
+/// an SF Symbol: it has no layers for a palette, and its check is CUT OUT of the rosette, so the
+/// ground shows through it — a dark check on amber on the feed's black. Given two styles, a
+/// template takes the first for the whole picture: the SF-era `onAccent, accent` pair painted
+/// every rosette `onAccent` on the black canvas, and the marks vanished.
 struct ConfirmedMark: View {
     let size: CGFloat
 
     init(size: CGFloat = 16) { self.size = size }
 
     var body: some View {
-        Image(systemName: "checkmark.seal.fill")
+        AppGlyph(systemName: "checkmark.seal.fill")
             .font(.system(size: size))
-            .symbolRenderingMode(.palette)
-            .foregroundStyle(ThemeColor.onAccent, ThemeColor.accent)
+            .foregroundStyle(ThemeColor.accent)
             .accessibilityLabel(Copy.Feed.officialSource)
     }
 }
@@ -304,7 +309,7 @@ struct LikeGlyph: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Image(systemName: liked ? "heart.fill" : "heart")
+        AppGlyph(systemName: liked ? "heart.fill" : "heart")
             .font(.system(size: size))
             .foregroundStyle(liked ? ThemeColor.like : idle)
             // A keyframe animator is right HERE because its content is the glyph itself; the
@@ -421,7 +426,7 @@ struct BigHeartPop: View {
 
     var body: some View {
         if !reduceMotion {
-            Image(systemName: "heart.fill")
+            AppGlyph(systemName: "heart.fill")
                 .font(.system(size: size))
                 .foregroundStyle(ThemeColor.likeOverArt)
                 .shadow(.likeOverArt)
@@ -451,6 +456,42 @@ struct BigHeartPop: View {
                 }
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+// MARK: - Glyph motions
+
+/// The bell's ring and the bookmark's drop, as transforms of the glyph. The app's glyphs are Tabler
+/// TEMPLATE pictures (26 Sep), not SF Symbols, and `.symbolEffect` has nothing to move in a
+/// picture: the reminder's bell, the header's bell and the save had all silently gone still. Each
+/// plays once per trigger, in about half a second, and ends where it started; the callers raise
+/// the trigger only outside Reduce Motion.
+extension View {
+    /// SF's `.wiggle` on a bell: swung about its crown a few degrees each way, settling.
+    func glyphRing(trigger: Int) -> some View {
+        keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, degrees in
+            view.rotationEffect(.degrees(degrees), anchor: .top)
+        } keyframes: { _ in
+            KeyframeTrack {
+                CubicKeyframe(15, duration: 0.08)
+                CubicKeyframe(-13, duration: 0.12)
+                CubicKeyframe(9, duration: 0.11)
+                CubicKeyframe(-5, duration: 0.1)
+                CubicKeyframe(0, duration: 0.1)
+            }
+        }
+    }
+
+    /// SF's `.bounce.down` on a bookmark: pressed down onto its foot, then sprung back.
+    func glyphDrop(trigger: Int) -> some View {
+        keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, scale in
+            view.scaleEffect(scale, anchor: .bottom)
+        } keyframes: { _ in
+            KeyframeTrack {
+                CubicKeyframe(0.8, duration: 0.09)
+                SpringKeyframe(1.0, duration: 0.34, spring: .bouncy)
+            }
         }
     }
 }

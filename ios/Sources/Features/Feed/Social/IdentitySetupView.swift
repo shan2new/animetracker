@@ -68,7 +68,7 @@ struct IdentitySetupView: View {
         .scrollDismissesKeyboard(.interactively)
         .background(ThemeColor.canvas.ignoresSafeArea())
         .safeAreaInset(edge: .bottom, spacing: 0) { saveBar }
-        .navigationTitle(mode == .firstReply ? Copy.Social.identityTitle : Copy.Social.identityRow)
+        .brandNavigationTitle(mode == .firstReply ? Copy.Social.identityTitle : Copy.Social.identityRow)
         .navigationBarTitleDisplayMode(.inline)
         .task { await seed() }
         .task(id: handle) { await checkAvailability() }
@@ -90,7 +90,7 @@ struct IdentitySetupView: View {
                 .foregroundStyle(ThemeColor.feedSecondary)
                 .accessibilityHidden(true)
             TextField(Copy.Social.namePlaceholder, text: $name)
-                .type(ThemeType.composeField)
+                .type(ThemeType.body)
                 .foregroundStyle(ThemeColor.feedText)
                 .textContentType(.givenName)
                 .textInputAutocapitalization(.words)
@@ -116,11 +116,11 @@ struct IdentitySetupView: View {
                 .accessibilityHidden(true)
             HStack(spacing: ThemeSpace.x0_5) {
                 Text(Copy.Social.handlePrefix)
-                    .type(ThemeType.composeField)
+                    .type(ThemeType.body)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .accessibilityHidden(true)
                 TextField(Copy.Social.usernamePlaceholder, text: handleBinding)
-                    .type(ThemeType.composeField)
+                    .type(ThemeType.body)
                     .foregroundStyle(ThemeColor.feedText)
                     .textContentType(.username)
                     .textInputAutocapitalization(.never)
@@ -179,7 +179,7 @@ struct IdentitySetupView: View {
     private func status(_ text: String, ink: Color, glyph: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x1) {
             if let glyph {
-                Image(systemName: glyph).accessibilityHidden(true)
+                AppGlyph(systemName: glyph).accessibilityHidden(true)
             }
             Text(text).fixedSize(horizontal: false, vertical: true)
         }

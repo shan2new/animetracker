@@ -10,9 +10,9 @@ import SwiftUI
 //     "✓ Episode 19 watched · Undo", for the undo window. Hero capsules do not use it: their
 //     drawn check and "Episode N watched" label are already the complete receipt, and repeating
 //     the same fact underneath is jarring.
-//   • THE LANE — the tab bar's bottom accessory (iOS 26.1, the lane Music's mini player lives
-//     in, which folds into the bar when it minimises; below 26.1 the same lane sits attached
-//     above the bar): the poster, the fact, the show, Undo. For everything whose object LEFT the
+//   • THE LANE — a glass capsule floating just above the app's bar (`LaneFallback`; it was the
+//     system bar's iOS 26.1 accessory until the app drew its own bar, 25 Sep): the poster, the
+//     fact, the show, Undo. For everything whose object LEFT the
 //     screen or never had a control to hold the receipt — a removal, a move, an add from Search,
 //     a caught-up from a context menu — and for the two-second notices and the write failures.
 //
@@ -56,13 +56,6 @@ extension AppModel {
         if let undo, undo.placement == .lane { return .undo(undo) }
         if let notice { return .notice(notice) }
         return nil
-    }
-}
-
-enum ChromeCapability {
-    /// The tab bar can host an accessory lane (`tabViewBottomAccessory(isEnabled:)`, 26.1).
-    static var tabBarAccessory: Bool {
-        if #available(iOS 26.1, *) { return true } else { return false }
     }
 }
 
@@ -207,7 +200,7 @@ struct ReceiptLane: View {
                 Circle().fill(ThemeColor.surfaceFloating)
                 switch item {
                 case .error:
-                    Image(systemName: "exclamationmark.triangle.fill")
+                    AppGlyph(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(ThemeColor.warning)
                 default:
@@ -236,7 +229,7 @@ struct ReceiptLane: View {
     }
 }
 
-/// The lane below iOS 26.1: the same content, attached above the tab bar in the bar's own glass.
+/// The lane: the receipt's content in a glass capsule floating just above the app's bar.
 struct LaneFallback: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

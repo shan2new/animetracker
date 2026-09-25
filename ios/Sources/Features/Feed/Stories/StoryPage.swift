@@ -60,16 +60,16 @@ enum StoryStyle {
     static let segmentGap: CGFloat = 3
     static let segmentTop: CGFloat = 8
 
-    // Layout.
+    // Layout. The type is the app's Outfit, like every other surface's words.
     static let pageInset: CGFloat = 8
     static let lockupInset: CGFloat = ThemeSpace.x2
     static let headerTop: CGFloat = 6
     static let headerAvatar: CGFloat = 32
-    static let headerName = TypeToken(font: .system(.subheadline, weight: .semibold), tracking: 0)
-    static let headerMeta = TypeToken(font: .subheadline, tracking: 0)
+    static let headerName = TypeToken(font: .custom("Outfit-SemiBold", size: 15, relativeTo: .subheadline), tracking: -0.10)
+    static let headerMeta = TypeToken(font: .custom("Outfit-Regular", size: 15, relativeTo: .subheadline), tracking: -0.05)
     /// The caption at the card's foot: the episode, then when.
-    static let captionTitle = TypeToken(font: .system(.title2, weight: .bold), tracking: 0)
-    static let captionMeta = TypeToken(font: .system(.subheadline, weight: .medium), tracking: 0)
+    static let captionTitle = TypeToken(font: .custom("Outfit-SemiBold", size: 24, relativeTo: .title2), tracking: -0.35)
+    static let captionMeta = TypeToken(font: .custom("Outfit-Medium", size: 15, relativeTo: .subheadline), tracking: -0.05)
     static let captionShadow = ShadowToken(color: .black.opacity(0.45), radius: 10, y: 1)
     static let captionInset: CGFloat = 16
     static let captionBottom: CGFloat = 20
@@ -81,12 +81,12 @@ enum StoryStyle {
     /// Instagram's link sticker: a white tag, 44 tall, a 12-pt corner.
     static let tagHeight: CGFloat = 44
     static let tagRadius: CGFloat = 12
-    static let tagLabel = TypeToken(font: .system(.callout, weight: .semibold), tracking: 0)
+    static let tagLabel = TypeToken(font: .custom("Outfit-SemiBold", size: 16, relativeTo: .callout), tracking: -0.15)
     static let tagShadow = ShadowToken(color: .black.opacity(0.28), radius: 14, y: 4)
     /// The countdown sticker.
     static let countdownRadius: CGFloat = 18
-    static let countdownDigits = TypeToken(font: .system(.largeTitle, weight: .bold).monospacedDigit(), tracking: 0)
-    static let countdownTitle = TypeToken(font: .system(.footnote, weight: .bold), tracking: 0.6)
+    static let countdownDigits = TypeToken(font: .custom("Outfit-Bold", size: 34, relativeTo: .largeTitle).monospacedDigit(), tracking: -0.60)
+    static let countdownTitle = TypeToken(font: .custom("Outfit-SemiBold", size: 13, relativeTo: .footnote), tracking: 0.6)
     // The reply row under the card.
     static let replyRowHeight: CGFloat = 44
     static let replyRowPadding: CGFloat = ThemeSpace.x2
@@ -327,7 +327,7 @@ struct StoryPage: View, @MainActor Equatable {
             .accessibilityLabel(Copy.Feed.goTo(reel.showTitle))
             Spacer(minLength: 0)
             Button { menuOpen = true } label: {
-                Image(systemName: "ellipsis")
+                AppGlyph(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(StoryStyle.ink)
                     .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight)
@@ -336,7 +336,7 @@ struct StoryPage: View, @MainActor Equatable {
             .buttonStyle(FeedIconPressStyle())
             .accessibilityLabel(Copy.Feed.more)
             Button(action: actions.close) {
-                Image(systemName: "xmark")
+                AppGlyph(systemName: "xmark")
                     .font(.title3)
                     .foregroundStyle(StoryStyle.ink)
                     .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight)
@@ -594,9 +594,10 @@ private struct StoryCardContent: View {
     private var markTag: some View {
         Button(action: mark) {
             HStack(spacing: ThemeSpace.x2) {
-                Image(systemName: unlocking ? "checkmark.circle.fill" : "circle")
+                AppGlyph(systemName: unlocking ? "checkmark.circle.fill" : "circle")
                     .font(StoryStyle.tagLabel.font)
-                    .contentTransition(.symbolEffect(.replace))
+                    // A Tabler picture, not an SF Symbol: the ring crossfades to the check.
+                    .contentTransition(.opacity)
                 ZStack {
                     if unlocking {
                         Text(Copy.Stories.watched).transition(swap)
@@ -753,7 +754,7 @@ private struct StoryCountdownSticker: View {
     private var reminder: some View {
         if reel.source == .anilist {
             if ScheduleReminders.shared.has(mediaId: reel.mediaId, episode: frame.episode) {
-                Label(Copy.Stories.alertOn, systemImage: "bell.fill")
+                AppGlyphLabel(Copy.Stories.alertOn, systemName: "bell.fill")
                     .type(ThemeType.metadataEmphasis)
                     .foregroundStyle(ThemeColor.stickerInk.opacity(0.7))
                     .frame(minHeight: FeedMetrics.actionHitHeight)
@@ -761,7 +762,7 @@ private struct StoryCountdownSticker: View {
                 switch alertStatus {
                 case .notDetermined?:
                     Button(action: onTurnOnAlerts) {
-                        Label(Copy.Stories.turnOnAlerts, systemImage: "bell")
+                        AppGlyphLabel(Copy.Stories.turnOnAlerts, systemName: "bell")
                             .type(ThemeType.metadataEmphasis)
                             .foregroundStyle(ThemeColor.stickerCard)
                             .padding(.horizontal, ThemeSpace.x4)
@@ -871,7 +872,7 @@ private struct StoryReplyRow: View {
 
     private var share: some View {
         ShareLink(item: Copy.Stories.shareEpisode(show: reel.showTitle, season: reel.partLabel, episode: e)) {
-            Image(systemName: "paperplane")
+            AppGlyph(systemName: "paperplane")
                 .font(.title2)
                 .foregroundStyle(StoryStyle.ink)
                 .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight)

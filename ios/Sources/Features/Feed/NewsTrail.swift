@@ -65,7 +65,7 @@ struct SourceRow: View {
             }
             Spacer(minLength: 0)
             if link != nil {
-                Image(systemName: "arrow.up.right")
+                AppGlyph(systemName: "arrow.up.right")
                     .font(ThemeType.feedSmall.font.weight(.semibold))
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .accessibilityHidden(true)
@@ -143,7 +143,7 @@ struct NewsTrailList: View {
                 }
                 if beat.official { ConfirmedMark(size: 14) }
                 Text(Copy.Feed.afterDot(Formatting.formatted(beat.day, skeleton: "dMMMyyyy", anchor: .utcDate)))
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .lineLimit(1)
                     .fixedSize()
@@ -152,6 +152,7 @@ struct NewsTrailList: View {
                 Text(headline)
                     .type(ThemeType.feedNote)
                     .foregroundStyle(ThemeColor.feedText)
+                    .readingLines(FeedPostLayout.lineHeight)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -221,7 +222,7 @@ struct NewsTrailSheet: View {
             }
             .scrollIndicators(.hidden)
             .background(ThemeColor.canvas.ignoresSafeArea())
-            .navigationTitle(Copy.Feed.howThisStoryGotHere)
+            .brandNavigationTitle(Copy.Feed.howThisStoryGotHere)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

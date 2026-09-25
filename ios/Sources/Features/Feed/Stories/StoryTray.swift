@@ -1,11 +1,14 @@
 import SwiftUI
 
 // The stories tray above the feed (ios-spec §7.2, §1.2): Instagram's row of rings, one per library
-// show with a fresh drop. The ring is the icon's five gels while a reel has something you have not
-// seen, and goes quiet once you have; the tapped ring breaks into turning dashes while its first
-// picture loads (FeedView's open, ≤ 0.9 s), and the viewer grows out of it.
+// show with a NEW episode you have not seen. A story is an alert, not an archive: once seen (viewed
+// to its end, or its episodes watched) the reel LEAVES the tray, and it comes back only when a newer
+// episode airs — so the tray is something to wait for, and every ring in it is lit (the icon's five
+// gels). The tapped ring breaks into turning dashes while its first picture loads (FeedView's open,
+// ≤ 0.9 s), and the viewer grows out of it. While the viewer is up the tray holds the reels it
+// opened with (a seen ring goes quiet behind it); they leave a beat after the close flight lands.
 //
-// The reels are the model's memoised `storyReels` — nothing is built here.
+// The reels are the model's memoised `trayReels` (or FeedView's held snapshot) — nothing is built here.
 
 /// Where each story bubble's PHOTO is on screen, in global coordinates. Written by the tray as it
 /// lays out, read when a story opens and closes — never observed, so a scroll frame never re-runs
@@ -32,6 +35,8 @@ struct StoryTray: View {
                         StoryBubble(reel: reel, seen: seen, loading: loadingReelId == reel.id)
                     }
                     .buttonStyle(StoryBubblePressStyle())
+                    // A seen reel leaving: it sinks into itself while the rest close the gap.
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
                     .accessibilityLabel(Copy.Stories.bubble(show: reel.showTitle, unwatched: reel.unwatched))
                     .onGeometryChange(for: CGRect.self) { g in
                         // The ring's PHOTO, not the name under it: the flight starts from the face.
@@ -49,8 +54,9 @@ struct StoryTray: View {
     }
 }
 
-/// One ring and its name. The ring's state is Instagram's: gels while unseen, a quiet grey
-/// circle once seen, turning dashes while the reel loads.
+/// One ring and its name. The ring's state is Instagram's: gels while unseen, turning dashes while
+/// the reel loads, and a quiet grey circle once seen — drawn only behind the viewer and for the
+/// beat before a seen reel leaves the tray.
 struct StoryBubble: View {
     let reel: StoryReel
     let seen: Bool
@@ -68,8 +74,7 @@ struct StoryBubble: View {
                        ring: loading ? .loading : (seen ? .seen : .unseen))
                 .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: seen)
                 // Instagram's LIVE tag, saying what the ring means here: an episode is out that
-                // you have not watched. It stays after the story is seen (the ring goes grey) for
-                // as long as the episode is unwatched, and leaves with the mark.
+                // you have not watched. It leaves with the mark (and with the reel, once seen).
                 .overlay(alignment: .bottom) {
                     if reel.unwatched > 0 {
                         StoryRingTag(text: Copy.Stories.ringTag(reel.unwatched))

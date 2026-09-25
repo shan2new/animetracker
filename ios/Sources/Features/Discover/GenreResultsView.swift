@@ -79,7 +79,7 @@ struct GenreResultsView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentH = $0 }
         .background(ThemeColor.canvas.ignoresSafeArea())
-        .navigationTitle(name)
+        .brandNavigationTitle(name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: filter) {
             catalog.adopt(account: appModel.accountEpoch)

@@ -48,7 +48,7 @@ struct AiringLiveActivity: Widget {
                         .foregroundStyle(.secondary)
                 }
             } compactLeading: {
-                Image(systemName: "dot.radiowaves.left.and.right")
+                AppGlyph(systemName: "dot.radiowaves.left.and.right")
                     .foregroundStyle(accent)
             } compactTrailing: {
                 CountdownText(airsAt: context.state.airsAt)
@@ -56,7 +56,7 @@ struct AiringLiveActivity: Widget {
                     .foregroundStyle(accent)
                     .frame(maxWidth: 52)
             } minimal: {
-                Image(systemName: "dot.radiowaves.left.and.right")
+                AppGlyph(systemName: "dot.radiowaves.left.and.right")
                     .foregroundStyle(accent)
             }
         }
@@ -71,7 +71,7 @@ private struct LockScreenAiringView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Image(systemName: "dot.radiowaves.left.and.right")
+                    AppGlyph(systemName: "dot.radiowaves.left.and.right")
                         .font(.caption.weight(.bold))
                         .foregroundStyle(accent)
                     Text(episodeLabel(context.attributes))

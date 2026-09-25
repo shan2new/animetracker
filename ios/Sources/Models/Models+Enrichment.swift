@@ -468,19 +468,6 @@ struct FranchiseVideo: Codable, Identifiable, Equatable, Sendable {
         SafeURL.https(url) ?? youtubeID.flatMap { URL(string: "https://www.youtube.com/watch?v=\($0)") }
     }
 
-    /// The in-app player page (YouTube only): autoplaying, no related-video wall. Not `playsinline`
-    /// — the trailer cover hands playback to the system's full-screen player (`VideoEmbed`).
-    var embedURL: URL? { embedURL(startingAt: 0) }
-
-    /// The same page, starting `seconds` in — the stage picking up where the post's inline trailer
-    /// had got to.
-    func embedURL(startingAt seconds: Int) -> URL? {
-        youtubeID.flatMap {
-            URL(string: "https://www.youtube.com/embed/\($0)?autoplay=1&rel=0&modestbranding=1"
-                + (seconds > 0 ? "&start=\(seconds)" : ""))
-        }
-    }
-
     /// The still to draw the card with: the catalogue's (`https` only, as `watchURL`), else the
     /// provider's own 16:9 frame.
     var thumbnailURL: String? {

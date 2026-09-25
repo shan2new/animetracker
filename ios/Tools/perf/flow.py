@@ -25,7 +25,8 @@ IOS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file
 ENV = dict(os.environ, DEVELOPER_DIR=os.environ.get('IDB_DEVELOPER_DIR', os.path.join(IOS_DIR, 'build', 'Xcode-shadow.app', 'Contents', 'Developer')))
 # xcrun keeps xcode-select's Xcode.
 ENV_SIM = {k: v for k, v in os.environ.items() if k != 'DEVELOPER_DIR'}
-TAB = {'today': (49, 812), 'schedule': (137, 812), 'library': (245, 812), 'discover': (338, 812)}
+# The app's bar (AppTabBar, 25 Sep): four equal slots, the 49-pt band centred at y 794 on a 393 × 852 phone.
+TAB = {'today': (49, 794), 'schedule': (147, 794), 'library': (245, 794), 'discover': (344, 794)}
 
 tag = sys.argv[1]
 no_stage = '--no-stage' in sys.argv

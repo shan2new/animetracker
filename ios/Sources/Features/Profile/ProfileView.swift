@@ -154,7 +154,7 @@ struct ProfileView: View {
             }
             // A real inline navigation bar: VoiceOver announces the screen, and the system's own
             // scroll-edge material takes over from the wash as it fades.
-            .navigationTitle("Profile")
+            .brandNavigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -559,7 +559,7 @@ struct ProfileView: View {
     private var syncFootnote: some View {
         HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
             if let glyph = syncGlyph {
-                Image(systemName: glyph)
+                AppGlyph(systemName: glyph)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(syncTint)
                     .accessibilityHidden(true)
@@ -629,11 +629,11 @@ struct ProfileView: View {
         .contextMenu {
             if change.canRetry(sync) {
                 Button { sync.retry(change.id) } label: {
-                    Label(Copy.Action.retry, systemImage: "arrow.clockwise")
+                    AppGlyphLabel(Copy.Action.retry, systemName: "arrow.clockwise")
                 }
             }
             Button(role: .destructive) { discardTarget = change.id } label: {
-                Label(Copy.Confirm.discardChangeConfirm, systemImage: "trash")
+                AppGlyphLabel(Copy.Confirm.discardChangeConfirm, systemName: "trash")
             }
         }
         .accessibilityElement(children: .contain)
@@ -1142,7 +1142,7 @@ struct ProfileView: View {
     /// A trailing indicator that scales with the row's text. Fixed-size glyphs shrank to specks
     /// against ~24-pt titles at AX1.
     private func trailingGlyph(_ symbol: String, tint: Color, scale: CGFloat = 1) -> some View {
-        Image(systemName: symbol)
+        AppGlyph(systemName: symbol)
             .font(.system(size: indicatorSize * scale, weight: .semibold))
             .foregroundStyle(tint)
             .frame(width: 28, height: 44)
@@ -1294,7 +1294,7 @@ private struct ExportOptionsView: View {
         }
         .scrollIndicators(.hidden)
         .background(ThemeColor.canvas.ignoresSafeArea())
-        .navigationTitle(AccountCopy.export)
+        .brandNavigationTitle(AccountCopy.export)
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -1307,7 +1307,7 @@ private struct ExportOptionsView: View {
                             subtitle: subtitle,
                             separator: separator,
                             indicateWait: false) {
-                Image(systemName: "square.and.arrow.up")
+                AppGlyph(systemName: "square.and.arrow.up")
                     .font(.system(size: indicatorSize, weight: .semibold))
                     .foregroundStyle(ThemeColor.textTertiary)
                     .frame(width: 28, height: 44)
@@ -1528,7 +1528,7 @@ private struct ProfileRowLabel<Trailing: View>: View {
                spacing: ThemeSpace.x3) {
             Group {
                 if let symbol {
-                    Image(systemName: symbol)
+                    AppGlyph(systemName: symbol)
                         .font(.system(size: 16, weight: symbolWeight))
                         .foregroundStyle(symbolTint)
                 } else if indicateWait {

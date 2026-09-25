@@ -1,35 +1,28 @@
 import SwiftUI
 
-// Schedule — an AGENDA (rework, 24 Aug 2026).
+// Schedule — the next thing to watch, then an agenda (25 Sep 2026).
 //
-// The shape Apple Calendar's list view, LiveChart, Sofa's Planner and Trakt's list calendar all
-// converge on: one vertical list, a section per day that carries something (plus today, which is
-// always drawn — empty, it says so), the day header pinned
-// while its rows pass under it, opening on today. A day ticker across the top spans exactly the
-// window the feed holds (a week back, two weeks ahead) and nothing beyond it. Aired days live in
-// one collapsed "Earlier" block above today, so the screen opens on what is ahead and still lets
-// the reader check what they missed.
+// "We need to Overhaul the Schedule Screen completely for this new awesome UX" (owner). Three
+// directions were photographed on the owner's own calendar and the owner chose TONIGHT — then
+// "tonight still feels cluttered": 20-pt day banners over one or two rows each, every upcoming line
+// in amber, and an empty "Today" heading under a card that already said tonight. What it is now:
 //
-// What this replaces, and why:
-//   · the timeline rail (History's metaphor) with 8-pt three-state nodes, a NOW marker, and a
-//     week strip that paged ±26 weeks over a 21-day feed — a third of the screen was chrome before
-//     the first row, and a three-show week showed three rows in 900 pt;
-//   · ~600 lines of hand-rolled scroll tracking (pin-line calibration, a 200-attempt landing loop,
-//     a "pager owns the strip" flag) that shipped with the pinned header ghosting through the row
-//     beneath it and the strip selecting the 30th while the feed sat on the 26th. The list's
-//     position is now a `ScrollPosition` — the system reports which day is at the top and the
-//     ticker follows it; a tap sets it and the feed goes there. Nothing is measured by hand;
-//   · one `nextAiringAt` per show, which meant a weekly show appeared once and week two was empty
-//     by construction — the feed now walks `FranchisePart.airings` (every dated episode in the
-//     window) and the closing line names a horizon that is actually true;
-//   · a hand-built row. Rows are `MediaRow` — the same 60×90 slot, lead/meta grammar and trailing
-//     `MarkRing` Today's queue and Library's list draw — so Schedule stops being a third dialect.
+//   · ONE card for the next thing to watch (`pickHero`, `ScheduleTonightCard`): the newest drop of
+//     today's or yesterday's you have not seen ("OUT NOW"), else today's next airing ("TONIGHT AT
+//     7:30 PM"), else the next day's first ("SUNDAY AT 4:30 PM") — the app's one temporal ladder.
+//     Its row leaves the agenda, so no show is printed twice in a row;
+//   · under it the agenda with THE DATE RIDING THE ROW (`ScheduleAgendaRow`, the 7 Sep anatomy): the
+//     day printed once, in the first row's date column, amber only on today; the show's face and
+//     name; "Episode 14 · 4:30 PM" in grey; the state ladder's slot. No day banners and no rules — a
+//     day's break is space. A month is named only where the feed crosses into one;
+//   · the past ABOVE today, the feed landing on the card; past the window, LATER — each quiet show's
+//     next dated airing.
 //
-// The only write here is "Mark as watched" on a row that has aired.
+// The calendar is the month grid behind the bar's glyph (`ScheduleMonthGrid`); there is no rail.
+// The only write here is the mark on an airing that has aired.
 struct ScheduleView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String, _ focus: EpisodeFocus?) -> Void
     var onAddShow: () -> Void = {}
 
@@ -37,11 +30,8 @@ struct ScheduleView: View {
 
     @State private var typeFilter: MediaFilter = ScheduleView.debugTypeFilter
     @State private var unwatchedOnly = ScheduleView.debugUnwatchedOnly
-    /// A day the reader picked on the strip that has nothing on it. It is drawn as an empty
-    /// section ("Nothing scheduled") so the pick lands somewhere — every day on the strip is a
-    /// target now (4 Sep). The aired days are no longer folded behind an "Earlier" row: the past
-    /// is simply above today in the feed, as in Calendar's list, and the strip's dimmed cells
-    /// are the way back to it ("the day strip … the EARLIER row" were the confusion, user).
+    /// A day the reader picked on the grid that has nothing on it. It is drawn as a row that says
+    /// "Nothing scheduled" so the pick lands somewhere — every day in the window is a target.
     @State private var pinnedEmptyDay: Int? = nil
 
     /// `-scheduleFilter anime|tv` and `-scheduleHideWatched 1` (DEBUG): open with a filter already
@@ -65,13 +55,16 @@ struct ScheduleView: View {
         return false
         #endif
     }
-    /// Immediate visual state for the bottom-right toggle. Real writes update the model
-    /// optimistically; this also lets the DEBUG three-state fixture be interacted with without
-    /// changing the account it is derived from.
+    /// Immediate visual state for the ladder. Real writes update the model optimistically; this
+    /// also lets the DEBUG three-state fixture be interacted with without changing the account it
+    /// is derived from.
     @State private var watchedOverrides: [String: Bool] = [:]
     @State private var prompt: FranchiseDetailView.WritePrompt?
-    /// The day whose section is at the top of the feed — what the ticker highlights. Reported by
-    /// the system (`onScrollTargetVisibilityChange`), never measured by hand.
+    /// The card the reader just marked keeps its place until they leave the screen: the card moves
+    /// on to the next thing to watch on the next visit, not under the finger that marked this one.
+    @State private var heldHero: String? = nil
+    /// The day at the top of the feed — what the calendar highlights. Reported by the system
+    /// (`onScrollTargetVisibilityChange`), never measured by hand.
     @State private var selectedDay = 0
     /// The day the feed is showing, recorded during the scroll and read only when it stops — so
     /// the calendar's highlight never moves while the feed is moving (6 Sep).
@@ -84,43 +77,28 @@ struct ScheduleView: View {
     /// Once a finger has moved the feed it belongs to the reader; the landing stops correcting.
     @State private var userScrolled = false
     @State private var viewportH: CGFloat = 720
-    /// Where the chrome band (title bar + ticker + any filter chips) actually ends, in screen
-    /// space. The top veil is drawn down to here, so scrolling rows are carried out of sight
-    /// before they reach the ticker instead of passing through it at full strength. MEASURED, not
-    /// composed: the band's height answers to Dynamic Type and to whether chips are showing, and
-    /// the veil is an overlay — it does not feed back into the band's own layout.
+    /// Where the chrome band (the bar + any filter chips) ends, in screen space — the height its
+    /// canvas ground is drawn at. MEASURED, not composed: the chips come and go, and the ground is
+    /// a background, so it never feeds back into the band's own layout.
     @State private var chromeBottom: CGFloat = ThemeMetrics.topChromeHeight
     @State private var box = DerivedBox()
 
     private var now: Int64 { appModel.nowMinute }
-    private var isAX: Bool { typeSize.isAccessibilitySize }
 
     // MARK: - Geometry
 
     private enum Metrics {
-        /// Between two airings on one day.
-        static let rowGap: CGFloat = ThemeSpace.x5
-        /// The app's gutter: 20 here made the left edge jump 4 pt on every tab switch (review i3).
-        static let horizontalInset: CGFloat = ThemeMetrics.gutter
-        /// Date heading to its first artwork card.
-        static let headingGap: CGFloat = 14
-        /// How far past today a Later date may be, in days: the heading prints no year.
+        /// A day's break: the space above its first row (the rows' own padding adds to it). The
+        /// only thing between two days — no banner, no rule.
+        static let dayGap: CGFloat = ThemeSpace.x3
+        /// How far past today a Later date may be, in days: the date column prints no year.
         static let laterReach = 365
-    }
-
-    /// The artwork the wash is derived from: the next thing to air, else the most recent thing
-    /// that did, else whatever the library leads with.
-    private var washCover: String? {
-        let d = derived
-        if let next = d.ahead.first(where: { !$0.isEmpty })?.rows.first?.franchise.portraitArt { return next }
-        if let last = d.earlier.last?.rows.last?.franchise.portraitArt { return last }
-        return appModel.library.first?.portraitArt
     }
 
     // MARK: - Identity
 
     /// Every scroll target in the feed maps back to a day, so the position the system reports —
-    /// whichever header or row happens to be at the top — names the day the ticker should show.
+    /// whichever day or row happens to be at the top — names the day the calendar should show.
     enum AgendaID: Hashable {
         case day(Int)
         case row(Int, String)
@@ -135,7 +113,7 @@ struct ScheduleView: View {
     // MARK: - Feed
 
     /// One row on the calendar. A date-only part that drops several episodes on one day is ONE
-    /// row ("Season 2 · 8 episodes"), not eight identical ones.
+    /// row ("Episodes 5–8"), not eight identical ones.
     struct Row: Identifiable {
         let franchise: Franchise
         let part: FranchisePart
@@ -166,21 +144,15 @@ struct ScheduleView: View {
         /// Today and everything after it that carries something. TODAY IS ALWAYS IN HERE, empty
         /// or not — it is the feed's anchor, and the feed always opens on it (`land`). There is
         /// deliberately no "landing day" to go with it: the one this used to compute was the
-        /// first NON-EMPTY day ≥ 0, and `awayFromToday` / `goToToday` then treated that as a
-        /// synonym for today. On a day with nothing scheduled the agenda opened on a future day,
-        /// hid the "Today" button (`selectedDay == landing`, so by its own test you were already
-        /// there) and sent that button to the wrong day when it did show. The top row's bare
-        /// clock — a Wednesday 6:30 PM episode — read as tonight's, and its missing mark control
-        /// read as a bug rather than as "this has not aired".
+        /// first NON-EMPTY day ≥ 0, and on a day with nothing scheduled the agenda opened on a
+        /// future day and hid the "Today" button.
         var ahead: [Day] = []
         /// Today has rows, but the active filter is hiding all of them — so the empty-today line
         /// says "No episodes" (there are some; you filtered them) rather than "Nothing scheduled".
         var todayFiltered = false
         var counts: [Int: Int] = [:]
-        /// Days with something still to come or still to watch — the ticker's accent dots.
+        /// Days with something still to come or still to watch — the grid's accent dots.
         var live: Set<Int> = []
-        var earlierCount = 0
-        var earlierUnwatched = 0
         /// Past the window: each show's next dated airing, one row per show (`laterRows`), filtered.
         var later: [Row] = []
         /// The Later rows per day offset, for the month grid.
@@ -226,7 +198,7 @@ struct ScheduleView: View {
         let later = laterRows(after: raw)
         out.later = later.filter(passes)
         // The Later group's days answer on the calendar too — known, dotted, and a tap lands on
-        // the card (`laterGroup` gives each day's first card the day's scroll id).
+        // the row (`laterGroup` gives each day's first row the day's scroll id).
         for r in out.later {
             let d = laterDay(r)
             out.laterCounts[d, default: 0] += 1
@@ -241,8 +213,6 @@ struct ScheduleView: View {
             && !(all.first { $0.id == 0 }?.isEmpty ?? true)
         out.counts = Dictionary(shown.map { ($0.id, $0.count) }, uniquingKeysWith: { a, _ in a })
         out.live = Set(shown.filter { $0.rows.contains { !$0.watched } }.map(\.id))
-        out.earlierCount = out.earlier.reduce(0) { $0 + $1.count }
-        out.earlierUnwatched = out.earlier.reduce(0) { $0 + $1.rows.filter { !$0.watched }.count }
         out.feedKey = (out.earlier + out.ahead).map { $0.id * 1000 + $0.count } + [1_000_000 + out.later.count]
         if ScheduleDebug.demoStates {
             // The two most recent aired rows, so both sit near the landing: the last unwatched,
@@ -332,23 +302,12 @@ struct ScheduleView: View {
 
     private var filterActive: Bool { typeFilter != .all || unwatchedOnly }
 
-    /// The screen is showing a whole-surface state rather than a feed: nothing to page through,
-    /// and a populated ticker over it would be a calendar asserting dates over nothing.
+    /// The screen is showing a whole-surface state rather than a feed.
     private var showsWholeScreenState: Bool {
         if appModel.loading && appModel.library.isEmpty { return true }
         if appModel.libraryEmpty { return true }
         let d = derived
         return d.allEmpty || (d.shownEmpty && filterActive)
-    }
-
-    /// The day strip stays up while the first library loads — its days come from the clock,
-    /// not the data — so the feed lands under it instead of shoving everything down 60 pt the
-    /// instant the response arrives. Only a settled whole-screen state folds it away, animated.
-    private var tickerCollapsed: Bool {
-        // Never mid-load — neither the first one (its days come from the clock, not the data) nor
-        // a refresh, which passes through a moment with no derived days: folding on that moment is
-        // what made the rail collapse and re-expand while the feed was being read (6 Sep, device).
-        !appModel.loading && showsWholeScreenState
     }
 
     // MARK: - Body
@@ -358,18 +317,14 @@ struct ScheduleView: View {
             ZStack(alignment: .top) {
             ThemeColor.canvas.ignoresSafeArea()
             ScrollView {
-                // NOT pinned. A pinned header has to occlude the rows passing under it, which
-                // means an opaque full-bleed plate — and that plate's top edge cut the wash in a
-                // hard horizontal step across the screen, the exact seam the shared chrome exists
-                // to remove. A day section here is one to three rows, so its date is on screen
-                // beside its rows the whole time it matters; pinning bought nothing and cost the
-                // one thing the screen's ground is for.
+                // NOT pinned: a pinned header has to occlude the rows passing under it, which means
+                // an opaque plate — and there is no header any more; the date rides the row.
                 LazyVStack(alignment: .leading, spacing: 0) {
                     content()
                 }
                 .scrollTargetLayout()
-                // A user-requested layout change (a filter, the Earlier block) is what `uiSnappy`
-                // is for, and it belongs on the thing that re-lays out.
+                // A user-requested layout change (a filter) is what `uiSnappy` is for, and it
+                // belongs on the thing that re-lays out.
                 .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion), value: derived.feedKey)
                 .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion), value: pinnedEmptyDay)
                 // The stale strip arrives on the 30-minute clock while the feed is being read;
@@ -379,13 +334,12 @@ struct ScheduleView: View {
             }
             // NOT bound to a `ScrollPosition`. An id-bound position is sticky: the anchored view is
             // re-pinned to the top on every layout change, so a row's own press-scale moved the
-            // feed 28 pt under the finger and the tap arrived as a cancelled scroll. The feed opens
-            // where it should by construction — the Earlier row or today's section is its FIRST
-            // item — and the two programmatic scrolls (a ticker tap, "Today") are one-shot.
-            .safeAreaInset(edge: .top, spacing: 0) { chrome(proxy) }
+            // feed 28 pt under the finger and the tap arrived as a cancelled scroll. The two
+            // programmatic scrolls (a grid tap, "Today") are one-shot.
+            .safeAreaInset(edge: .top, spacing: 0) { chrome }
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { viewportH = $0 })
-            // Nothing may come to rest inside the bottom ramp. A scroll-content MARGIN, not
-            // padding: padding inside a stack shorter than the viewport changes no layout at all.
+            // Nothing may come to rest under the tab bar. A scroll-content MARGIN, not padding:
+            // padding inside a stack shorter than the viewport changes no layout at all.
             .tabBarContentMargin()
             .laneClearance(appModel)
             .scrollIndicators(.hidden)
@@ -404,17 +358,14 @@ struct ScheduleView: View {
                     }
                 }
             }
-            // The system says which targets are on screen; the earliest day among them is the
-            // section at the top. No coordinate spaces, no pin-line arithmetic — the one thing the
-            // previous screen got wrong in every capture.
+            // The system says which targets are on screen; the earliest day among them is the one
+            // at the top. No coordinate spaces, no pin-line arithmetic.
             .onScrollTargetVisibilityChange(idType: AgendaID.self, threshold: 0.2) { ids in
                 // Only RECORDED here; the calendar's selection reads it when the feed comes to
-                // rest. Following live meant the highlight hopped from cell to cell mid-drag and,
-                // at a section boundary where the reported day flips between two values, hopped
-                // back and forth — read as the dates bouncing around (user, 6 Sep).
+                // rest (see above).
                 guard let day = ids.map(\.day).min() else { return }
-                // The Later group's ids reach past the window; the rail stays on the window's
-                // own weeks rather than turning to a week of disabled days.
+                // The Later group's ids reach past the window; the grid stays on the window's
+                // own months rather than turning to a month of disabled days.
                 readingDay = min(day, AppModel.scheduleAhead)
             }
             // The calendar OVERLAYS the feed (Google Calendar's month dropdown), it does not push
@@ -424,49 +375,47 @@ struct ScheduleView: View {
             // bar.
             calendarOverlay(proxy)
             }
-        // The calendar owns an opaque neutral top band so scrolling artwork cannot show
-        // through its date numerals or navigation title. The bottom edge remains shared.
-        .scrollEdgeChromeBody(top: false, bottom: true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .chromeScrollEdgeHidden(.top)
         .previouslyRefreshable { await appModel.reload() }
         .task { await ScheduleReminders.shared.refresh() }
-        // The feed opens on TODAY — which is no longer its first item, now that the past sits
-        // above it — whenever the feed's identity changes and the reader has not taken the wheel.
-        // Once more a beat later: the first pass can run before the lazy stack has laid out the
-        // sections above today, and land short.
+        // The feed opens on TODAY — the card — with the past above it, whenever the feed's
+        // identity changes and the reader has not taken the wheel. Once more a beat later: the
+        // first pass can run before the lazy stack has laid out the days above today, and land
+        // short.
         .onChange(of: derived.feedKey, initial: true) { _, _ in land(proxy) }
         .task {
             try? await Task.sleep(for: .milliseconds(250))
             land(proxy)
         }
-        .navigationTitle(Copy.Schedule.title)
+        // A card the reader marked stays until they leave; the next visit opens on what is next.
+        .onDisappear { heldHero = nil }
+        .brandNavigationTitle(Copy.Schedule.title)
         // Inline: a large title collapses on the first scroll and moves the top safe area ~50 pt
-        // mid-flight, under a ticker that has to hold still.
+        // mid-flight.
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // The calendar's switch. A TAP, not a pull — Fantastical pulls its DayTicker down
-            // into a month, but this screen already owns the pull gesture for refresh. ONE glyph
-            // in both states, tinted when the grid is down: a control that changes its symbol on
-            // press reads as a different control (`calendar.badge.minus` also means "remove an
-            // event", which this has never done).
+            // The calendar's switch. A TAP, not a pull — this screen already owns the pull gesture
+            // for refresh. ONE glyph in both states, tinted when the grid is down: a control that
+            // changes its symbol on press reads as a different control.
             ToolbarItem(placement: .topBarTrailing) {
-                Button { toggleCalendar() } label: { Image(systemName: "calendar") }
+                Button { toggleCalendar() } label: { AppGlyph(systemName: "calendar") }
                     .tint(monthOpen ? ThemeColor.accent : ThemeColor.textPrimary)
                     .accessibilityLabel(Copy.Schedule.calendar)
                     .accessibilityValue(monthOpen ? Copy.Schedule.calendarShown : Copy.Schedule.calendarHidden)
             }
+            .chromeSharedBackgroundHidden()
             ToolbarItem(placement: .topBarTrailing) { filterMenu }
-            // The way back when TODAY is not on the rail — the rail shows the week you are
-            // reading, so on a Later landing ("SUN 18…SAT 24" of October) there was no today cell
-            // and nothing else to tap (review i4, N9). Ink, not amber: a command.
-            if todayOffRail {
+                .chromeSharedBackgroundHidden()
+            // The way back once the reader has scrolled away from today. Ink, not amber: a command.
+            if awayFromToday {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(Copy.Schedule.today) { goToToday(proxy) }
                         .tint(ThemeColor.interactive)
                         .accessibilityLabel(Copy.Schedule.scrollToToday)
                         .accessibilityHint(Copy.Schedule.scrollToTodayHint)
                 }
+                .chromeSharedBackgroundHidden()
             }
         }
         // An alert, not a popover pinned under the bar 180 pt from the ring (interactive review):
@@ -485,67 +434,44 @@ struct ScheduleView: View {
         }
     }
 
-    /// The reader is somewhere other than today's section. Measured against TODAY (day 0), which
-    /// is always in the feed — never against "the first day that carries something", which on a
-    /// quiet day is not today and made this read `false` while Wednesday filled the screen.
+    /// The reader is somewhere other than today. Measured against TODAY (day 0), which is always
+    /// in the feed — never against "the first day that carries something".
     private var awayFromToday: Bool { selectedDay != 0 }
-
-    /// Today is outside the week the rail is showing.
-    private var todayOffRail: Bool {
-        let noon = appModel.scheduleTodayNoon + Int64(selectedDay) * Formatting.D
-        let start = selectedDay - Formatting.localParts(noon).wd
-        return !(start...(start + 6)).contains(0)
-    }
 
     // MARK: - Scrolling
 
-    /// The feed opens on today's section, un-animated, with the past above it and the ticker's
-    /// first visible cell today. True on a day with nothing on it too, since an empty today still
-    /// renders: the agenda always opens where the reader is standing. (It used to open on a
-    /// folded "Earlier" row with today under it; the fold is gone.)
+    /// The feed opens on today — the card, or today's rows, or its "Nothing scheduled" — with the
+    /// past above it. Un-animated. An unwatched drop from yesterday is ON the card (`pickHero`),
+    /// which is why the landing no longer steps back to yesterday for it.
     private func land(_ proxy: ScrollViewProxy) {
         guard !userScrolled, !appModel.library.isEmpty, !showsWholeScreenState else { return }
         var t = Transaction()
         t.disablesAnimations = true
-        // Today is the stable opening anchor even when it carries no releases. Empty dates draw no
-        // explanatory row; the next dated group simply begins beneath this zero-height position.
-        // An EMPTY today with yesterday's drop still unwatched lands on yesterday (the 5 Sep
-        // interactive pass's rule, lost in the 20 Sep restore): at 00:03 the feed opened on
-        // "TOMORROW" with Re:ZERO's episode — aired five hours earlier, unwatched — scrolled away
-        // above it (review i3).
-        let yesterdayDrop: Int? = {
-            let d = derived
-            guard d.ahead.first(where: { $0.id == 0 })?.isEmpty ?? true,
-                  let yesterday = d.earlier.first(where: { $0.id == -1 }),
-                  yesterday.rows.contains(where: { ($0.aired && !$0.watched) || $0.id == d.demoUnwatched })
-            else { return nil }
-            return -1
-        }()
         // `-scheduleDemoStates`: land on the day of the row drawn WATCHED, so the capture holds
         // all three rungs (the watched one sat above the landing, review i4/i5).
         let demoDay: Int? = ScheduleDebug.demoStates
             ? derived.earlier.first(where: { d in d.rows.contains { $0.id == derived.demoWatched } })?.id : nil
         let target = ScheduleDebug.captureDay.flatMap { day in
             derived.all.contains(where: { $0.id == day }) || derived.laterCounts[day] != nil ? day : nil
-        } ?? demoDay ?? yesterdayDrop ?? 0
+        } ?? demoDay ?? 0
         withTransaction(t) { proxy.scrollTo(AgendaID.day(target), anchor: .top) }
-        // Landing on yesterday's drop still STANDS on today: the rail keeps Thursday and no
-        // "Today" button appears on the screen's first frame (review i3).
-        let standing = yesterdayDrop != nil && target == -1 ? 0 : target
-        if selectedDay != standing { selectedDay = standing }
-        readingDay = standing
-        // The calendar opens on the month the feed landed in (a Later landing opened the grid on
-        // September — review i4's capture 42).
-        monthAnchor = standing
+        if selectedDay != target { selectedDay = target }
+        readingDay = target
+        // The calendar opens on the month the feed landed in.
+        monthAnchor = target
     }
 
-    /// A strip tap: the feed lands on that day's section. A day with nothing on it gets one drawn
-    /// for the purpose (`pinnedEmptyDay`) a beat before the scroll, so there is a section to land on.
+    /// A grid tap: the feed lands on that day. A day with nothing on it gets a row drawn for the
+    /// purpose (`pinnedEmptyDay`) a beat before the scroll, so there is something to land on.
     private func pick(_ offset: Int, count: Int, proxy: ScrollViewProxy) {
-        // A LATER day is never pinned as an empty section: its card already carries the day's
-        // scroll id, and a pinned twin took the id from it — the grid's 19 Oct landed on a bare
-        // "LATER" label and the card vanished (review i5, F10). The merged counts at the call
-        // sites say it is not empty; this guards any caller that forgets.
+        // A day whose one airing is on the card draws nothing of its own: land on the card.
+        if offset != 0, count == 1, let hero = pickHero(derived), hero.day == offset {
+            scroll(to: .day(0), day: 0, proxy: proxy)
+            return
+        }
+        // A LATER day is never pinned as an empty day: its row already carries the day's scroll
+        // id, and a pinned twin took the id from it (review i5, F10). The merged counts at the
+        // call sites say it is not empty; this guards any caller that forgets.
         if count == 0 && offset != 0 && derived.laterCounts[offset] == nil {
             pinnedEmptyDay = offset
             Task { @MainActor in
@@ -569,7 +495,7 @@ struct ScheduleView: View {
         }
     }
 
-    /// Back to today's section.
+    /// Back to today.
     private func goToToday(_ proxy: ScrollViewProxy) {
         scroll(to: .day(0), day: 0, proxy: proxy)
     }
@@ -582,10 +508,8 @@ struct ScheduleView: View {
     private func calendarOverlay(_ proxy: ScrollViewProxy) -> some View {
         if monthOpen {
             ZStack(alignment: .top) {
-                // Anywhere off the grid closes it, as a menu does. The feed under it steps BACK
-                // (0.32): undimmed, the card under the panel's foot peeked out as a second edge
-                // beneath it (review i3/i4, U3-N21) and the panel did not read as the layer on top.
-                // Light enough that the day the grid is about to take you to still reads.
+                // Anywhere off the grid closes it, as a menu does. The feed under it steps BACK,
+                // light enough that the day the grid is about to take you to still reads.
                 Color.black.opacity(0.45)
                     .ignoresSafeArea()
                     .contentShape(Rectangle())
@@ -604,13 +528,9 @@ struct ScheduleView: View {
                     toggleCalendar()
                     pick(day, count: derived.counts[day] ?? derived.laterCounts[day] ?? 0, proxy: proxy)
                 }
-                // GLASS over the feed, not a flat grey slab: the panel is chrome that floats,
-                // which is what every other floating surface in the app is made of, and #242428
-                // filling a third of the screen read as a debug view. The canvas veil under the
-                // material is what keeps the numerals legible over busy art — the same pairing
-                // the bars use (`chromeBarOpacity`).
-                // 0.74, the hardened bar's (`chromeBarOpacity`): at 0.62 the feed's art showed
-                // through the weeks as colour blobs (review i3).
+                // GLASS over the feed, not a flat grey slab: the panel is chrome that floats. The
+                // canvas veil under the material (the hardened bar's `chromeBarOpacity`) keeps the
+                // numerals legible over busy art.
                 .background(ThemeColor.canvas.opacity(ThemeMetrics.chromeBarOpacity),
                             in: RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous))
                 .glassChrome(in: RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous))
@@ -633,38 +553,25 @@ struct ScheduleView: View {
 
     // MARK: - Chrome
 
-    /// The band under the title: the day ticker, and the active filters as removable tokens.
-    /// Opaque canvas, the same the navigation bar is painted in, so the two are one surface.
-    @ViewBuilder
-    private func chrome(_ proxy: ScrollViewProxy) -> some View {
+    /// The band under the title: the active filters as removable tokens, and otherwise nothing —
+    /// there is no date chrome at rest. Opaque canvas, flush with the feed, as Today's bar is.
+    private var chrome: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !tickerCollapsed {
-                ScheduleWeekRail(todayNoon: appModel.scheduleTodayNoon,
-                                 selected: selectedDay,
-                                 counts: derived.counts.merging(derived.laterCounts) { a, _ in a },
-                                 live: derived.live.union(derived.laterCounts.keys),
-                                 window: AppModel.scheduleBack...AppModel.scheduleAhead,
-                                 extraDays: Set(derived.laterCounts.keys)) { offset in
-                    pick(offset, count: derived.counts[offset] ?? derived.laterCounts[offset] ?? 0, proxy: proxy)
-                }
-                .transition(.opacity)
-            }
+            // The band's permanent job is the ground behind the bar: a band with nothing in it
+            // draws no background at all, and the feed printed through the title (6 Sep).
+            Color.clear.frame(height: 1)
             filterChips
         }
         // Only the filter chips can give this band height, so only they earn its padding.
         .padding(.bottom, filterActive ? ThemeSpace.x2 : 0)
         .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: filterActive)
-        // The band's ground is THE WASH, over opaque canvas and sized to end at the band's own
-        // bottom edge (its last stop IS canvas, so there is no seam) — the root spec every tab
-        // carries. Drawn at a STATED height, bottom-aligned, so a short band never lets the feed
-        // print through the status bar (6 Sep).
+        // Drawn at a STATED height, bottom-aligned, so a short band never lets the feed print
+        // through the status bar (6 Sep).
         .background(alignment: .bottom) {
-            // The canvas alone, flush with the feed, as Today's bar is (25 Sep — the wash under it
-            // went with every root's).
             ThemeColor.canvas
-            .frame(height: max(chromeBottom, ThemeMetrics.topChromeHeight))
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+                .frame(height: max(chromeBottom, ThemeMetrics.topChromeHeight))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY },
                           action: { chromeBottom = $0 })
@@ -682,7 +589,7 @@ struct ScheduleView: View {
             }
             Toggle(Copy.Filter.hideWatched, isOn: hideWatchedBinding)
         } label: {
-            Image(systemName: filterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+            AppGlyph(systemName: filterActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
         }
         .tint(filterActive ? ThemeColor.accent : ThemeColor.textPrimary)
         .accessibilityLabel(Copy.Filter.filter)
@@ -723,7 +630,7 @@ struct ScheduleView: View {
 
     private func filterChip(_ text: String, clear: @escaping () -> Void) -> some View {
         Button {
-                withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) { clear() }
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) { clear() }
         } label: {
             FilterChipLabel(text: text)
         }
@@ -770,41 +677,57 @@ struct ScheduleView: View {
             } else if d.shownEmpty && filterActive {
                 centred {
                     EmptyState(.noScheduleMatches, prominence: .major, primary: {
-                                        withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
+                        withAnimation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion)) {
                             typeFilter = .all; unwatchedOnly = false
                         }
                     })
                 }
             } else {
-                // The past, then today (always), then what is ahead — one agenda, no fold. The
-                // feed lands on today (`land`); the calendar's dimmed cells are the way back.
-                ForEach(daysToDraw(d)) { day in dateColumnDay(day) }
+                // The past, then today (the card), then what is ahead — one agenda, no fold. The
+                // feed lands on today (`land`); the calendar's cells are the way back.
+                let hero = pickHero(d)
+                ForEach(blocks(d, hero: hero)) { b in dayBlock(b) }
                 laterGroup(d.later)
             }
         }
     }
 
-    /// The feed's loading state at THIS screen's geometry — three day blocks in the airing card's
-    /// anatomy (header, 16:9 art, title, meta), so the swap lands in place. It drew poster rows
-    /// until 3 Sep, the row the calendar stopped using.
+    /// The loading state in the screen's own anatomy — the card, then rows (the date, a face, two
+    /// lines) — so the swap lands in place.
     private var feedSkeleton: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(0..<2, id: \.self) { _ in
-                SkeletonLine(width: 126, height: 14)
-                    .padding(.top, ThemeSpace.x8)
-                    .padding(.bottom, Metrics.headingGap)
-                SkeletonBlock(height: nil, radius: 18)
-                    .aspectRatio(2.04, contentMode: .fit)
+            SkeletonBlock(height: nil, radius: ThemeRadius.card)
+                .aspectRatio(1, contentMode: .fit)
+                .padding(.horizontal, ThemeMetrics.gutter)
+                .padding(.top, ThemeSpace.x3)
+                .padding(.bottom, ThemeSpace.x3)
+            ForEach(0..<3, id: \.self) { i in
+                HStack(spacing: ThemeSpace.x3) {
+                    VStack(spacing: ThemeSpace.x1) {
+                        SkeletonLine(width: 24, height: 9)
+                        SkeletonLine(width: 20, height: 16)
+                    }
+                    .frame(width: 38)
+                    .opacity(i == 1 ? 0 : 1)
+                    SkeletonBlock(width: AgendaMetrics.avatar, height: AgendaMetrics.avatar, radius: AgendaMetrics.avatar / 2)
+                    VStack(alignment: .leading, spacing: ThemeSpace.x1) {
+                        SkeletonLine(width: 132, height: 13)
+                        SkeletonLine(width: 96, height: 11)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, AgendaMetrics.leading)
+                .padding(.vertical, AgendaMetrics.vertical)
+                .padding(.top, i == 2 ? Metrics.dayGap : 0)
             }
         }
-        .padding(.horizontal, Metrics.horizontalInset)
         .accessibilityHidden(true)
     }
 
     // MARK: - Days
 
     /// The feed's days: the past, today (always), everything ahead that carries something — and
-    /// the one empty day the reader picked on the strip, drawn as a section that says "Nothing
+    /// the one empty day the reader picked on the grid, drawn as a row that says "Nothing
     /// scheduled" so the pick lands somewhere instead of doing nothing.
     private func daysToDraw(_ d: Derived) -> [Day] {
         var days = d.earlier + d.ahead
@@ -816,24 +739,186 @@ struct ScheduleView: View {
         return days
     }
 
-    // MARK: - Day
-
-    /// The first day drawn in the feed.
-    private func isFirstDay(_ day: Day) -> Bool {
-        (derived.earlier + derived.ahead).first?.id == day.id
+    /// The next thing to watch, and the day its row comes from.
+    private struct Hero {
+        let row: Row
+        let day: Int
+        /// What the moment is: "Out now", "Tonight at 7:30 PM", "Sunday at 4:30 PM".
+        let eyebrow: String
     }
 
-    // MARK: - Row
+    /// One day as the feed draws it, decided in one pass so the month crossings and the card's row
+    /// agree with each other.
+    private struct DayBlock: Identifiable {
+        let day: Day
+        /// The day's rows, less the one on the card.
+        let rows: [Row]
+        /// The card — today's block only.
+        let hero: Hero?
+        /// The month this day opens, where the feed crosses into one: "October".
+        var month: String?
+        /// Today, or a picked day, with nothing on it says so beside its date.
+        let empty: String?
+        var id: Int { day.id }
+        /// The day's one airing is on the card: nothing of its own to draw.
+        var isBlank: Bool { rows.isEmpty && hero == nil && empty == nil }
+    }
 
-    /// Everything a row needs, whatever anatomy draws it — computed once, so the four shapes
-    /// cannot disagree about a row's state the way the pre-6-Sep card's three corners did.
+    /// The card's pick: the newest drop of today's, then yesterday's, that you have not seen
+    /// ("Out now" — it is the next thing to WATCH); else today's next airing; else the next day's
+    /// first. A card the reader just marked holds (`heldHero`). Nothing past the window: Later is
+    /// not next.
+    private func pickHero(_ d: Derived) -> Hero? {
+        if let held = heldHero {
+            for day in d.earlier + d.ahead {
+                if let r = day.rows.first(where: { $0.id == held }) { return hero(r, day: day.id) }
+            }
+        }
+        let today = d.ahead.first { $0.isToday }
+        let yesterday = d.earlier.first { $0.id == -1 }
+        for day in [today, yesterday] {
+            if let day, let r = day.rows.last(where: { $0.aired && !facts($0).state.isWatched }) {
+                return hero(r, day: day.id)
+            }
+        }
+        if let r = today?.rows.first(where: { !$0.aired }) { return hero(r, day: 0) }
+        if let next = d.ahead.first(where: { $0.id > 0 && !$0.isEmpty }), let r = next.rows.first {
+            return hero(r, day: next.id)
+        }
+        return nil
+    }
+
+    private func hero(_ r: Row, day: Int) -> Hero {
+        Hero(row: r, day: day, eyebrow: r.aired ? Copy.Schedule.outNow : moment(r))
+    }
+
+    /// When an airing is, as the card's eyebrow says it: the app's one ladder (`TemporalCopy.airs`
+    /// — "Airs in 27 min", "Tomorrow at 4:30 PM", "Sunday at 4:30 PM", a date-only "Sunday"), with
+    /// an evening airing today said as tonight (`Formatting.isEvening`, the app's one definition).
+    private func moment(_ r: Row) -> String {
+        let f = r.franchise
+        let delta = r.at - now
+        if !r.dateOnly, delta >= 60 * Formatting.minuteMs,
+           Formatting.dayDiff(ts: r.at, now: now, anchor: f.timeAnchor) == 0,
+           Formatting.isEvening(hour: Formatting.localParts(r.at, anchor: f.timeAnchor).hour) {
+            return Copy.Schedule.tonightAt(Formatting.fmtTime(r.at, anchor: f.timeAnchor))
+        }
+        return TemporalCopy.airs(at: r.at, now: now, source: f.source)
+    }
+
+    private func blocks(_ d: Derived, hero: Hero?) -> [DayBlock] {
+        var out: [DayBlock] = []
+        // A month is named where the feed crosses into one — and at the top, when the feed opens in
+        // a month other than today's. The date column carries no month: "WED 30" then "SAT 3" said
+        // nothing about October having begun (review i3).
+        var month = Formatting.localParts(now).mo
+        for day in daysToDraw(d) {
+            let rows = day.rows.filter { $0.id != hero?.row.id }
+            let card = day.isToday ? hero : nil
+            let empty: String? = rows.isEmpty && card == nil && (day.isToday || day.id == pinnedEmptyDay)
+                ? (day.isToday && d.todayFiltered ? Copy.Schedule.noEpisodes : Copy.Schedule.nothingScheduled)
+                : nil
+            var block = DayBlock(day: day, rows: rows, hero: card, month: nil, empty: empty)
+            if !block.isBlank {
+                let m = Formatting.localParts(day.noon).mo
+                if m != month { block.month = Formatting.formatted(day.noon, skeleton: "MMMM", anchor: .local) }
+                month = m
+            }
+            out.append(block)
+        }
+        return out
+    }
+
+    // MARK: - The feed
+
+    /// A day: the month it opens (only where the feed crosses into one), the card on today, then
+    /// its rows — the date in the first row's column. The whole day is ONE child of the lazy feed
+    /// with the day's id, so the grid and the "Today" button land on it, month and all.
+    @ViewBuilder
+    private func dayBlock(_ b: DayBlock) -> some View {
+        if b.isBlank {
+            Color.clear
+                .frame(height: 1)
+                .accessibilityHidden(true)
+                .id(AgendaID.day(b.day.id))
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                if let month = b.month {
+                    ScheduleEyebrow(text: month)
+                        .padding(.top, ThemeSpace.x6)
+                        .padding(.bottom, ThemeSpace.x1)
+                }
+                if let hero = b.hero {
+                    heroCard(hero)
+                        .padding(.top, ThemeSpace.x3)
+                        .padding(.bottom, b.rows.isEmpty ? 0 : ThemeSpace.x3)
+                }
+                ForEach(Array(b.rows.enumerated()), id: \.element.id) { i, r in
+                    agendaRow(r, date: i == 0 ? dateColumn(b.day) : nil, isToday: b.day.isToday)
+                }
+                if let empty = b.empty {
+                    let date = dateColumn(b.day)
+                    ScheduleEmptyDayRow(weekday: date.top, numeral: date.numeral, isToday: b.day.isToday,
+                                        text: empty,
+                                        spoken: "\(Formatting.formatted(b.day.noon, skeleton: "EEEEdMMMM", anchor: .local)), \(empty)")
+                }
+            }
+            .padding(.top, b.hero == nil && b.month == nil ? Metrics.dayGap : 0)
+            .id(AgendaID.day(b.day.id))
+        }
+    }
+
+    /// "FRI" over "25" — the day's weekday and numeral, for its first row's date column.
+    private func dateColumn(_ day: Day) -> (top: String, numeral: String) {
+        let p = Formatting.localParts(day.noon)
+        return (Formatting.weekdayShort(p.wd), "\(p.d)")
+    }
+
+    /// LATER — past the window, each quiet show's next dated airing (or a Planned show's premiere),
+    /// in the agenda's own row with the MONTH in the date column ("OCT" over "19"). Each row is a
+    /// DIRECT child of the lazy feed, the day's first with the day's id, so the grid can land on
+    /// it (review i3).
+    @ViewBuilder
+    private func laterGroup(_ rows: [Row]) -> some View {
+        if !rows.isEmpty {
+            ScheduleEyebrow(text: Copy.Schedule.later)
+                .padding(.top, ThemeSpace.x8)
+                .padding(.bottom, ThemeSpace.x1)
+            ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
+                let day = laterDay(r)
+                let firstOfDay = i == 0 || laterDay(rows[i - 1]) != day
+                let p = Formatting.localParts(r.at, anchor: r.franchise.timeAnchor)
+                agendaRow(r, date: firstOfDay ? (monthShort(p.mo), "\(p.d)") : nil, isToday: false)
+                    .padding(.top, firstOfDay && i > 0 ? Metrics.dayGap : 0)
+                    .id(firstOfDay ? AgendaID.day(day) : AgendaID.row(day, r.id))
+            }
+        }
+    }
+
+    /// A Later row's day, as an offset from today in its own calendar — the grid's key.
+    private func laterDay(_ r: Row) -> Int {
+        Formatting.dayDiff(ts: r.at, now: appModel.now, anchor: r.franchise.timeAnchor)
+    }
+
+    /// Built once: a `DateFormatter` per row per render was the cost of every scroll frame that
+    /// re-evaluated the feed.
+    private static let monthSymbols = DateFormatter().shortMonthSymbols ?? []
+
+    private func monthShort(_ month: Int) -> String {
+        let symbols = Self.monthSymbols
+        return symbols.indices.contains(month - 1) ? symbols[month - 1].uppercased() : ""
+    }
+
+    // MARK: - Rows
+
+    /// Everything a row needs, computed once, so the card and the row cannot disagree about an
+    /// airing's state the way the pre-6-Sep card's three corners did.
     private struct RowFacts {
         let state: AiringState
         let time: String?
         let hasReminder: Bool
         let zoom: String
-        /// The show is in the library and the episode has aired, so the bottom-right control can
-        /// toggle the progress in either direction.
+        /// The show is in the library and the episode has aired, so the ladder can mark it.
         let canToggle: Bool
     }
 
@@ -857,160 +942,73 @@ struct ScheduleView: View {
                        EpisodeFocus(mediaId: r.part.mediaId, episode: r.episode)) }
     }
 
-    // MARK: - The feed
-
-    /// A date group is a heading followed by generous, full-width artwork. Empty dates remain
-    /// scroll anchors for the calendar but draw no explanatory row.
-    @ViewBuilder
-    private func dateColumnDay(_ day: Day) -> some View {
-        if day.isEmpty {
-            Color.clear
-                .frame(height: 1)
-                .id(AgendaID.day(day.id))
-                .accessibilityHidden(true)
-        } else {
-            VStack(alignment: .leading, spacing: Metrics.headingGap) {
-                ScheduleDayHeading(relative: relativeDay(day),
-                                   weekday: shortWeekday(day),
-                                   numeral: dayNumeral(day))
-                ForEach(Array(day.rows.enumerated()), id: \.element.id) { index, row in
-                    dateRow(row, day: day)
-                        .padding(.top, index == 0 ? 0 : Metrics.rowGap - Metrics.headingGap)
-                }
-            }
-            .padding(.horizontal, Metrics.horizontalInset)
-            .padding(.top, ThemeSpace.x8)
-            .id(AgendaID.day(day.id))
-        }
-    }
-
-    private func dateRow(_ r: Row, day: Day) -> some View {
+    private func agendaRow(_ r: Row, date: (top: String, numeral: String)?, isToday: Bool) -> some View {
         let f = r.franchise
         let x = facts(r)
-        return ScheduleAiringCard(title: f.displayTitle,
-                                  episodeText: episodeText(r),
-                                  time: x.time,
-                                  timeIsLead: !r.aired,
-                                  art: f.wideArt,
-                                  poster: f.portraitArt,
-                                  name: f.sceneName,
-                                  hasReminder: x.hasReminder,
-                                  zoomID: x.zoom,
-                                  trailing: {
-                                      if x.canToggle {
-                                          ScheduleWatchToggle(watched: x.state.isWatched,
-                                                              title: f.title,
-                                                              episode: r.episode) {
-                                              toggleWatched(r, watched: x.state.isWatched)
-                                          }
-                                      }
-                                  },
-                                  action: openAction(r, x))
+        let count = max(1, r.episodes.upperBound - r.part.progress)
+        let line = [episodeLine(r), x.time].compactMap { $0 }.joined(separator: " \u{00B7} ")
+        return ScheduleAgendaRow(franchise: f, date: date, isToday: isToday, line: line, state: x.state,
+                                 spoken: spoken(r, line: line, x), onOpen: openAction(r, x)) {
+            AiringStateControl(state: x.state, episode: r.episode, committing: false, title: f.displayTitle,
+                               batch: count > 1, count: count, canMark: x.canToggle) {
+                toggleWatched(r, watched: x.state.isWatched)
+            }
+        }
+        .franchiseQuickActions(appModel.isInLibrary(f.id) ? f : nil, appModel: appModel)
+        .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: x.state.isWatched)
+    }
+
+    /// Every row says its date to VoiceOver — the date column is drawn on a day's first row only,
+    /// and a row read on its own must not lose its day.
+    private func spoken(_ r: Row, line: String, _ x: RowFacts) -> String {
+        [Formatting.formatted(r.at, skeleton: "EEEEdMMMM", anchor: r.franchise.timeAnchor),
+         r.franchise.title, line,
+         x.hasReminder ? Copy.Schedule.reminderSet : nil,
+         x.state.isWatched ? Copy.Action.watched : nil]
+            .compactMap { $0 }.joined(separator: ", ")
+    }
+
+    private func heroCard(_ h: Hero) -> some View {
+        let r = h.row
+        let f = r.franchise
+        let x = facts(r)
+        return ScheduleTonightCard(franchise: f, eyebrow: h.eyebrow, line: heroLine(r), state: x.state,
+                                   canToggle: x.canToggle,
+                                   markLabel: x.state.isWatched ? Copy.Action.markEpisodeUnwatched(r.episode)
+                                                                : Copy.Action.markEpisodeWatched(r.episode),
+                                   onToggle: {
+                                       heldHero = r.id
+                                       toggleWatched(r, watched: x.state.isWatched)
+                                   },
+                                   onOpen: openAction(r, x))
             .franchiseQuickActions(appModel.isInLibrary(f.id) ? f : nil, appModel: appModel)
             .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: x.state.isWatched)
-            .id(AgendaID.row(day.id, r.id))
     }
 
-    /// LATER — past the window, each show's next dated airing (or a Planned show's premiere), in
-    /// the feed's own grammar: a date heading over its artwork card. Each card is a DIRECT child
-    /// of the lazy feed with its day's id, so the month grid can land on it (review i3: the grid
-    /// greyed out 19 Oct while this group listed Bleach on it; nested in one block, the ids were
-    /// not scroll targets).
-    @ViewBuilder
-    private func laterGroup(_ rows: [Row]) -> some View {
-        if !rows.isEmpty {
-            SectionLabel(text: Copy.Schedule.later)
-                .accessibilityAddTraits(.isHeader)
-                .padding(.top, ThemeSpace.x8)
-                .padding(.horizontal, Metrics.horizontalInset)
-            ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
-                let p = Formatting.localParts(r.at, anchor: r.franchise.timeAnchor)
-                let day = laterDay(r)
-                let firstOfDay = i == 0 || laterDay(rows[i - 1]) != day
-                VStack(alignment: .leading, spacing: Metrics.headingGap) {
-                    ScheduleDayHeading(relative: nil,
-                                       weekday: Formatting.weekdayShort(p.wd),
-                                       numeral: "\(p.d) \(monthShort(p.mo))")
-                    laterCard(r)
-                }
-                .padding(.top, ThemeSpace.x6)
-                .padding(.horizontal, Metrics.horizontalInset)
-                .id(firstOfDay ? AgendaID.day(day) : AgendaID.row(day, r.id))
-            }
-        }
-    }
+    // MARK: - What a row says
 
-    /// A Later row's day, as an offset from today in its own calendar — the grid's key.
-    private func laterDay(_ r: Row) -> Int {
-        Formatting.dayDiff(ts: r.at, now: appModel.now, anchor: r.franchise.timeAnchor)
-    }
-
-    private func laterCard(_ r: Row) -> some View {
-        let f = r.franchise
-        let x = facts(r)
-        return ScheduleAiringCard(title: f.displayTitle,
-                                  episodeText: episodeText(r),
-                                  time: x.time,
-                                  timeIsLead: true,
-                                  art: f.wideArt,
-                                  poster: f.portraitArt,
-                                  name: f.sceneName,
-                                  hasReminder: x.hasReminder,
-                                  zoomID: x.zoom,
-                                  trailing: { EmptyView() },
-                                  action: openAction(r, x))
-            .franchiseQuickActions(appModel.isInLibrary(f.id) ? f : nil, appModel: appModel)
-    }
-
-    /// Built once: a `DateFormatter` per heading per render was the cost of every scroll frame
-    /// that re-evaluated the feed.
-    private static let monthSymbols = DateFormatter().shortMonthSymbols ?? []
-
-    private func monthShort(_ month: Int) -> String {
-        let symbols = Self.monthSymbols
-        return symbols.indices.contains(month - 1) ? symbols[month - 1].uppercased() : ""
-    }
-
-    private func relativeDay(_ day: Day) -> String? {
-        switch day.id {
-        case -1: "YESTERDAY"
-        case 0: "TODAY"
-        case 1: "TOMORROW"
-        default: nil
-        }
-    }
-
-    private func shortWeekday(_ day: Day) -> String {
-        Formatting.weekdayShortMonFirst(Formatting.localMondayCol(day.noon))
-    }
-
-    /// "3", or "3 OCT" in a month other than today's — the feed crossed from "WED 30" to "SAT 3"
-    /// with nothing saying October had begun (review i3; Later's headings already say it).
-    private func dayNumeral(_ day: Day) -> String {
-        let p = Formatting.localParts(day.noon)
-        let today = Formatting.localParts(appModel.now)
-        return p.mo == today.mo ? "\(p.d)" : "\(p.d) \(monthShort(p.mo))"
-    }
-
-    // MARK: - What the row says
-
-    /// What actually VARIES down the feed, with the season dropped. A weekly show cannot leave its
-    /// season inside a 22-day window, so on this screen "Season 4" is a constant printed once per
-    /// row — the biggest single contributor to the run-on grammar the spike is testing against.
-    private func episodeText(_ r: Row) -> String {
-        let n = r.episodes.count
-        let count = n > 1 ? Copy.episodes(n) : nil
+    /// What VARIES down the feed: "Episode 14", "Episodes 5–8", "Season 2 premiere" — and the part
+    /// only when it is not the one the reader is in (`namesPart`). A weekly show cannot leave its
+    /// season inside the window, so on the rows the season is a constant, and it is dropped.
+    private func episodeLine(_ r: Row) -> String {
         if r.part.kind == .movie || r.episodes.lowerBound == 1 {
+            let count = r.episodes.count > 1 ? Copy.episodes(r.episodes.count) : nil
             return [Copy.Schedule.premiere(premiereName(r)), count].compactMap { $0 }.joined(separator: " \u{00B7} ")
         }
-        // The card's compact notation (20 Sep): "E18", "E3–E5" — the artwork carries the show,
-        // the line is a label on it. A premiere and another part still say what they are.
-        guard namesPart(r) else {
-            return r.episodes.count == 1 ? "E\(r.episode)" : "E\(r.episodes.lowerBound)\u{2013}E\(r.episodes.upperBound)"
-        }
-        guard let count else { return r.franchise.watchContext(part: r.part, episode: r.episode) }
+        let episodes = r.episodes.count > 1
+            ? Copy.Schedule.episodeRange(r.episodes.lowerBound, r.episodes.upperBound)
+            : Copy.episode(r.episode)
+        guard namesPart(r) else { return episodes }
+        if r.episodes.count == 1 { return r.franchise.watchContext(part: r.part, episode: r.episode) }
         let label = Copy.compactPartLabel(r.part.canonicalLabel)
-        return label.isEmpty ? count : "\(label) \u{00B7} \(count)"
+        return label.isEmpty ? episodes : "\(label) \u{00B7} \(episodes)"
+    }
+
+    /// The card stands alone, so it says the season with the episode ("Season 4 · Episode 21");
+    /// a premiere or a drop in its own words.
+    private func heroLine(_ r: Row) -> String {
+        guard r.episodes.count == 1, r.part.kind != .movie, r.episodes.lowerBound > 1 else { return episodeLine(r) }
+        return r.franchise.watchContext(part: r.part, episode: r.episode)
     }
 
     /// The row is from a part other than the one the user is in: an EXTRA airing beside the show (a
@@ -1036,7 +1034,7 @@ struct ScheduleView: View {
         return r.franchise.parts.count > 1 ? Copy.compactPartLabel(r.part.canonicalLabel) : ""
     }
 
-    // MARK: - Watched toggle (the only write)
+    // MARK: - The mark (the only write)
 
     private func toggleWatched(_ r: Row, watched: Bool) {
         let part = r.part
@@ -1076,7 +1074,7 @@ struct ScheduleView: View {
     }
 
     /// The control itself is the receipt: it fills or opens in place. No second success line is
-    /// inserted under the card, and no redundant success toast competes with the next release.
+    /// inserted under the row, and no redundant success toast competes with the next release.
     private func setProgress(_ r: Row, to target: Int, watched: Bool) {
         // A mark on a show filed Watched (a new season on the calendar) watches it again
         // (`AppModel.resume`) — the one case this control says anything beyond itself, on the lane.

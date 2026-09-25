@@ -29,7 +29,6 @@ struct FeedThreadView: View {
     @State private var replyTarget: ComposeTarget?
     @State private var trailOpen = false
     @State private var viewing: FeedPostModel?
-    @State private var video: FeedPostModel?
     @State private var focusLanded = false
     @State private var captureLanded = false
     /// X plays the post's video on its page too.
@@ -45,7 +44,9 @@ struct FeedThreadView: View {
 
     private static let authorTop: CGFloat = ThemeSpace.x2
     private static let sentenceTop: CGFloat = 14
-    private static let sentenceLeading: CGFloat = 4
+    /// Below iOS 26 the words' 17 on 24 (`FeedPostLayout.lineHeightLarge`) is SwiftUI's 17 on 20⅓,
+    /// opened by this.
+    private static let sentenceLeading: CGFloat = 3.5
     private static let blockGap: CGFloat = 14
     private static let metaTop: CGFloat = 16
 
@@ -94,12 +95,15 @@ struct FeedThreadView: View {
                             onOpenShow: { afterCover = .show(m.post.franchiseId) })
                 .navigationTransition(.zoom(sourceID: FeedZoom.media(m.id), in: mediaZoom))
         }
-        .fullScreenCover(item: $video) { m in
-            if case .trailer(_, let v) = m.media {
-                VideoSheet(video: v, showTitle: m.showName, ambientArt: ambientArt(m),
-                           startAt: Int(autoplay.position(m.id)))
-                    .navigationTransition(.zoom(sourceID: FeedZoom.media(m.id), in: mediaZoom))
-            }
+        // The trailer's full screen: its own player, zoomed out of the post.
+        .fullScreenCover(item: Bindable(autoplay).fullScreen) { playback in
+            let show = appModel.feedPost(id: playback.key)?.showName ?? ""
+            TrailerFullScreen(playback: playback, title: show,
+                              subtitle: TrailerFullScreen.subtitle(playback.video, show: show),
+                              byRotation: autoplay.fullScreenByRotation,
+                              onClosed: { autoplay.fullScreenClosed(playback) })
+                .navigationTransition(.zoom(sourceID: FeedZoom.media(playback.key), in: mediaZoom))
+                .perfScreen("Trailer")
         }
         .environment(\.feedAutoplay, autoplay)
         .onAppear { onScreen = true }
@@ -109,7 +113,7 @@ struct FeedThreadView: View {
     }
 
     private var autoplayHeld: Bool {
-        viewing != nil || video != nil || composing != nil || trailOpen || !onScreen || scenePhase != .active
+        viewing != nil || composing != nil || trailOpen || !onScreen || scenePhase != .active
     }
 
     // MARK: - The page
@@ -175,20 +179,20 @@ struct FeedThreadView: View {
             // ONE body in one style, as an X post is: the sentence, then the research's note as its
             // next paragraph (a rumour's note lives in its Community Note box instead). The note
             // in grey at 15 under a 17-pt sentence read as two fonts in one post (owner, 25 Sep).
-            Text(bodyText(model))
+            // The same words the timeline draws (`FeedPostModel.body`), here at reading size.
+            Text(model.body)
                 .type(ThemeType.feedBodyLarge)
                 .foregroundStyle(ThemeColor.feedText)
-                .lineSpacing(Self.sentenceLeading)
+                .readingLines(FeedPostLayout.lineHeightLarge, below26: Self.sentenceLeading)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, Self.sentenceTop)
                 .textSelection(.enabled)
             switch model.media {
             case .none:
-                RumourNote(model: model, lines: nil)
+                RumourNote(model: model)
                     .padding(.top, Self.blockGap)
             case .art, .trailer:
-                PostMediaButton(model: model, zoom: mediaZoom,
-                                onPlay: { video = model }, onViewMedia: { viewing = model },
+                PostMediaButton(model: model, zoom: mediaZoom, onViewMedia: { viewing = model },
                                 posterAspect: PostMedia.posterWhole, width: Self.mediaWidth)
                     .padding(.top, Self.blockGap)
             }
@@ -210,16 +214,6 @@ struct FeedThreadView: View {
                     .padding(.bottom, ThemeSpace.x3)
             }
         }
-    }
-
-    /// The post's words: the sentence, and the note as a second paragraph when the post has a
-    /// picture (a rumour's note is its Community Note).
-    private func bodyText(_ model: FeedPostModel) -> String {
-        if case .none = model.media { return model.sentence }
-        guard let note = model.post.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else {
-            return model.sentence
-        }
-        return model.sentence + "\n\n" + note
     }
 
     /// The post page's media runs the page's width, inside its insets.
@@ -253,14 +247,14 @@ struct FeedThreadView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: FeedPostLayout.nameSpacing) {
                             Text(model.showName)
-                                .type(ThemeType.feedName)
+                                .type(ThemeType.feedPostName)
                                 .foregroundStyle(ThemeColor.feedText)
                                 .lineLimit(1)
                             if model.showsOfficialMark { ConfirmedMark() }
                         }
                         Text(Copy.Feed.separated([model.post.installment,
                                                   model.franchise.source == .tmdb ? Copy.Filter.tv : Copy.Filter.anime]))
-                            .type(ThemeType.feedMeta)
+                            .type(ThemeType.feedSubhead)
                             .foregroundStyle(ThemeColor.feedSecondary)
                             .lineLimit(1)
                     }
@@ -301,7 +295,7 @@ struct FeedThreadView: View {
                 + Text("\u{00A0}" + parts[1]).foregroundStyle(ThemeColor.feedSecondary)
         }
         return line
-            .type(ThemeType.feedNote)
+            .type(ThemeType.feedSubhead)
             .lineLimit(2)
             .fixedSize(horizontal: false, vertical: true)
             .contentTransition(.numericText(value: Double(likes)))
@@ -368,11 +362,6 @@ struct FeedThreadView: View {
     private func composeTarget(_ model: FeedPostModel, detail: FeedPostDetail?) -> ComposeTarget {
         ComposeTarget(subject: detail?.post.id ?? model.post.id, franchiseId: model.post.franchiseId,
                       franchiseTitle: model.showName)
-    }
-
-    private func ambientArt(_ m: FeedPostModel) -> String? {
-        if case .art(let art) = m.media { return art.url }
-        return m.franchise.landscapeArt ?? m.franchise.portraitArt
     }
 
     private func reloadPage() async {

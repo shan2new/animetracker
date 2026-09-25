@@ -136,12 +136,13 @@ struct CommentRow: View {
                                            in: Copy.Social.replyingToLine(to.handle),
                                            base: ThemeColor.feedSecondary, emphasis: ThemeColor.feedText,
                                            bold: false))
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
             }
             Text(comment.body)
                 .type(ThemeType.feedBody)
                 .foregroundStyle(ThemeColor.feedText)
+                .readingLines(FeedPostLayout.lineHeight)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -154,18 +155,18 @@ struct CommentRow: View {
         if typeSize.isAccessibilitySize {
             // Two lines at the accessibility sizes: a name is never cut to fit its handle.
             VStack(alignment: .leading, spacing: 0) {
-                Text(name).type(ThemeType.feedName).foregroundStyle(ThemeColor.feedText)
-                Text(handleLine).type(ThemeType.feedMeta).foregroundStyle(ThemeColor.feedSecondary)
+                Text(name).type(ThemeType.feedPostName).foregroundStyle(ThemeColor.feedText)
+                Text(handleLine).type(ThemeType.feedSubhead).foregroundStyle(ThemeColor.feedSecondary)
             }
         } else {
             HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x1) {
                 Text(name)
-                    .type(ThemeType.feedName)
+                    .type(ThemeType.feedPostName)
                     .foregroundStyle(ThemeColor.feedText)
                     .lineLimit(1)
                     .layoutPriority(1)
                 Text(handleLine)
-                    .type(ThemeType.feedMeta)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .lineLimit(1)
             }
@@ -179,8 +180,8 @@ struct CommentRow: View {
             if let onReply {
                 Button(action: onReply) {
                     HStack(spacing: ThemeSpace.x1) {
-                        Image(systemName: "bubble.left")
-                            .font(ThemeType.feedBody.font)
+                        AppGlyph(systemName: "bubble.left")
+                            .font(ThemeType.feedMeta.font)
                             .imageScale(.medium)
                         if comment.replyCount > 0 {
                             Text(FeedCount.text(comment.replyCount)).type(ThemeType.feedCount)
@@ -224,23 +225,23 @@ struct CommentRow: View {
             Button {
                 UIPasteboard.general.string = comment.body
             } label: {
-                Label(Copy.Feed.copyText, systemImage: "doc.on.doc")
+                AppGlyphLabel(Copy.Feed.copyText, systemName: "doc.on.doc")
             }
             if comment.mine {
                 Button(role: .destructive) { confirmDelete = true } label: {
-                    Label(Copy.Social.deleteCommand, systemImage: "trash")
+                    AppGlyphLabel(Copy.Social.deleteCommand, systemName: "trash")
                 }
             } else {
                 Button { reporting = true } label: {
-                    Label(Copy.Social.reportCommand, systemImage: "flag")
+                    AppGlyphLabel(Copy.Social.reportCommand, systemName: "flag")
                 }
                 Button(role: .destructive) { confirmBlock = true } label: {
-                    Label(Copy.Social.blockCommand(comment.author.handle), systemImage: "hand.raised")
+                    AppGlyphLabel(Copy.Social.blockCommand(comment.author.handle), systemName: "hand.raised")
                 }
             }
         } label: {
-            Image(systemName: "ellipsis")
-                .font(ThemeType.feedNote.font)
+            AppGlyph(systemName: "ellipsis")
+                .font(ThemeType.feedSubhead.font)
                 .foregroundStyle(ThemeColor.feedSecondary)
                 .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight)
                 .contentShape(Rectangle())
@@ -324,12 +325,12 @@ struct PendingCommentRow: View {
                         if let profile, let shown = profile.displayName ?? profile.handle {
                             HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x1) {
                                 Text(shown)
-                                    .type(ThemeType.feedName)
+                                    .type(ThemeType.feedPostName)
                                     .foregroundStyle(ThemeColor.feedText)
                                     .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                                 if let handle = profile.handle, !typeSize.isAccessibilitySize {
                                     Text(Copy.Social.handle(handle))
-                                        .type(ThemeType.feedMeta)
+                                        .type(ThemeType.feedSubhead)
                                         .foregroundStyle(ThemeColor.feedSecondary)
                                         .lineLimit(1)
                                 }
@@ -340,11 +341,12 @@ struct PendingCommentRow: View {
                                                        in: Copy.Social.replyingToLine(to.handle),
                                                        base: ThemeColor.feedSecondary,
                                                        emphasis: ThemeColor.feedText, bold: false))
-                                .type(ThemeType.feedNote)
+                                .type(ThemeType.feedSubhead)
                         }
                         Text(pending.body)
                             .type(ThemeType.feedBody)
                             .foregroundStyle(ThemeColor.feedText)
+                            .readingLines(FeedPostLayout.lineHeight)
                             .opacity(pending.state == .sending ? SocialMetrics.sendingInkOpacity : 1)
                             .fixedSize(horizontal: false, vertical: true)
                     }

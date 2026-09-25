@@ -4,7 +4,8 @@ import UIKit
 // The post, on X's measured anatomy (round 3, 393 pt; round 4 polish):
 //   · ONE metadata line — the show as the account, its installment in the handle's slot, the time,
 //     in grey. Nothing else competes with it.
-//   · ONE plain sentence of content at reading weight. No bold headline over a grey paragraph.
+//   · ONE text at reading weight — the sentence, then the research's note as its next paragraph —
+//     drawn whole, as the post page draws it. No bold headline over a grey paragraph.
 //   · The media is the picture and nothing more: no pill, no tag, no date printed on the art.
 //   · A row of quiet outline icons.
 //   · No colour in the post except STATE: a like is pink, a reminder you set rings the bell amber,
@@ -16,26 +17,36 @@ import UIKit
 
 /// X's measured spacings inside a post, in one place.
 enum FeedPostLayout {
-    /// Name line → sentence.
+    /// The name line rises by Outfit's room above its capitals, so the name's top meets the
+    /// avatar's top, as X's does (it sat 4⅓ pt under it).
+    static let nameLift: CGFloat = 4
+    /// Name line → words.
     static let sentenceTop: CGFloat = 1
-    /// Sentence → media (or the rumour's note).
-    static let mediaTop: CGFloat = 10
+    /// Words → media (or the rumour's note): 14 from the last baseline, X's 13½ — SF's line keeps
+    /// 5 pt under its baseline where Outfit's kept 4.
+    static let mediaTop: CGFloat = 9
     /// Media → action bar.
     static let barTop: CGFloat = 2
     /// Inside the name line.
     static let nameSpacing: CGFloat = 4
-    /// The sentence's leading.
-    static let lineSpacing: CGFloat = 1.5
+    /// The words' line, as a multiple of their point size (`readingLines`): X's 15 on 20 — in a post,
+    /// a reply, a note and the composer's quote alike — and X's detail, 17 on 24, for the post page
+    /// and for what you type.
+    static let lineHeight: CGFloat = 20.0 / 15.0
+    static let lineHeightLarge: CGFloat = 24.0 / 17.0
     /// The `···` sits 6 pt into the row's trailing inset, as X's does.
     static let menuTrailingPull: CGFloat = 6
-    /// The For you "Add" capsule: 30 pt tall, 14 pt of side padding (X's follow pill).
-    static let addHeight: CGFloat = 30
+    /// The For you "Add" capsule: 26 pt tall, 14 pt of side padding (X's follow pill). It rides the
+    /// name line without growing it — 3 pt over it and under it — so a For you post's name, like a
+    /// Following one's, meets the avatar's top and its words sit where theirs do (at 30 it pushed
+    /// the line to 30 and both 5 and 10 pt down).
+    static let addHeight: CGFloat = 26
     static let addPadding: CGFloat = 14
     /// The double-tap heart over a picture.
     static let bigHeart: CGFloat = 78
-    /// The rumour note: its title's glyph → words, and its lines' leading.
+    /// The rumour note: its title's glyph → words (its words keep the post's line, X's note being
+    /// 15 on 20 too).
     static let noteGlyphGap: CGFloat = 6
-    static let noteLineSpacing: CGFloat = 1
 }
 
 // MARK: - The row
@@ -48,11 +59,12 @@ struct FeedPostRow: View, @MainActor Equatable {
     let model: FeedPostModel
     /// For you's posts are about shows you do not track: the name line offers Add instead of `···`.
     var tab: FeedTab = .following
-    /// The feed's zoom namespace: the picture viewer and the trailer's stage grow out of the post.
+    /// The feed's zoom namespace: the picture viewer and a trailer's full screen grow out of the post.
     var zoom: Namespace.ID? = nil
     let onOpen: () -> Void
     let onOpenShow: () -> Void
-    let onPlay: () -> Void
+    /// Where no list plays trailers (Saved): a trailer's tap opens its post, where it plays.
+    var onPlay: (() -> Void)? = nil
     let onViewMedia: () -> Void
     let onComment: () -> Void
     /// The first post's picture is on screen (the launch hands off on it).
@@ -79,6 +91,7 @@ struct FeedPostRow: View, @MainActor Equatable {
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 0) {
                     textColumn
+                        .padding(.top, -FeedPostLayout.nameLift)
                     switch model.media {
                     case .none:
                         RumourNote(model: model)
@@ -105,18 +118,27 @@ struct FeedPostRow: View, @MainActor Equatable {
         }
     }
 
-    /// The name line and the sentence: ONE VoiceOver element, labelled with the post's composed
-    /// sentence, carrying the row's actions (the buttons below stay reachable by swiping too).
+    /// The name line and the post's words — the sentence and the research's note, as the post page
+    /// draws them (`FeedPostModel.body`), up to X's 280 characters: a longer post is cut at a word
+    /// and ends on "Show more", as X's does, and the row (one press) opens it whole. ONE VoiceOver
+    /// element, labelled with the WHOLE words, carrying the row's actions (the buttons below stay
+    /// reachable by swiping too).
     private var textColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             PostNameLine(model: model, suggested: tab == .forYou, onOpenShow: onOpenShow)
-            Text(model.sentence)
+            Text(model.clippedBody ?? model.body)
                 .type(ThemeType.feedBody)
                 .foregroundStyle(ThemeColor.feedText)
                 .multilineTextAlignment(.leading)
-                .lineSpacing(FeedPostLayout.lineSpacing)
+                .readingLines(FeedPostLayout.lineHeight)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, FeedPostLayout.sentenceTop)
+            if model.clippedBody != nil {
+                // Not a button of its own: the whole row is the press that opens the post.
+                Text(Copy.Feed.showMore)
+                    .type(ThemeType.feedNoteTitle)
+                    .foregroundStyle(ThemeColor.interactive)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(model.accessibilityLabel)
@@ -202,9 +224,11 @@ struct FeedHairline: View {
 // MARK: - The name line
 
 /// "Black Clover ✓ Season 2 · 2h  ···" — X's line: the account in bold, its mark, the grey slot X
-/// uses for the handle (here the installment), the time, the overflow. With room: all of it.
-/// Without: the installment goes first, whole — X drops the handle before it cuts anything, and
-/// never the time. At the accessibility sizes it is two lines: the name, then installment · time.
+/// uses for the handle (here the installment), the time, the overflow, all at X's 15. With room:
+/// all of it. Without: the show's shorter name keeps the installment beside it; then the whole name
+/// alone; then the shorter name alone — X drops the handle before it cuts anything, and never the
+/// time. Only past all four does the name end in an ellipsis. At the accessibility sizes it is two
+/// lines: the name, then installment · time.
 struct PostNameLine: View {
     let model: FeedPostModel
     /// A For you post: a trailing Add capsule instead of the `···` menu (iD20 — the menu stays on
@@ -220,19 +244,29 @@ struct PostNameLine: View {
             Button(action: onOpenShow) {
                 if typeSize.isAccessibilitySize {
                     VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: FeedPostLayout.nameSpacing) {
-                            name
-                            mark
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: FeedPostLayout.nameSpacing) {
+                                name(model.showName)
+                                mark
+                            }
+                            if shortens {
+                                HStack(spacing: FeedPostLayout.nameSpacing) {
+                                    name(model.shortName)
+                                    mark
+                                }
+                            }
                         }
                         Text(Copy.Feed.separated([model.post.installment, model.stamp]))
-                            .type(ThemeType.feedMeta)
+                            .type(ThemeType.feedSubhead)
                             .foregroundStyle(ThemeColor.feedSecondary)
                     }
                     .contentShape(Rectangle())
                 } else {
                     ViewThatFits(in: .horizontal) {
-                        line(installment: true)
-                        line(installment: false)
+                        line(model.showName, installment: true)
+                        if shortens { line(model.shortName, installment: true) }
+                        line(model.showName, installment: false)
+                        if shortens { line(model.shortName, installment: false) }
                     }
                 }
             }
@@ -250,9 +284,12 @@ struct PostNameLine: View {
         }
     }
 
-    private var name: some View {
-        Text(model.showName)
-            .type(ThemeType.feedName)
+    /// The title has an identity half shorter than itself ("Demon Slayer").
+    private var shortens: Bool { model.shortName != model.showName }
+
+    private func name(_ text: String) -> some View {
+        Text(text)
+            .type(ThemeType.feedPostName)
             .foregroundStyle(ThemeColor.feedText)
             .lineLimit(1)
     }
@@ -261,19 +298,19 @@ struct PostNameLine: View {
         if model.showsOfficialMark { ConfirmedMark() }
     }
 
-    private func line(installment: Bool) -> some View {
+    private func line(_ title: String, installment: Bool) -> some View {
         HStack(alignment: .center, spacing: FeedPostLayout.nameSpacing) {
-            name.layoutPriority(2)
+            name(title).layoutPriority(2)
             mark
             if installment, !model.post.installment.isEmpty {
                 Text(model.post.installment)
-                    .type(ThemeType.feedMeta)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .lineLimit(1)
                     .fixedSize()
             }
             Text(Copy.Feed.afterDot(model.stamp))
-                .type(ThemeType.feedMeta)
+                .type(ThemeType.feedSubhead)
                 .foregroundStyle(ThemeColor.feedSecondary)
                 .lineLimit(1)
                 .fixedSize()
@@ -310,7 +347,8 @@ struct ShowAddCapsule: View {
                 .overlay(Capsule().strokeBorder(owned ? ThemeColor.feedSeparator : .clear, lineWidth: FeedMetrics.hairline))
                 .frame(minHeight: FeedMetrics.actionHitHeight)
                 .contentShape(Rectangle())
-                .padding(.vertical, -(FeedMetrics.actionHitHeight - FeedPostLayout.addHeight) / 2)
+                // The line's own height, as the `···` holds it (`PostMenuButton`).
+                .padding(.vertical, -ThemeSpace.x3)
         }
         .buttonStyle(FeedIconPressStyle())
         .disabled(owned)
@@ -359,8 +397,8 @@ struct PostMenuButton: View {
     }
 
     private var glyph: some View {
-        Image(systemName: "ellipsis")
-            .font(ThemeType.feedNote.font.weight(.medium))
+        AppGlyph(systemName: "ellipsis")
+            .font(ThemeType.feedSubhead.font.weight(.medium))
             .foregroundStyle(tint)
             .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight)
             .contentShape(Rectangle())
@@ -423,30 +461,30 @@ struct PostMenuItems: View {
     var body: some View {
         let franchiseId = model.post.franchiseId
         Button { appModel.hidePost(model) } label: {
-            Label(Copy.Feed.notInterested, systemImage: "hand.thumbsdown")
+            AppGlyphLabel(Copy.Feed.notInterested, systemName: "hand.thumbsdown")
         }
         if appModel.mutedShowIds.contains(franchiseId) {
             Button { appModel.unmuteShow(franchiseId: franchiseId) } label: {
-                Label(Copy.Feed.unmute(model.showName), systemImage: "speaker.wave.2")
+                AppGlyphLabel(Copy.Feed.unmute(model.showName), systemName: "speaker.wave.2")
             }
         } else {
             Button {
                 appModel.muteShow(franchiseId: franchiseId, showName: model.showName, fromPostId: model.id)
             } label: {
-                Label(Copy.Feed.mute(model.showName), systemImage: "speaker.slash")
+                AppGlyphLabel(Copy.Feed.mute(model.showName), systemName: "speaker.slash")
             }
         }
         if divided { Divider() }
         Button { UIPasteboard.general.string = model.shareText } label: {
-            Label(Copy.Feed.copyText, systemImage: "doc.on.doc")
+            AppGlyphLabel(Copy.Feed.copyText, systemName: "doc.on.doc")
         }
         if let source = model.readOn, let url = SafeURL.https(source.url?.absoluteString) {
             Button { openURL(url) } label: {
-                Label(Copy.Feed.readOn(source.publisher), systemImage: "safari")
+                AppGlyphLabel(Copy.Feed.readOn(source.publisher), systemName: "safari")
             }
         }
         Button(action: onOpenShow) {
-            Label(Copy.Feed.goTo(model.showName), systemImage: "play.rectangle.on.rectangle")
+            AppGlyphLabel(Copy.Feed.goTo(model.showName), systemName: "play.rectangle.on.rectangle")
         }
     }
 }
@@ -463,7 +501,7 @@ struct FoldedPostRow: View {
         VStack(spacing: 0) {
             HStack(spacing: ThemeSpace.x3) {
                 Text(text)
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -495,17 +533,16 @@ struct FoldedPostRow: View {
 // MARK: - The rumour's note
 
 /// X's Community Note, for a rumour: a bordered card — the reason in bold, what was reported, and
-/// how many reports, none official. The feed clamps the note; the post page shows it whole.
+/// how many reports, none official. Whole wherever it is drawn, as X's note is in the timeline.
 struct RumourNote: View {
     let model: FeedPostModel
-    var lines: Int? = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeSpace.x2) {
             Label {
                 Text(Copy.Feed.rumourNoteTitle).type(ThemeType.feedNoteTitle)
             } icon: {
-                Image(systemName: "person.2.fill").font(ThemeType.feedSmall.font)
+                AppGlyph(systemName: "person.2.fill", decorative: true).font(ThemeType.feedSmall.font)
             }
             .labelStyle(RumourNoteTitleStyle())
             .foregroundStyle(ThemeColor.feedText)
@@ -513,8 +550,7 @@ struct RumourNote: View {
                 Text(note)
                     .type(ThemeType.feedNote)
                     .foregroundStyle(ThemeColor.feedText)
-                    .lineSpacing(FeedPostLayout.noteLineSpacing)
-                    .lineLimit(lines)
+                    .readingLines(FeedPostLayout.lineHeight)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text(Copy.Feed.rumourNoteReports(model.post.sources.count))
@@ -539,12 +575,14 @@ private struct RumourNoteTitleStyle: LabelStyle {
 
 // MARK: - Media
 
-/// One tap opens (the trailer's stage, or the picture's viewer); two like the post with
-/// Instagram's heart. The single tap waits out the double, as Instagram's does.
+/// One tap plays a trailer WHERE IT IS (its sound, its controls — then shows or hides them) or
+/// opens a picture's viewer; two like the post with Instagram's heart. The single tap waits out the
+/// double, as Instagram's does.
 struct PostMediaButton: View {
     let model: FeedPostModel
     let zoom: Namespace.ID?
-    let onPlay: () -> Void
+    /// Where no list plays trailers (Saved): a trailer's tap opens its post instead.
+    var onPlay: (() -> Void)? = nil
     let onViewMedia: () -> Void
     var onLoaded: (() -> Void)? = nil
     /// The post page shows a poster whole, the timeline its 4:5 crop (`PostMedia.posterAspect`).
@@ -557,13 +595,18 @@ struct PostMediaButton: View {
     @Environment(\.feedAutoplay) private var autoplay
     @State private var hearts = 0
 
-    private var isTrailer: Bool {
-        if case .trailer = model.media { return true }
-        return false
+    private var isTrailer: Bool { trailer != nil }
+
+    private var trailer: FranchiseVideo? {
+        if case .trailer(_, let video) = model.media { return video }
+        return nil
     }
 
-    /// This post's trailer is the one playing in place.
-    private var playingInline: Bool { isTrailer && autoplay?.playingId == model.id }
+    /// This post's trailer, while it is the one playing in place.
+    private var playback: TrailerPlayback? {
+        guard isTrailer, let current = autoplay?.current, current.key == model.id else { return nil }
+        return current
+    }
 
     var body: some View {
         PostMedia(model: model, onLoaded: onLoaded, width: width, posterAspect: posterAspect)
@@ -574,17 +617,34 @@ struct PostMediaButton: View {
                 TapGesture(count: 2).onEnded { likeByDoubleTap() }
                     .exclusively(before: TapGesture().onEnded { open() })
             )
+            // A trailer's buttons ride ABOVE the post's taps, never inside them.
+            .overlay {
+                if isTrailer, let autoplay {
+                    InlineTrailerControlsLayer(postId: model.id, autoplay: autoplay)
+                }
+            }
             .accessibilityElement(children: .ignore)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(isTrailer ? Copy.Feed.playTrailer : Copy.Feed.viewPicture)
-            .accessibilityValue(playingInline ? Copy.Feed.trailerPlaying : "")
+            .accessibilityValue(accessibilityValue)
             .accessibilityAction(.default) { open() }
             .accessibilityAction(named: Copy.Feed.likePost) { likeByDoubleTap() }
-            .modifier(SoundAction(autoplay: playingInline ? autoplay : nil))
+            .modifier(TrailerActions(playback: playback, autoplay: autoplay))
+    }
+
+    private var accessibilityValue: String {
+        guard let playback else { return "" }
+        if !playback.engaged { return autoplay?.muted == false ? "" : Copy.Feed.trailerPlaying }
+        return Copy.Video.positionValue(playback.current, of: playback.duration)
     }
 
     private func open() {
-        if isTrailer { onPlay() } else { onViewMedia() }
+        guard let trailer else { return onViewMedia() }
+        if let autoplay {
+            autoplay.tap(model.id, video: trailer)
+        } else {
+            onPlay?()
+        }
     }
 
     /// Instagram's double tap only ever LIKES — it never takes a like back.
@@ -594,17 +654,26 @@ struct PostMediaButton: View {
     }
 }
 
-/// The inline trailer's sound, as a named VoiceOver action on the media (its corner button is
-/// inside an element VoiceOver reads as one). The action is conditional INSIDE the actions
-/// builder, never an `if` around `content`: a branch there gives the media a new identity when a
-/// trailer starts, which tears the player down the moment it mounts.
-private struct SoundAction: ViewModifier {
+/// The inline trailer's controls as named VoiceOver actions on the media (its buttons are inside
+/// an element VoiceOver reads as one): the sound while it previews; play/pause, full screen and the
+/// sound while it is watched. Conditional INSIDE the actions builder, never an `if` around
+/// `content`: a branch there gives the media a new identity when a trailer starts, which tears the
+/// player down the moment it mounts.
+private struct TrailerActions: ViewModifier {
+    let playback: TrailerPlayback?
     let autoplay: FeedAutoplay?
 
     func body(content: Content) -> some View {
         content.accessibilityActions {
-            if let autoplay {
-                Button(autoplay.muted ? Copy.Feed.soundOn : Copy.Feed.soundOff) { autoplay.muted.toggle() }
+            if let playback, let autoplay {
+                if playback.engaged {
+                    let playing = playback.phase == .playing || playback.phase == .buffering
+                    Button(playing ? Copy.Video.pause : Copy.Video.play) { playback.togglePlay() }
+                    Button(Copy.Video.fullScreen) { autoplay.openFullScreen(playback) }
+                    Button(playback.soundLabel) { playback.setMuted(!playback.muted) }
+                } else {
+                    Button(autoplay.muted ? Copy.Feed.soundOn : Copy.Feed.soundOff) { autoplay.muted.toggle() }
+                }
             }
         }
     }
@@ -731,7 +800,7 @@ struct PlayGlyph: View {
     private static let edge: CGFloat = 1.5
 
     var body: some View {
-        Image(systemName: "play.fill")
+        AppGlyph(systemName: "play.fill")
             .font(.title3.weight(.bold))
             .foregroundStyle(FeedStage.ink)
             .offset(x: Self.edge)

@@ -23,7 +23,7 @@ struct SavedPostsView: View {
     var body: some View {
         content
             .background(ThemeColor.canvas.ignoresSafeArea())
-            .navigationTitle(Copy.Social.savedTitle)
+            .brandNavigationTitle(Copy.Social.savedTitle)
             .navigationBarTitleDisplayMode(.inline)
             .task { await load() }
     }
@@ -115,14 +115,14 @@ private struct SavedUnavailableRow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: FeedMetrics.gap) {
-                Image(systemName: "bookmark.slash")
-                    .font(ThemeType.feedBody.font)
+                AppGlyph(systemName: "bookmark.slash")
+                    .font(ThemeType.feedMeta.font)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .frame(width: FeedMetrics.avatar, height: FeedMetrics.avatar)
                     .background(ThemeColor.feedCard, in: ShowAvatar.shape(FeedMetrics.avatar))
                     .accessibilityHidden(true)
                 Text(Copy.Social.savedUnavailable)
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -144,7 +144,7 @@ private struct SavedFoldRow: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
                 Text(Copy.Social.removedFromSaved)
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)

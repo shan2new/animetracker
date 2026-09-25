@@ -42,53 +42,6 @@ struct GradientPlaceholder: View {
     }
 }
 
-/// A poster that carries its own title, drawn whole at its native aspect. The stage around it
-/// (`PosterStage`) decides where it starts and how far the ground runs under it; the picture is
-/// never zoomed to make room.
-struct AuthoredHeroArt: View {
-    let url: String?
-    let imageHeight: CGFloat
-    /// The ground the poster's FOOT lands on (the stage's, or the page's). Drawn as a gradient
-    /// OVER the picture, never a `.mask`: a mask on a 2048-px layer is an offscreen pass every
-    /// frame (the 5 Sep lag rule), and 48 pt of it left the poster's credit line ("©Tappei
-    /// Nagatsuki, KADOKAWA…") legible under the capsule (iteration 2).
-    var ground: Color = ThemeColor.canvas
-    /// Where the poster's printed NAME ends (the stage's `nameBottom`), when it is known. The fade
-    /// starts BELOW it: at a fixed 96 pt it laid 0.41 ground over "AIRBENDER" and "AND THE
-    /// OLYMPIANS" — the headline on a page that types no second name (review i4, N3).
-    var nameBottom: CGFloat? = nil
-
-    static let footFade: CGFloat = 96
-
-    private var fade: CGFloat {
-        guard let nameBottom else { return Self.footFade }
-        return min(Self.footFade, max(40, imageHeight - nameBottom - 8))
-    }
-
-    var body: some View {
-        ZStack(alignment: .top) {
-            Color.clear
-            RemoteImageView(url: url, contentMode: .fill, maxPixel: 2048, alignment: .top,
-                            placeholderHidden: true)
-                .frame(height: imageHeight)
-                .clipped()
-                .overlay(alignment: .bottom) {
-                    // Full ground by 85 % and HELD to the edge: reaching it only at the last
-                    // pixel left the poster's credit line ("©Tappei Nagatsuki, KADOKAWA…")
-                    // printing dark-on-dark under the capsule (critique, 24 Sep).
-                    LinearGradient(stops: [.init(color: ground.opacity(0), location: 0),
-                                           .init(color: ground.opacity(0.7), location: 0.55),
-                                           .init(color: ground, location: 0.85),
-                                           .init(color: ground, location: 1)],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: fade)
-                        .allowsHitTesting(false)
-                }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
 /// Normalized, top-origin bounds of the poster's existing title. This is layout metadata only:
 /// no source pixels are cropped, painted out, blurred or replaced.
 struct PosterTitleRegion: Equatable, Sendable, Codable {
@@ -365,6 +318,9 @@ struct ArtworkPoster<Details: View>: View {
     /// vary, and the For you shelf's tiles ended 10 pt apart (review i5, N12).
     var fixedAspect: CGFloat? = nil
     var onOpen: (() -> Void)? = nil
+    /// What VoiceOver says for the open target, where the card means more than its name (For
+    /// you's tile carries why it is recommended). The name otherwise.
+    var openLabel: String? = nil
     var onLoaded: (() -> Void)? = nil
     @ViewBuilder var details: () -> Details
 
@@ -480,7 +436,7 @@ struct ArtworkPoster<Details: View>: View {
                 if let onOpen {
                     Button(action: onOpen) { Color.clear.contentShape(Rectangle()) }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(title)
+                        .accessibilityLabel(openLabel ?? title)
                         .accessibilityHint(Copy.Accessibility.opensTheShowHint)
                 }
             }
@@ -884,32 +840,6 @@ struct ArtworkActionStyle: ButtonStyle {
             .background(filled ? ThemeColor.accent : Color.white.opacity(0.14), in: Capsule())
             .overlay(Capsule().strokeBorder(.white.opacity(filled ? 0 : 0.3), lineWidth: 1))
             .opacity(configuration.isPressed ? 0.76 : 1)
-    }
-}
-
-struct WatchedArtworkButton: View {
-    let watched: Bool
-    var enabled = true
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            // Watched: the quiet capsule with the check in amber — a committed mark is STATE.
-            Label {
-                Text(watched ? Copy.Action.watched : Copy.Action.markWatched)
-                    // One line, always: in a narrow card column it wrapped to "Mark / watched".
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-            } icon: {
-                Image(systemName: watched ? "checkmark.circle.fill" : "checkmark")
-                    .foregroundStyle(watched ? ThemeColor.accent : ThemeColor.onAccent)
-            }
-        }
-        .buttonStyle(ArtworkActionStyle(filled: !watched))
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.55)
-        .accessibilityValue(watched ? "Watched" : "Not watched")
-        .accessibilityHint(watched ? "Mark this episode as unwatched" : "Mark this episode as watched")
     }
 }
 

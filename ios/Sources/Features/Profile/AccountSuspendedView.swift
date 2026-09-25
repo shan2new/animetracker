@@ -74,7 +74,7 @@ struct AccountSuspendedView: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            Image(systemName: "person.crop.circle.badge.exclamationmark")
+            AppGlyph(systemName: "person.crop.circle.badge.exclamationmark")
                 .font(.system(size: 44 * glyphUnit, weight: .regular))
                 .foregroundStyle(ThemeColor.textTertiary)
                 .padding(.bottom, ThemeSpace.x4)

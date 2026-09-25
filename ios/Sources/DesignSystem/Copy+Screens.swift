@@ -43,7 +43,7 @@ extension Copy.Action {
     static let revealEpisodeTitlesAndStills = "Reveal episode titles and stills"
     /// The whole work, across its seasons. Opens a confirmation, so it carries the ellipsis.
     static let markSeriesWatched = "Mark series as watched\u{2026}"
-    /// The artwork cards' toggle (Schedule): the state once done, the command before.
+    /// Schedule's card mark: the state once done (`markWatched` is the command before it).
     static let watched = "Watched"
     /// The app's one mark verb — Schedule's toggle said "Mark watched" (review i3).
     static var markWatched: String { Copy.Action.markAsWatched }
@@ -182,6 +182,43 @@ extension Copy {
         static let hideWatched = "Hide watched"
     }
 
+    /// The show page — the show's X profile (25 Sep): X's tabs and pinned post, in the app's words.
+    enum ShowPage {
+        static let posts = "Posts"
+        static let media = "Media"
+        static let about = "About"
+        /// X's label over a pinned post — here, the next episode.
+        static let pinned = "Pinned"
+        /// X's empty timeline: a bold line and one grey sentence.
+        static let noPosts = "No posts yet"
+        static func noPostsMessage(_ show: String) -> String { "News, trailers and new seasons of \(show) show up here." }
+        static let noMedia = "No trailers yet"
+        static let showMore = "Show more"
+        static let showLess = "Show less"
+        /// X's counts ("123 Following  4.5M Followers"): the numeral in ink, the word in grey.
+        static let watchedCount = "Watched"
+        static let episodesCount = "Episodes"
+        static func seasons(_ n: Int) -> String { Copy.plural(n, "season", "seasons") }
+        /// The pinned post's sentence.
+        static func isOut(_ episode: Int) -> String { "\(Copy.episode(episode)) is out." }
+        static func isNext(_ episode: Int) -> String { "\(Copy.episode(episode)) is next." }
+        static func isNextBehind(_ episode: Int, behind: Int) -> String {
+            "\(Copy.episode(episode)) is next \u{2014} you\u{2019}re \(Copy.episodes(behind)) behind."
+        }
+        static func startWith(_ context: String) -> String { "Start with \(context)." }
+        static let caughtUp = "You\u{2019}re caught up."
+        /// A finished series, pinned: "You finished all 89 episodes."
+        static func finishedAll(_ episodes: Int) -> String {
+            episodes <= 1 ? "You finished it." : "You finished all \(Copy.episodes(episodes))."
+        }
+
+        static var sampleStrings: [String] {
+            [posts, media, about, pinned, noPosts, noPostsMessage("Frieren"), noMedia, showMore, showLess,
+             watchedCount, episodesCount, seasons(1), seasons(5), isOut(24), isNext(22), isNextBehind(22, behind: 3),
+             startWith("Season 1 \u{00B7} Episode 1"), caughtUp, finishedAll(89), finishedAll(1)]
+        }
+    }
+
     enum Schedule {
         static let title = "Schedule"
         /// The bar's return control. It lands on today's section, which is in the feed whether or
@@ -191,7 +228,6 @@ extension Copy {
         static let tomorrow = "Tomorrow"
         static let scrollToToday = "Scroll to today"
         static let scrollToTodayHint = "Scrolls to today\u{2019}s episodes"
-        static let ticker = "Days"
         static let selected = "Selected"
         static let noEpisodes = "No episodes"
         /// The bar control that brings the month grid down over the feed. ONE label in both
@@ -220,6 +256,14 @@ extension Copy {
         /// The group under the closing line: each show's next dated airing past the window, one row
         /// per show — for the shows the window goes quiet on (Bleach resuming after a break).
         static let later = "Later"
+        /// The card's eyebrow for an episode that has aired and is unwatched: the next thing to watch
+        /// is out. Otherwise the eyebrow is the moment in the app's one ladder (`TemporalCopy.airs`).
+        static let outNow = "Out now"
+        /// The card's eyebrow for an evening airing today (`Formatting.isEvening`): "Tonight at
+        /// 7:30 PM", where the ladder says "Today at 7:30 PM".
+        static func tonightAt(_ time: String) -> String { "Tonight at \(time)" }
+        /// A date-only drop of several episodes on one day: "Episodes 5–8".
+        static func episodeRange(_ from: Int, _ to: Int) -> String { "Episodes \(from)\u{2013}\(to)" }
         /// "Season 2 premiere" — a row that opens a part says so. Library calls the same airing
         /// "Returns 3 Oct"; Schedule printed a bare "Episode 1" (review, 23 Sep). `part` is the
         /// part's own compacted label, a film's title, or empty on a single-part show, whose title
@@ -242,6 +286,37 @@ extension Copy {
             case .clip: return "Clip"
             case .other: return "Video"
             }
+        }
+
+        // The player's controls (`TrailerInlineControls`, `TrailerFullScreen`).
+        static let play = "Play"
+        static let pause = "Pause"
+        static let fullScreen = "Full screen"
+        static let exitFullScreen = "Exit full screen"
+        static let back10 = "Back 10 seconds"
+        static let forward10 = "Forward 10 seconds"
+        static let close = "Close"
+        /// The scrubber, to VoiceOver.
+        static let position = "Playback position"
+        static func positionValue(_ current: Double, of duration: Double) -> String {
+            duration > 0 ? "\(clock(current)) of \(clock(duration))" : clock(current)
+        }
+        /// A clock reading, "0:42" / "1:05:09" — whole seconds elapsed.
+        static func clock(_ seconds: Double) -> String {
+            let s = max(0, Int(seconds.rounded(.down)))
+            let h = s / 3600, m = (s % 3600) / 60, r = s % 60
+            let two = { (n: Int) in n < 10 ? "0\(n)" : "\(n)" }
+            return h > 0 ? "\(h):\(two(m)):\(two(r))" : "\(m):\(two(r))"
+        }
+        /// "0:42 / 2:31" on the controls' foot; the time alone until the length is known.
+        static func clockPair(_ current: Double, _ duration: Double) -> String {
+            duration > 0 ? "\(clock(current)) / \(clock(duration))" : clock(current)
+        }
+
+        static var sampleStrings: [String] {
+            [kind(.trailer), kind(.teaser), kind(.announcement), kind(.featurette), kind(.clip), kind(.other),
+             play, pause, fullScreen, exitFullScreen, back10, forward10, close, position,
+             positionValue(42, of: 151), positionValue(42, of: 0), clock(3909), clockPair(42, 151), clockPair(42, 0)]
         }
     }
 
@@ -281,6 +356,14 @@ extension Copy {
         static let markedSeen = "Marked as seen"
         static let airingNow = "Airing now"
         static let showMore = "Show more"
+        /// Discover's For you, grouped by the show of yours a title comes from (the 25 Sep spike).
+        static func becauseWatching(_ title: String) -> String { "Because you\u{2019}re watching \(title)" }
+        static func becauseWatched(_ title: String) -> String { "Because you watched \(title)" }
+        static func moreLike(_ title: String) -> String { "More like \(title)" }
+        static let moreForYou = "More for you"
+        static let topPick = "Top pick for you"
+        /// The top pick's second button: the show's page (Netflix's "More Info").
+        static let details = "Details"
         /// A finished show's page: what its finish recommends.
         static func becauseYouFinished(_ title: String) -> String { "Because you finished \(title)" }
         static let addHint = "Adds this show to Planned"

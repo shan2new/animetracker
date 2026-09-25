@@ -26,7 +26,7 @@ struct ActivitySheet: View {
         NavigationStack {
             content
                 .background(ThemeColor.canvas.ignoresSafeArea())
-                .navigationTitle(Copy.Social.activityTitle)
+                .brandNavigationTitle(Copy.Social.activityTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
@@ -156,11 +156,14 @@ private struct ActivityRow: View, @MainActor Equatable {
                         }
                         headline
                         if let detail {
+                            // Whole, as X's notifications quote a reply: the server already sends
+                            // the reply's excerpt, and three lines cut its last words again.
+                            // In SF, as a reply's or a post's words are — but a moderation row's
+                            // line is the app speaking, in Outfit.
                             Text(detail)
-                                .type(ThemeType.feedNote)
+                                .type(item.kind.isModeration ? ThemeType.feedSubhead : ThemeType.feedNote)
                                 .foregroundStyle(item.kind.isSocial || item.kind.isModeration
                                                  ? ThemeColor.feedSecondary : ThemeColor.feedText)
-                                .lineLimit(typeSize.isAccessibilitySize ? nil : 3)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -201,7 +204,7 @@ private struct ActivityRow: View, @MainActor Equatable {
     }
 
     private func glyph(_ name: String, ink: Color) -> some View {
-        Image(systemName: name)
+        AppGlyph(systemName: name)
             .font(ThemeType.feedModuleTitle.font)
             .foregroundStyle(ink)
             .accessibilityHidden(true)
@@ -214,7 +217,7 @@ private struct ActivityRow: View, @MainActor Equatable {
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: ThemeSpace.x2))
         return layout {
             Text(sentence)
-                .type(ThemeType.feedNote)
+                .type(ThemeType.feedSubhead)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text(stamp)

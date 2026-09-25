@@ -314,7 +314,7 @@ enum EpisodeTileStyle {
 // MARK: - The floating toolbar's own edge
 //
 // `FloatingToolbarVeil` folded into the shared primitive (cohesion pass, 30 Aug):
-// `ScrollEdgeChrome(side: .top, holdHeight:)` is the parameter it existed to change,
+// `ScrollEdgeChrome(holdHeight:)` is the parameter it existed to change,
 // and Detail now calls it directly.
 
 // MARK: - Art-derived colour, made fit to be a ground
@@ -479,7 +479,7 @@ struct WithheldStillTile: View {
                                startPoint: .top, endPoint: .bottom)
             }
             .overlay {
-                Image(systemName: "eye.slash")
+                AppGlyph(systemName: "eye.slash")
                     .font(.system(size: 16, weight: .regular))
                     .foregroundStyle(ThemeColor.textPrimary.opacity(0.62))
             }
@@ -676,7 +676,7 @@ struct EpisodeList: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Text(title)
-                Image(systemName: glyph).font(.system(size: 11, weight: .semibold))
+                AppGlyph(systemName: glyph).font(.system(size: 11, weight: .semibold))
             }
         }
         .buttonStyle(InlineLinkButtonStyle())
@@ -891,7 +891,7 @@ struct EpisodeList: View {
         Button {
             _ = withAnimation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion)) { revealed.insert(n) }
         } label: {
-            Image(systemName: "eye")
+            AppGlyph(systemName: "eye")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(ThemeColor.textTertiary)
                 .frame(width: 44, height: 44)
@@ -1069,7 +1069,7 @@ struct SeasonPill: View {
             ForEach(seasons) { season in
                 Button { onPick(season.mediaId) } label: {
                     if season.mediaId == current.mediaId {
-                        Label(Self.name(season), systemImage: "checkmark")
+                        AppGlyphLabel(Self.name(season), systemName: "checkmark")
                     } else {
                         Text(Self.name(season))
                     }
@@ -1084,7 +1084,7 @@ struct SeasonPill: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .contentTransition(.opacity)
-                Image(systemName: "chevron.down").font(.system(.caption2, weight: .semibold))
+                AppGlyph(systemName: "chevron.down").font(.system(.caption2, weight: .semibold))
             }
             .foregroundStyle(ThemeColor.textPrimary)
             .padding(.horizontal, 14)

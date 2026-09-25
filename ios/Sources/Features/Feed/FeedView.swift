@@ -24,6 +24,9 @@ struct FeedView: View {
     let topSignal: Int
     /// Bumped by the notification route: every cover and sheet goes (the route then pushes).
     let dismissSignal: Int
+    /// The header's scroll state — OWNED by `MainTabView`, because the app's bar rides it too: on
+    /// the feed, and only there, X's bottom bar leaves with the header and comes back with it.
+    let chrome: FeedChromeState
 
     @Environment(AppModel.self) private var appModel
     @Environment(LaunchHandoff.self) private var launch: LaunchHandoff?
@@ -40,7 +43,6 @@ struct FeedView: View {
     @State private var tab: FeedTab = FeedCapture.initialTab
     /// The pager's own position (`scrollPosition(id:)`): a tab tap writes it, a swipe settles it.
     @State private var pagerTab: FeedTab? = FeedCapture.initialTab
-    @State private var chrome = FeedChromeState(page: FeedCapture.initialTab)
     /// Each page's scroll proxy (the wordmark and the re-tap scroll the page in front to its top).
     @State private var proxies: [FeedTab: ScrollViewProxy] = [:]
     /// The fresh posts the pill has already been dismissed for (by its tap, or by a pull): it comes
@@ -49,12 +51,16 @@ struct FeedView: View {
     // The story viewer. The reels are frozen at the tap so the tray cannot reorder under it.
     @State private var story: StoryLaunch?
     @State private var storyReelsSnapshot: [StoryReel] = []
+    /// The tray keeps the snapshot while the viewer is up and until its close flight has landed:
+    /// a reel seen in the viewer leaves the tray only then (`releaseTray`), so the flight lands in
+    /// its own bubble, not in the one that slid into its place.
+    @State private var trayHeld = false
+    @State private var trayRelease: Task<Void, Never>?
     @State private var storyLoading: String?
     @State private var storyOrigins = StoryOrigins()
     @State private var storyTask: Task<Void, Never>?
     // Covers and sheets.
     @State private var viewing: FeedPostModel?
-    @State private var video: FeedPostModel?
     @State private var composing: ComposeTarget?
     @State private var activityOpen = false
     @State private var showProfile = false
@@ -94,6 +100,8 @@ struct FeedView: View {
     /// at least a quarter second so the spin is seen.
     private static let storyLoadCeiling: Duration = .milliseconds(900)
     private static let storySpinFloor: Duration = .milliseconds(260)
+    /// The beat between the close flight landing in a seen reel's bubble and the bubble leaving.
+    private static let trayReleaseBeat: Duration = .milliseconds(220)
     /// X keeps the other room warm: once Following is on screen, For you loads behind it.
     private static let prefetchDelay: Duration = .milliseconds(1200)
 
@@ -117,9 +125,12 @@ struct FeedView: View {
             }
         }
         .background(ThemeColor.canvas.ignoresSafeArea())
-        .overlay(alignment: .bottom) { ScrollEdgeChrome(side: .bottom) }
         // The header is a bar of our own; no system edge effect under it (a root's rule).
         .chromeScrollEdgeHidden(.top)
+        // …and no system navigation bar, SAID rather than left to the stack: a pop by path (the
+        // tab's re-tap, X's way home) from a page that shows its bar (a show page) kept that bar's
+        // 54 pt in the feed's top inset, and the header sat under a band of nothing.
+        .toolbar(.hidden, for: .navigationBar)
         .postMenuHost(postMenu) { m in onOpenDetail(m.post.franchiseId, "post/\(m.id)") }
         .modifier(FeedPresentations(host: self))
         .onChange(of: overlayOpen) { _, open in
@@ -265,9 +276,13 @@ struct FeedView: View {
 
     // MARK: - Pieces
 
+    /// What the tray shows: the reels still to be seen (`AppModel.trayReels`), or — while the
+    /// viewer is up and until its flight has landed — the snapshot it opened with.
+    private var trayList: [StoryReel] { trayHeld ? storyReelsSnapshot : appModel.trayReels }
+
     @ViewBuilder
     private var storiesTray: some View {
-        let reels = appModel.storyReels
+        let reels = trayList
         if !reels.isEmpty {
             StoryTray(reels: reels, loadingReelId: storyLoading, origins: storyOrigins, onOpen: openStory)
                 .padding(.top, ThemeSpace.x2)
@@ -296,7 +311,6 @@ struct FeedView: View {
             FeedPostRow(model: m, tab: t, zoom: mediaZoom,
                         onOpen: { onOpenRoute(.post(id: m.id)) },
                         onOpenShow: { onOpenDetail(m.post.franchiseId, "post/\(m.id)") },
-                        onPlay: { video = m },
                         onViewMedia: { viewing = m },
                         onComment: { composing = composeTarget(m) },
                         onMediaLoaded: isFirstPost ? { markArtReady() } : nil)
@@ -326,7 +340,7 @@ struct FeedView: View {
             }
         case .empty(.forYouEmpty):
             Text(Copy.Feed.forYouEmpty)
-                .type(ThemeType.feedNote)
+                .type(ThemeType.feedSubhead)
                 .foregroundStyle(ThemeColor.feedSecondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
@@ -472,7 +486,7 @@ struct FeedView: View {
     // MARK: - Presentations
 
     fileprivate var overlayOpen: Bool {
-        story != nil || viewing != nil || video != nil || composing != nil || activityOpen || showProfile
+        story != nil || viewing != nil || composing != nil || activityOpen || showProfile
     }
 
     /// Closes every cover and sheet (covers without animation), and any story still loading.
@@ -486,7 +500,7 @@ struct FeedView: View {
         withTransaction(t) {
             story = nil
             viewing = nil
-            video = nil
+            autoplay.fullScreen = nil
         }
         composing = nil
         activityOpen = false
@@ -523,12 +537,9 @@ struct FeedView: View {
         ComposeTarget(subject: m.id, franchiseId: m.post.franchiseId, franchiseTitle: m.showName)
     }
 
-    /// Where the post's inline trailer had got to: the stage picks up from there, as X's does.
-    fileprivate func trailerStart(_ m: FeedPostModel) -> Int { Int(autoplay.position(m.id)) }
-
-    fileprivate func ambientArt(_ m: FeedPostModel) -> String? {
-        if case .art(let art) = m.media { return art.url }
-        return m.franchise.landscapeArt ?? m.franchise.portraitArt
+    /// A trailer's full screen, titled by its post's show.
+    fileprivate func trailerTitle(_ playback: TrailerPlayback) -> String {
+        appModel.feedPost(id: playback.key)?.showName ?? ""
     }
 
     fileprivate func runAfterCover() {
@@ -546,7 +557,7 @@ struct FeedView: View {
     /// loads (never longer than 0.9 s), then the story grows out of the ring. Cancellable: a re-tap,
     /// a notification or leaving the screen means no cover appears after the reader has gone.
     private func openStory(_ index: Int) {
-        let reels = appModel.storyReels
+        let reels = trayList
         guard storyLoading == nil, reels.indices.contains(index) else { return }
         let reel = reels[index]
         storyLoading = reel.id
@@ -567,7 +578,9 @@ struct FeedView: View {
             let spent = started.duration(to: .now)
             if spent < Self.storySpinFloor { try? await Task.sleep(for: Self.storySpinFloor - spent) }
             guard !Task.isCancelled else { return }
+            trayRelease?.cancel()
             storyReelsSnapshot = reels
+            trayHeld = true
             storyLoading = nil
             storyTask = nil
             var t = Transaction()
@@ -592,6 +605,19 @@ struct FeedView: View {
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) { story = nil }
+        releaseTray()
+    }
+
+    /// The flight has landed: a beat on the seen bubble, then the reels seen in the viewer leave
+    /// the tray (and the tray itself, when none is left).
+    private func releaseTray() {
+        trayRelease?.cancel()
+        trayRelease = Task {
+            try? await Task.sleep(for: Self.trayReleaseBeat)
+            guard !Task.isCancelled, story == nil else { return }
+            withAnimation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion)) { trayHeld = false }
+            trayRelease = nil
+        }
     }
 
     // MARK: - Captures
@@ -601,6 +627,7 @@ struct FeedView: View {
     private func captureLanding(phase: FeedSurfacePhase) async {
         guard isContent(phase), !captureLanded else { return }
         let wanted = FeedCapture.story != nil || FeedCapture.media != nil || FeedCapture.thread != nil
+            || FeedCapture.trailer != nil
             || FeedCapture.activity || FeedCapture.openSaved || FeedCapture.anchor != nil
         guard wanted else { return }
         captureLanded = true
@@ -610,10 +637,13 @@ struct FeedView: View {
             if case .post(let m) = $0 { return m } else { return nil }
         }
         if let key = FeedCapture.story {
-            let reels = appModel.storyReels
+            // The tray's reels; once they have all been seen, every reel (a capture may open one
+            // the tray no longer shows — it then closes with a fade, having no bubble).
+            let reels = appModel.trayReels.isEmpty ? appModel.storyReels : appModel.trayReels
             guard !reels.isEmpty else { return }
             let i = key == "first" ? 0 : (reels.firstIndex { $0.franchiseId.hasPrefix(key) } ?? 0)
             storyReelsSnapshot = reels
+            trayHeld = !appModel.trayReels.isEmpty
             let frame = min(FeedCapture.storyFrame, max(0, reels[i].frames.count - 1))
             story = StoryLaunch(reelIndex: i, frameIndex: frame)
             return
@@ -621,6 +651,19 @@ struct FeedView: View {
         if FeedCapture.media != nil,
            let m = posts.first(where: { if case .art = $0.media { return true } else { return false } }) {
             viewing = m
+            return
+        }
+        if let mode = FeedCapture.trailer,
+           let m = posts.first(where: { if case .trailer = $0.media { return true } else { return false } }),
+           case .trailer(_, let video) = m.media {
+            // On screen first — a trailer scrolled away stops — then the reader's tap.
+            proxies[tab]?.scrollTo("post/\(m.id)", anchor: UnitPoint(x: 0.5, y: 0.2))
+            try? await Task.sleep(for: .seconds(1))
+            autoplay.engage(m.id, video: video)
+            if mode == "full" {
+                try? await Task.sleep(for: .seconds(2.5))
+                if let playback = autoplay.current { autoplay.openFullScreen(playback) }
+            }
             return
         }
         if let key = FeedCapture.thread {
@@ -646,7 +689,8 @@ struct FeedView: View {
 
     fileprivate var storyBinding: Binding<StoryLaunch?> { $story }
     fileprivate var viewingBinding: Binding<FeedPostModel?> { $viewing }
-    fileprivate var videoBinding: Binding<FeedPostModel?> { $video }
+    fileprivate var trailerBinding: Binding<TrailerPlayback?> { Bindable(autoplay).fullScreen }
+    fileprivate var trailers: FeedAutoplay { autoplay }
     fileprivate var composingBinding: Binding<ComposeTarget?> { $composing }
     fileprivate var activityBinding: Binding<Bool> { $activityOpen }
     fileprivate var profileBinding: Binding<Bool> { $showProfile }
@@ -701,13 +745,16 @@ private struct FeedPresentations: ViewModifier {
                                 onOpenShow: { host.setAfterCover(show: m.post.franchiseId, zoomID: "media/\(m.post.franchiseId)") })
                     .navigationTransition(.zoom(sourceID: FeedZoom.media(m.id), in: host.zoomNamespace))
             }
-            .fullScreenCover(item: host.videoBinding) { m in
-                if case .trailer(_, let v) = m.media {
-                    VideoSheet(video: v, showTitle: m.showName, ambientArt: host.ambientArt(m),
-                               startAt: host.trailerStart(m))
-                        .navigationTransition(.zoom(sourceID: FeedZoom.media(m.id), in: host.zoomNamespace))
-                        .perfScreen("Trailer")
-                }
+            // A trailer's full screen: the post's own player, zoomed out of the post (a swipe down
+            // carries it back, still playing).
+            .fullScreenCover(item: host.trailerBinding) { playback in
+                let show = host.trailerTitle(playback)
+                TrailerFullScreen(playback: playback, title: show,
+                                  subtitle: TrailerFullScreen.subtitle(playback.video, show: show),
+                                  byRotation: host.trailers.fullScreenByRotation,
+                                  onClosed: { host.trailers.fullScreenClosed(playback) })
+                    .navigationTransition(.zoom(sourceID: FeedZoom.media(playback.key), in: host.zoomNamespace))
+                    .perfScreen("Trailer")
             }
             .sheet(item: host.composingBinding) { target in
                 ComposeSheet(target: target)

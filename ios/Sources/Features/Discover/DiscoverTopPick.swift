@@ -158,8 +158,7 @@ struct DiscoverTopPick: View, @MainActor Equatable {
             appModel.addRecommendation(item)
         } label: {
             ZStack {
-                Label(owned ? Copy.ForYou.addedToPlanned : Copy.ForYou.addToPlanned,
-                      systemImage: owned ? "checkmark" : "plus")
+                AppGlyphLabel(owned ? Copy.ForYou.addedToPlanned : Copy.ForYou.addToPlanned, systemName: owned ? "checkmark" : "plus")
                     .lineLimit(1)
                     .opacity(resolving ? 0 : 1)
                 if resolving {

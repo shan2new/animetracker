@@ -206,9 +206,13 @@ extension Copy {
             "\(Copy.plural(n, "report", "reports")) \u{00B7} none from the studio or network"
         }
 
-        /// The row's one VoiceOver label: "One Piece. Season 2 premieres tomorrow. 2h".
-        static func postAccessibility(show: String, sentence: String, stamp: String) -> String {
-            "\(show). \(sentence) \(stamp)"
+        /// The row's one VoiceOver label, reading what the row draws: "One Piece. Season 2 is
+        /// confirmed — no date yet. The studio announced it after the finale. 2h" — the sentence,
+        /// then the research's note (`FeedPostModel.body`'s two paragraphs), closed so the stamp
+        /// is its own beat. A rumour passes no note: its Community Note is read in its own box.
+        static func postAccessibility(show: String, sentence: String, note: String?, stamp: String) -> String {
+            let words = [sentence, note.map(closed)].compactMap { $0 }.filter { !$0.isEmpty }
+            return "\(show). \(words.joined(separator: " ")) \(stamp)"
         }
 
         // MARK: Folds (a post hidden in place, with Undo)
@@ -381,7 +385,10 @@ extension Copy {
                 premiereLine(premieresTomorrow),
                 stampNow, stampMinutes(5), stampHours(2), stampDays(3), stampToday,
                 rumourNoteTitle, rumourNoteReports(1), rumourNoteReports(3),
-                postAccessibility(show: "One Piece", sentence: "Season 2 premieres tomorrow.", stamp: stampHours(2)),
+                postAccessibility(show: "One Piece", sentence: "Season 2 premieres tomorrow.", note: nil,
+                                  stamp: stampHours(2)),
+                postAccessibility(show: "One Piece", sentence: "Season 3 is confirmed \u{2014} no date yet.",
+                                  note: "The studio announced it after the finale", stamp: stampHours(2)),
                 foldNotInterested, foldMuted("One Piece"),
                 notInterested, mute("One Piece"), unmute("One Piece"), copyText,
                 readOn("Crunchyroll News"), goTo("One Piece"), more,

@@ -85,9 +85,7 @@ struct ToastHost: View {
                 SyncBanner(count: sync.failedChanges.count, retry: sync.canRetryAny ? { sync.retryAll() } : nil)
                     .frame(maxWidth: 420)
             }
-            if !ChromeCapability.tabBarAccessory {
-                LaneFallback().frame(maxWidth: 420)
-            }
+            LaneFallback().frame(maxWidth: 420)
         }
         .animation(ThemeMotion.pick(ThemeMotion.uiSnappy, reduceMotion: reduceMotion),
                    value: sync.failedChanges.count)

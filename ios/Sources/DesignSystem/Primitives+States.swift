@@ -114,7 +114,7 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 0) {
             if let symbol = copy.symbol {
-                Image(systemName: symbol)
+                AppGlyph(systemName: symbol)
                     .font(.system(size: glyph, weight: .regular))
                     .foregroundStyle(ThemeColor.textTertiary)
                     .padding(.bottom, prominence == .major ? ThemeSpace.x4 : ThemeSpace.x3)
@@ -173,13 +173,15 @@ extension View {
     /// content area, never top-pinned above 950–1100 pt of void (Library) or floated in the upper
     /// third (Search). `contentH` is the scroll view's own height.
     ///
-    /// The default clearance is the tab bar's VISUAL height, not `tabBarClearance`. They are
-    /// different numbers for different jobs: a scroll inset has to clear the ramp as well as the
-    /// bar, and subtracting that inset when *centring* pushed every empty state ~81 pt above true
-    /// optical centre on Today and Schedule. Half of whatever is subtracted is the error.
+    /// `clearance` is what of `contentH` the app's bar covers — nothing, by default: every page is
+    /// laid out above the bar (`tabBarReserve()`), and its heights are read inside that safe area
+    /// (the feed's pager too — it measures before it ignores the safe area). A height taken in
+    /// WINDOW terms would pass `ThemeMetrics.tabBarVisualHeight`. Half of whatever is subtracted
+    /// wrongly is the error: the floating bar's 90 pt, still subtracted from pages already clear of
+    /// the new bar, put the states ~40 pt above centre (25 Sep).
     ///
     /// `minHeight`, so AX3–AX5 grows the block instead of overflowing it.
-    func centredState(contentH: CGFloat, clearance: CGFloat = ThemeMetrics.tabBarVisualHeight) -> some View {
+    func centredState(contentH: CGFloat, clearance: CGFloat = 0) -> some View {
         frame(maxWidth: .infinity, minHeight: max(0, contentH - clearance), alignment: .center)
     }
 }
@@ -218,7 +220,7 @@ struct InlineNotice: View {
             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: ThemeSpace.x2))
         layout {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: kind == .failure ? "wifi.exclamationmark" : "info.circle")
+                AppGlyph(systemName: kind == .failure ? "wifi.exclamationmark" : "info.circle")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(ThemeColor.textTertiary)
                 Text(message)
@@ -253,7 +255,7 @@ struct StaleStrip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "arrow.triangle.2.circlepath")
+            AppGlyph(systemName: "arrow.triangle.2.circlepath")
                 .font(.system(size: 11, weight: .regular))
                 .foregroundStyle(ThemeColor.textTertiary)
             Text(Copy.updated(at: since, now: now))
@@ -435,7 +437,7 @@ struct EpisodeArtwork: View {
                     // The failed state, mirroring `PosterSlot`: the symbol sits *under* the image,
                     // so a fetch that never resolves leaves the tint plus a centred photo glyph
                     // instead of a bare rectangle. The image covers it the moment it lands.
-                    Image(systemName: "photo")
+                    AppGlyph(systemName: "photo")
                         .font(.system(size: 16, weight: .regular))
                         .foregroundStyle(ThemeColor.textTertiary)
                     RemoteImageView(url: url, contentMode: .fill, maxPixel: 288)
@@ -481,7 +483,7 @@ struct EpisodeGlyphTile: View {
                                startPoint: .top, endPoint: .bottom)
             }
             .overlay(
-                Image(systemName: "play.rectangle")
+                AppGlyph(systemName: "play.rectangle")
                     .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(ThemeColor.textPrimary.opacity(0.34))
             )
@@ -503,7 +505,7 @@ struct PassiveTick: View {
         // A bare check, not a filled disc. `checkmark.circle.fill` at tertiary grey renders as a
         // 18-pt grey blob — read as a disabled control rather than as a settled fact — and a column
         // of them down a season list is the "grey tick glyphs" complaint exactly.
-        Image(systemName: "checkmark")
+        AppGlyph(systemName: "checkmark")
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(ThemeColor.textTertiary)
             .frame(width: boxed ? 44 : nil, height: boxed ? 44 : nil)
@@ -631,7 +633,7 @@ struct SectionHeaderRow: View {
                         countLabel
                         // The one chevron size the app draws (`MediaRow`), a step heavier in ink
                         // than a row's because it sits beside a 20-pt title rather than 13-pt meta.
-                        Image(systemName: "chevron.forward")
+                        AppGlyph(systemName: "chevron.forward")
                             // Relative to the title it trails: a fixed 14 pt sat on the baseline
                             // of a ~40-pt AX title like a stray mark (review, 23 Sep).
                             .font(.system(.body, weight: .semibold))
@@ -869,7 +871,7 @@ struct HistorySessionRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: ThemeSpace.x2)
-                Image(systemName: "chevron.forward")
+                AppGlyph(systemName: "chevron.forward")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ThemeColor.textTertiary)
             }

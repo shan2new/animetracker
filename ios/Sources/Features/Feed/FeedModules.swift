@@ -51,7 +51,7 @@ struct SuggestedModule: View {
                                         .foregroundStyle(ThemeColor.feedText)
                                         .lineLimit(1)
                                     Text(Copy.ForYou.reason(reason(r)))
-                                        .type(ThemeType.feedNote)
+                                        .type(ThemeType.feedSubhead)
                                         .foregroundStyle(ThemeColor.feedSecondary)
                                         .lineLimit(1)
                                 }
@@ -69,7 +69,7 @@ struct SuggestedModule: View {
                 if let onSeeAll {
                     Button(action: onSeeAll) {
                         Text(Copy.Feed.showMore)
-                            .type(ThemeType.feedNote)
+                            .type(ThemeType.feedSubhead)
                             .foregroundStyle(ThemeColor.interactive)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, ThemeMetrics.gutter)
@@ -99,7 +99,7 @@ struct SuggestedModule: View {
                         .controlSize(.small)
                         .tint(ThemeColor.onAccent)
                 } else if owned {
-                    Label(Copy.ForYou.addedToPlanned, systemImage: "checkmark")
+                    AppGlyphLabel(Copy.ForYou.addedToPlanned, systemName: "checkmark")
                         .labelStyle(.titleAndIcon)
                 } else {
                     Text(Copy.Search.add)
@@ -224,7 +224,7 @@ struct CaughtUpMarker: View {
                         .trim(from: 0, to: drawn ? 1 : 0)
                         .stroke(ThemeGel.ring, style: StrokeStyle(lineWidth: Self.ringWidth, lineCap: .round))
                         .rotationEffect(.degrees(-90))
-                    Image(systemName: "checkmark")
+                    AppGlyph(systemName: "checkmark")
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(ThemeColor.feedText)
                         .scaleEffect(drawn ? 1 : 0.4)
@@ -234,12 +234,12 @@ struct CaughtUpMarker: View {
                 .padding(.bottom, ThemeSpace.x1)
                 .accessibilityHidden(true)
                 Text(Copy.Feed.caughtUpTitle)
-                    .type(ThemeType.feedBodyLarge)
+                    .type(ThemeType.feedLightLarge)
                     .bold()
                     .foregroundStyle(ThemeColor.feedText)
                     .multilineTextAlignment(.center)
                 Text(Copy.Feed.caughtUpSince(phrase))
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .foregroundStyle(ThemeColor.feedSecondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -329,7 +329,7 @@ struct AlertsPrimerLine: View {
     var body: some View {
         VStack(alignment: .leading, spacing: ThemeSpace.x1) {
             Text(denied ? Copy.Feed.alertsDenied : Copy.Feed.alertsPrimer)
-                .type(ThemeType.feedNote)
+                .type(ThemeType.feedSubhead)
                 .foregroundStyle(ThemeColor.feedSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: ThemeSpace.x4) {

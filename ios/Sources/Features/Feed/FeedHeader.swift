@@ -23,7 +23,7 @@ import SwiftUI
 /// pager's offset while the finger is still moving (`pageProgress`).
 @MainActor
 @Observable
-final class FeedChromeState {
+final class FeedChromeState: ScrollAwayChrome {
     /// X shows its "new posts" pill only once the reader is well down the feed: at the top the new
     /// posts are simply there.
     static let downThreshold: CGFloat = 900
@@ -36,6 +36,7 @@ final class FeedChromeState {
     /// Read ONLY by the tab row, so a swipe redraws two words and a capsule.
     private(set) var pageProgress: CGFloat
     var hidden: Bool { offset >= FeedHeader.height - 0.5 }
+    var awayFraction: CGFloat { offset / FeedHeader.height }
 
     /// The page in front; the other page's probe is recorded, never acted on.
     @ObservationIgnored private var page: FeedTab
@@ -125,6 +126,8 @@ struct FeedHeader: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The bell rings once when there is something new to see.
     @State private var rang = 0
+    /// The mark's width in the bar: the cut P stands ~24 pt tall, X's logo's height.
+    static let markWidth: CGFloat = 17
 
     var body: some View {
         VStack(spacing: 0) {
@@ -132,7 +135,7 @@ struct FeedHeader: View {
             // right. Monochrome — the logo's full stop is the only colour in the bar.
             ZStack {
                 Button(action: onTop) {
-                    BrandWord(style: ThemeType.brandWordmark, ink: ThemeColor.feedText)
+                    PreviouslyMark(width: Self.markWidth, style: .glyph, ink: ThemeColor.feedText)
                         .padding(.horizontal, ThemeSpace.x3)
                         .frame(minHeight: FeedMetrics.headerRow)
                         .contentShape(Rectangle())
@@ -192,10 +195,12 @@ struct FeedHeader: View {
 
     private var bell: some View {
         Button(action: onActivity) {
-            Image(systemName: "bell")
+            AppGlyph(systemName: "bell")
                 .font(.title3)
                 .foregroundStyle(ThemeColor.feedText)
-                .symbolEffect(.wiggle, options: .nonRepeating, value: rang)
+                // A transform, not `.symbolEffect`: the glyph is a Tabler picture. The dot below
+                // is an overlay after it, so it holds still while the bell rings.
+                .glyphRing(trigger: rang)
                 .overlay(alignment: .topTrailing) {
                     if unread > 0 {
                         Circle().fill(ThemeColor.unreadDot)
@@ -344,7 +349,7 @@ struct NewPostsPill: View {
         let shape = RoundedRectangle(cornerRadius: FeedMetrics.pillHeight / 2, style: .continuous)
         Button(action: action) {
             HStack(spacing: ThemeSpace.x2) {
-                Image(systemName: "arrow.up")
+                AppGlyph(systemName: "arrow.up")
                     .font(ThemeType.feedSmall.font.weight(.bold))
                 HStack(spacing: Self.faceOverlap) {
                     ForEach(posts.prefix(3)) { p in

@@ -193,7 +193,7 @@ struct PosterSlot: View {
                                 fitSnapAspect: height > 0 ? width / height : nil)
                     .transition(.opacity.animation(ThemeMotion.uiPoster))
             } else {
-                Image(systemName: "photo")
+                AppGlyph(systemName: "photo")
                     .font(.system(size: min(width, height) * 0.28, weight: .regular))
                     .foregroundStyle(ThemeColor.textTertiary)
             }
@@ -423,7 +423,7 @@ struct Wordmark: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: colophon ? 6 : ThemeSpace.x2) {
-            PreviouslyMark(width: colophon ? 9 : 11)
+            PreviouslyMark(width: colophon ? 17 : 22)
             BrandWord(style: ThemeType.brandWordmark,
                       ink: colophon ? ThemeColor.textSecondary : ThemeColor.textPrimary)
         }
@@ -529,7 +529,7 @@ struct GroupedRow: View {
     private var labelStack: some View {
         HStack(spacing: 12) {
             if let symbol {
-                Image(systemName: symbol)
+                AppGlyph(systemName: symbol)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(ThemeColor.textPrimary)
                     .frame(width: 28, height: 28)
@@ -564,7 +564,7 @@ struct GroupedRow: View {
         case .chevron(let value):
             HStack(spacing: 6) {
                 if let value { Text(value).type(ThemeType.body).foregroundStyle(ThemeColor.textTertiary) }
-                Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
+                AppGlyph(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColor.textTertiary)
             }
         case .value(let v):
             Text(v).type(ThemeType.body).foregroundStyle(ThemeColor.textTertiary)
@@ -572,7 +572,7 @@ struct GroupedRow: View {
             // Handled by the `Toggle` branch in `body` — a switch is never drawn inside a Button.
             EmptyView()
         case .check(let on):
-            Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
+            AppGlyph(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(ThemeColor.accent).opacity(on ? 1 : 0).frame(width: 22)
         case .none:
             EmptyView()
@@ -694,7 +694,7 @@ struct MediaRow<Trailing: View>: View {
                 Spacer(minLength: ThemeSpace.x3)
                 trailing()
                 if chevron {
-                    Image(systemName: "chevron.forward")
+                    AppGlyph(systemName: "chevron.forward")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(ThemeColor.textDisabled)
                         // A fixed column, so every chevron in a list shares one x.
@@ -1083,7 +1083,7 @@ struct ToastView: View {
     var body: some View {
         HStack(spacing: ThemeSpace.x3) {
             if failure {
-                Image(systemName: "exclamationmark.triangle.fill")
+                AppGlyph(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ThemeColor.warning)
             }
@@ -1184,38 +1184,22 @@ final class ScrollOffset {
 /// rides along, masked to the same band, so what is dissolving also softens; under Reduce
 /// Transparency the material is dropped and the canvas veil does the whole job.
 ///
-/// Apply it to the root of a scrolling screen, OUTSIDE the scroll view:
-/// ```swift
-/// ZStack { ArtBackdrop(...); ScrollView { … } }.scrollEdgeChrome()
-/// ```
+/// The top edge only: the BOTTOM of every screen is the app's own opaque bar (`AppTabBar`, 25 Sep),
+/// a safe-area inset that content stops above and never passes under — there is no bottom edge
+/// left to veil. (The bottom band, its 64-pt ramp and its 180-pt underfill were the ground the
+/// system's glass tab bar needed; they went with it.)
 struct ScrollEdgeChrome: View {
-    /// **The bottom edge belongs to the SYSTEM on iOS 26** (8 Sep). Everything below about the
-    /// bottom band — the 64-pt ramp, the 180-pt underfill, the two failures that sized them — is
-    /// iOS 18's story, where a tab bar is an opaque strip the layout is inset by. On 26 the bar is
-    /// a floating glass pill that content passes *behind*, and Apple ships the edge effect written
-    /// for exactly that; ours was MEASURED — a build with the underfill painted red and the ramp's
-    /// last stop green — landing 180 pt below the screen's bottom edge: of 244 pt of veil the only
-    /// thing on screen was a 2-pt sliver of the last stop, and the pill was left refracting a live
-    /// section header ("Announced" ghosted inside the bar, Library, 8 Sep). One of the two had to go, and the one that goes is the
-    /// hand-rolled slab: it is what a downward scroll used to end on ("what is this trash blackish
-    /// footer man?", user, same day, with the bar minimised out of its own ground).
-    static let systemOwnsBottom: Bool = {
-        if #available(iOS 26.0, *) { true } else { false }
-    }()
-
-    enum Side { case top, bottom }
-    let side: Side
-    /// Top only: total height, safe area included.
+    /// Total height, safe area included.
     var height: CGFloat = ThemeMetrics.topChromeHeight
-    /// Top only: NO solid hold over the status bar — the art runs to the top edge of the screen
+    /// NO solid hold over the status bar — the art runs to the top edge of the screen
     /// under a gradient that only softens it (Apple Music's Search, the user's reference). The
     /// default keeps the opaque status-bar band for screens whose rows pass under the clock.
     var soft = false
-    /// Top only: how far down the full-canvas hold reaches before the ramp starts. Defaults to the
+    /// How far down the full-canvas hold reaches before the ramp starts. Defaults to the
     /// status bar. Detail's floating toolbar passes the toolbar's own bottom edge — this parameter
     /// is what `FloatingToolbarVeil` existed to change, and that private copy folded into it.
     var holdHeight: CGFloat? = nil
-    /// Top only: the bar's ink, when it is not the canvas — a show page passes its art colour
+    /// The bar's ink, when it is not the canvas — a show page passes its art colour
     /// (`DetailTint.chrome`) so the hardened bar is the show's own glass, not a black slab over
     /// the picture ("too blackish anyway, should be glassish", user, 4 Sep). Ignored under Reduce
     /// Transparency, where there is no blur for a colour to be glass over.
@@ -1230,86 +1214,49 @@ struct ScrollEdgeChrome: View {
         max(0, min(1, (holdHeight ?? ThemeMetrics.topSafeInset) / max(height, 1)))
     }
 
-    /// Canvas opacity from the screen edge inward. The top holds the BAR's canvas
-    /// (`ThemeMetrics.chromeBarOpacity`, over a full-strength blur) across the whole hold, then
-    /// falls off fast; the bottom never reaches full until the pill, because the tab bar is glass
-    /// and glass with nothing behind it is a grey pill.
+    /// Canvas opacity from the screen edge inward: the BAR's canvas (`ThemeMetrics.chromeBarOpacity`,
+    /// over a full-strength blur) across the whole hold, then a fast fall-off.
     ///
     /// Under Reduce Transparency there is no blur to carry the bar, so it is opaque there — a
     /// 74 % veil with nothing softening what is under it is the half-lit row under "Library"
     /// that the hardened bar was built to end.
     private var veil: LinearGradient {
-        switch side {
-        case .top where soft:
+        if soft {
             return LinearGradient(stops: [
                 .init(color: ThemeColor.chromeVeil.opacity(0.55), location: 0),
                 .init(color: ThemeColor.chromeVeil.opacity(0.30), location: 0.5),
                 .init(color: ThemeColor.chromeVeil.opacity(0), location: 1),
             ], startPoint: .top, endPoint: .bottom)
-        case .top:
-            let bar = reduceTransparency ? 1
-                : (color != nil ? ThemeMetrics.chromeBarTintedOpacity : ThemeMetrics.chromeBarOpacity)
-            return LinearGradient(stops: [
-                .init(color: ink.opacity(bar), location: 0),
-                .init(color: ink.opacity(bar), location: hold),
-                .init(color: ink.opacity(bar * 0.45), location: hold + (1 - hold) * 0.45),
-                .init(color: ink.opacity(0), location: 1),
-            ], startPoint: .top, endPoint: .bottom)
-        case .bottom:
-            // Reaches FULL canvas, and reaches it before the tab pill's top edge — but only in the
-            // last ~10 pt of a 64-pt band, not across 140 pt of readable screen.
-            //
-            // Capping at 0.78 left the Liquid Glass rim with un-occluded body copy to refract, and
-            // the bar duly mirrored it back as legible upside-down text (a second amber "Read more"
-            // on Detail, a doubled show title on Search) — a frame that reads as GPU corruption.
-            // Glass needs opaque canvas underneath it, not a 78 % veil. Going the other way and
-            // reaching full canvas at 0.86 of *140 pt* solved the refraction by erasing the content:
-            // a `See all` link at 1.42:1 and a live `+` button at 131/241, at rest, with nothing
-            // scrolled. Both failures are the same mistake — the band's HEIGHT — so the stops stay
-            // hard and the band is now the pill's own height.
-            //
-            // Held flat to 0.44 (≈28 pt above the pill) so nothing in the last readable line is
-            // touched at all, then a fast run to opaque.
-            return LinearGradient(stops: [
-                .init(color: ThemeColor.chromeVeil.opacity(0), location: 0),
-                .init(color: ThemeColor.chromeVeil.opacity(0.25), location: 0.55),
-                .init(color: ThemeColor.chromeVeil.opacity(0.75), location: 0.85),
-                .init(color: ThemeColor.chromeVeil, location: 1),
-            ], startPoint: .top, endPoint: .bottom)
         }
+        let bar = reduceTransparency ? 1
+            : (color != nil ? ThemeMetrics.chromeBarTintedOpacity : ThemeMetrics.chromeBarOpacity)
+        return LinearGradient(stops: [
+            .init(color: ink.opacity(bar), location: 0),
+            .init(color: ink.opacity(bar), location: hold),
+            .init(color: ink.opacity(bar * 0.45), location: hold + (1 - hold) * 0.45),
+            .init(color: ink.opacity(0), location: 1),
+        ], startPoint: .top, endPoint: .bottom)
     }
 
     /// The blur runs out on exactly the same ramp as the veil, and reaches zero at the same
     /// place. A mask that terminates while the veil is still at a third leaves a visible seam
     /// straight across the screen — which is precisely what a hand-rolled scroll edge looks like.
     private var blurMask: LinearGradient {
-        switch side {
-        case .top where soft:
+        if soft {
             return LinearGradient(stops: [
                 .init(color: .black.opacity(0.6), location: 0),
                 .init(color: .black.opacity(0.3), location: 0.5),
                 .init(color: .clear, location: 1),
             ], startPoint: .top, endPoint: .bottom)
-        case .top:
-            // Full strength through the WHOLE hold: the bar is translucent now, so the blur is
-            // what keeps a row title under it from reading as a row title.
-            return LinearGradient(stops: [
-                .init(color: .black, location: 0),
-                .init(color: .black, location: hold),
-                .init(color: .black.opacity(0.42), location: hold + (1 - hold) * 0.45),
-                .init(color: .clear, location: 1),
-            ], startPoint: .top, endPoint: .bottom)
-        case .bottom:
-            // Re-stopped WITH the veil, not independently: a blur that keeps lifting where the veil
-            // has already stopped is a second, invisible ramp — and it was the half that was
-            // actually measured softening live body copy 137 pt above the bar.
-            return LinearGradient(stops: [
-                .init(color: .clear, location: 0),
-                .init(color: .black.opacity(0.30), location: 0.55),
-                .init(color: .black.opacity(0.75), location: 0.85),
-                .init(color: .black, location: 1),
-            ], startPoint: .top, endPoint: .bottom)
         }
+        // Full strength through the WHOLE hold: the bar is translucent now, so the blur is
+        // what keeps a row title under it from reading as a row title.
+        return LinearGradient(stops: [
+            .init(color: .black, location: 0),
+            .init(color: .black, location: hold),
+            .init(color: .black.opacity(0.42), location: hold + (1 - hold) * 0.45),
+            .init(color: .clear, location: 1),
+        ], startPoint: .top, endPoint: .bottom)
     }
 
     private var band: some View {
@@ -1322,64 +1269,23 @@ struct ScrollEdgeChrome: View {
     }
 
     var body: some View {
-        Group {
-            if side == .top {
-                band.frame(height: height)
-            } else {
-                VStack(spacing: 0) {
-                    band.frame(height: ThemeMetrics.bottomChromeHeight)
-                    // See `ThemeMetrics.bottomUnderfill`: solid canvas continuing past the layout's
-                    // bottom edge, under the bar and across the home-indicator strip.
-                    ThemeColor.chromeVeil.frame(height: ThemeMetrics.bottomUnderfill)
-                }
-                .offset(y: ThemeMetrics.bottomUnderfill)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .ignoresSafeArea(edges: side == .top ? .top : .bottom)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        band
+            .frame(height: height)
+            .frame(maxWidth: .infinity)
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
-private struct ScrollEdgeChromeModifier: ViewModifier {
-    let top: Bool
-    let bottom: Bool
-    let topHeight: CGFloat
-    var softTop = false
-    var topRaised = false
-    var topHold: CGFloat? = nil
-
+private struct TabBarReserve: ViewModifier {
     func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .bottom) {
-                if bottom && !ScrollEdgeChrome.systemOwnsBottom { ScrollEdgeChrome(side: .bottom) }
-            }
-            .overlay(alignment: .top) {
-                if top {
-                    // A soft top is the AT-REST edge: the wash runs to the screen's top under a
-                    // translucent gradient. The moment content scrolls under the bar the veil
-                    // hardens — opaque canvas through the WHOLE bar (`topHold`: status bar +
-                    // inline title, plus the search drawer where there is one), then out over
-                    // `barEdgeRamp`. It used to hold through the status bar only and ramp across
-                    // the title, which is exactly where a row's progress line was photographed
-                    // ghosting under "Library" (2 Sep). Both layers stay mounted; only opacity
-                    // trades, so the swap is a cross-fade rather than a re-created material.
-                    if softTop {
-                        let hold = topHold ?? ThemeMetrics.topSafeInset
-                        ZStack(alignment: .top) {
-                            ScrollEdgeChrome(side: .top, height: topHeight, soft: true)
-                                .opacity(topRaised ? 0 : 1)
-                            ScrollEdgeChrome(side: .top, height: hold + ThemeMetrics.barEdgeRamp,
-                                             soft: false, holdHeight: hold)
-                                .opacity(topRaised ? 1 : 0)
-                        }
-                        .animation(ThemeMotion.uiGentle, value: topRaised)
-                    } else {
-                        ScrollEdgeChrome(side: .top, height: topHeight)
-                    }
-                }
-            }
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear
+                .frame(height: KeyboardPresence.shared.covering ? 0 : AppTabBar.height)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -1420,57 +1326,36 @@ extension View {
         }
     }
 
-    /// Give a scrolling root screen its status-bar and tab-bar edges. Every root screen gets this;
-    /// a pushed screen with a real navigation bar does not need it.
-        /// Our edge chrome replaces the system scroll-edge effect; both together dim the last ~190 pt
-    /// of every scroll view (a primary CTA at the bottom read as disabled).
-    func scrollEdgeChrome(top: Bool = true, bottom: Bool = true,
-                          topHeight: CGFloat = ThemeMetrics.topChromeHeight) -> some View {
-        scrollEdgeChromeBody(top: top, bottom: bottom, topHeight: topHeight).chromeScrollEdgeHidden(.top)
-    }
-
-    /// `topRaised`: content has scrolled under the bar, so a soft top hardens to the opaque
-    /// status-band veil. Screens drive it from a geometry probe on their scroll content — the
-    /// `onScrollGeometryChange` equivalent that also fires on the iOS 27 simulator.
-    /// `topHold`: the bar's full band (status bar + title bar + any search drawer) that the
-    /// hardened veil holds opaque canvas through before its `barEdgeRamp`. Defaults to the status
-    /// bar for screens whose title sits in their own chrome band.
-    func scrollEdgeChromeBody(top: Bool = true, bottom: Bool = true,
-                          topHeight: CGFloat = ThemeMetrics.topChromeHeight,
-                          softTop: Bool = false, topRaised: Bool = false,
-                          topHold: CGFloat? = nil) -> some View {
-        modifier(ScrollEdgeChromeModifier(top: top, bottom: bottom, topHeight: topHeight,
-                                          softTop: softTop, topRaised: topRaised, topHold: topHold))
-    }
-
-    /// Bottom clearance for a tab root's scroll view, as a scroll-content MARGIN.
+    /// The breathing room under a scroll view's last row (`ThemeMetrics.tabBarClearance`), as a
+    /// scroll-content MARGIN — padding inside a stack shorter than the viewport changes no layout
+    /// at all, and a margin is also where the scroll indicator stops.
     ///
-    /// `.padding(.bottom, tabBarClearance)` inside the scroll content does nothing at all when the
-    /// stack is shorter than the viewport — the content is already above the fold, so padding under
-    /// it changes no layout — which is exactly the case a short list is in when it comes to rest
-    /// inside the ramp. A content margin is honoured either way, and it is also what makes the
-    /// scroll indicator stop at the right place.
+    /// It is not a clearance for the bar any more: the bar (`AppTabBar`) is a safe-area inset, so
+    /// every scroll view already ends above it.
     ///
     /// Applied to the *scroll view* (or any ancestor of it), never inside the stack.
     func tabBarContentMargin(extra: CGFloat = 0) -> some View {
         contentMargins(.bottom, ThemeMetrics.tabBarClearance + extra, for: .scrollContent)
     }
 
-    /// The bottom half of the chrome, for a screen that was PUSHED rather than selected.
-    ///
-    /// `scrollEdgeChrome` was applied on tab roots only, so a pushed screen — Detail, its episode
-    /// list, Watch history — rendered whole rows at full opacity under and beside the floating pill,
-    /// with no `bottomUnderfill` for the glass to refract. That is not a per-screen oversight to
-    /// fix six times; it is the pushed-screen scaffold, so it lives on the navigation destination
-    /// (`RootView.detailDestinations`) and every future push inherits it.
-    ///
-    /// Neither system edge is suppressed here: a pushed screen has a real navigation bar and the
-    /// system owns that top edge, and since iOS 26 it owns the bottom one too
-    /// (`ScrollEdgeChrome.systemOwnsBottom`). Below 26 this modifier's own bottom band is the only
-    /// thing drawing there, which is what it was written for.
+    /// The scaffold of a PUSHED screen: the same breathing room under its last row as a root's,
+    /// room for the app's bar at its foot, and the system tab bar held hidden, so no push can
+    /// bring its pill back over the app's bar. Lives on the navigation destinations
+    /// (`RootView.detailDestinations`), so every future push inherits it.
     func pushedScreenChrome() -> some View {
-        scrollEdgeChromeBody(top: false, bottom: true)
-            .contentMargins(.bottom, ThemeMetrics.tabBarClearance, for: .scrollContent)
+        contentMargins(.bottom, ThemeMetrics.tabBarClearance, for: .scrollContent)
+            .tabBarReserve()
+            .systemTabBarHidden()
+    }
+
+    /// Room for the app's bar at the foot of a page (`AppTabBar`, drawn once over the tabs): an
+    /// empty safe-area inset of the bar's height, so the page's content — and its own bottom
+    /// bars, like the post page's reply field — end above the bar instead of under it. It folds
+    /// to nothing while the keyboard covers the bar, so a reply field sits on the keyboard, not a
+    /// bar's height above it. Every tab root carries it (`MainTabView`) and every push
+    /// (`pushedScreenChrome`); a sheet or a cover has no bar and no reserve.
+    func tabBarReserve() -> some View {
+        modifier(TabBarReserve())
     }
 
     /// Native Liquid Glass for chrome, with the Reduce Transparency fallback the spec requires
@@ -1667,86 +1552,6 @@ struct ArtHeader<Overlay: View>: View {
             try? await Task.sleep(for: .milliseconds(80))
             guard !Task.isCancelled else { return }
             withAnimation(.easeInOut(duration: 24).repeatForever(autoreverses: true)) { drifting = true }
-        }
-    }
-}
-
-/// The billboard's NAME: the show's logo treatment — the catalogue's title image, Netflix's and
-/// Disney+'s billboard grammar — where the gallery has one AND it can be drawn at the headline's
-/// mass, else the name set in type. The art under it is the textless poster where the gallery
-/// has one, so the name is never on the screen twice in the same hand. Accessibility sizes set
-/// the name in type by default; art-led poster surfaces may keep the logo and provide the full
-/// spoken title through their accessibility label.
-struct HeroTitle: View {
-    let text: String
-    var name: BillboardName = .type
-    var font: TypeToken = ThemeType.displayXL
-    var lineLimit: Int? = 2
-    var minimumScale: CGFloat = 0.82
-    /// The space this surface gives the name. Billboards keep the shared default; compact cards
-    /// pass their actual copy run so a logo never clips at a card edge.
-    var copyWidth: CGFloat = ThemeMetrics.billboardCopyWidth
-    var logoHeightLimit: CGFloat = HeroTitle.logoMaxHeight
-    var textAlignment: TextAlignment = .center
-    var usesLogoAtAccessibilitySizes = false
-
-    /// The logo's box (5 Sep, settled by the placement spike): within 88 % of the copy's run and
-    /// 120 pt — EVERY logo, emblems included. The user liked the show's own logotype as the
-    /// headline and disliked only its placement; a "headline-mass" rule that dropped circular
-    /// emblems (Slime, Demon Slayer) and stacked marks (Solo Leveling) for type removed the thing
-    /// they liked. At 120 pt the Slime emblem reads as the headline; the first cut's 84 was a
-    /// sticker under a badge wider than it.
-    static let logoMaxWidthFraction: CGFloat = 0.88
-    static let logoMaxHeight: CGFloat = 120
-    /// The optical gap a logo adds beneath itself. A text title's line box carries its own
-    /// descender space; a logo's bounds are its ink, so the line under it sat 3–4 pt off the
-    /// artwork (Chainsaw Man, Black Clover, 5 Sep).
-    static let logoBottomGap: CGFloat = 8
-
-    /// The size a logo of `aspect` is drawn at within a copy run of `copyWidth`.
-    static func logoBox(aspect: CGFloat, copyWidth: CGFloat,
-                        maxHeight: CGFloat = logoMaxHeight) -> CGSize? {
-        guard aspect > 0, copyWidth > 0 else { return nil }
-        let w = min(copyWidth * logoMaxWidthFraction, maxHeight * aspect)
-        return CGSize(width: w, height: w / aspect)
-    }
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    private var resolvedLogo: (image: ArtworkImage, size: CGSize)? {
-        guard case .logo(let image) = name,
-              usesLogoAtAccessibilitySizes || !typeSize.isAccessibilitySize,
-              let w = image.width, let h = image.height, w > 0, h > 0,
-              let size = Self.logoBox(aspect: CGFloat(w) / CGFloat(h), copyWidth: copyWidth,
-                                      maxHeight: logoHeightLimit)
-        else { return nil }
-        return (image, size)
-    }
-
-    var body: some View {
-        if name == .embedded {
-            EmptyView()
-        } else if let resolvedLogo {
-            RemoteImageView(url: resolvedLogo.image.url, contentMode: .fit, maxPixel: 1000, alignment: .leading,
-                            placeholderHidden: true)
-                .frame(width: resolvedLogo.size.width, height: resolvedLogo.size.height, alignment: .leading)
-                // Lifted off the picture the way a logotype is on a poster.
-                .shadow(color: .black.opacity(0.45), radius: 8, y: 2)
-                .padding(.bottom, Self.logoBottomGap)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(text)
-                .accessibilityAddTraits(.isHeader)
-        } else {
-            Text(text)
-                .type(font)
-                .foregroundStyle(ThemeColor.textPrimary)
-                .lineLimit(lineLimit)
-                .minimumScaleFactor(minimumScale)
-                .allowsTightening(true)
-                // The billboard's lockup is CENTRED (5 Sep); a caller that sets the name on a
-                // left axis re-aligns it.
-                .multilineTextAlignment(textAlignment)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -2019,89 +1824,6 @@ struct HeroTopVeil: View {
     }
 }
 
-/// Protection BEHIND a hero's copy, sized to the copy's measured height at every type size.
-///
-/// The stops are placed in POINTS off the measured copy height, not as fractions of the image. A
-/// fixed fraction is a different physical distance at every type size, which is how AX1 came to
-/// set a three-line 44-pt title over a face at ~55 % luminance while the same stops were
-/// comfortable at default size. `lead` is the run-in above the copy — long, because this is the
-/// only bottom protection on a resting billboard (the fractional `ArtScrim` is off), and without
-/// pre-darkening a 24-pt rise to 0.72 read as a visible edge drawn across the picture. Apple TV's
-/// billboard gradient has the same shape: it begins just above the lockup and eases in.
-///
-/// **The copy sits ON the picture, not in a void (4 Sep).** The stops used to reach 0.72 at the
-/// copy's top edge and 0.90 fifty-six points in, so the whole lower third of the billboard was
-/// canvas with type in it and the art stopped where the words began — the seam the user
-/// photographed ("the top 1/3 looks gorgeous … as soon as the Today part starts it looks really
-/// bad"). Now the run-in is longer (132) and the veil is 0.56 where the eyebrow sits, 0.72 at
-/// the title's first line, 0.86 where the fact line ends, and still lands on full canvas at the
-/// frame's bottom: the art stays visible behind the lockup the way it does under Apple TV's,
-/// and a 28-pt bold title with its contact shadow holds ≥3:1 on the palest cover.
-struct HeroCopyScrim: View {
-    let copyHeight: CGFloat
-    var lead: CGFloat = 132
-    /// `HeroProtection.strength(lightness:)`: the ramp's body scales with the art's lightness;
-    /// the LANDING does not — the frame still ends on full canvas whatever the picture.
-    var strength: Double = 1
-    /// The colour the frame lands on: canvas on Today; the show's ground on its page (6 Sep).
-    var landing: Color = ThemeColor.canvas
-
-    private var height: CGFloat { max(1, copyHeight + lead + 8) }
-
-    /// The stops as DISTANCES down the scrim, clamped monotonic. The ramp reaches full canvas
-    /// 40 pt above the frame's bottom whatever the copy's height: the last 5 % of the art's
-    /// ground — and the tonal step where the composited cover ends on it — showed as a faint
-    /// dithered band under the capsule (measured 4 Sep). The scrim must LAND, not hover.
-    private var stops: [Gradient.Stop] {
-        let h = height
-        // Where the veil must be full canvas: 40 pt above the frame's bottom. Every ramp mark is
-        // bounded by a share of that distance, so a SHORT copy compresses the ramp instead of
-        // pushing the landing off the end. With the marks clamped only to `h`, a one-line copy
-        // (h = 174) put 0.72 at 92 % and 0.86 at the last pixel and never reached canvas —
-        // Re:ZERO's copyright line printed through and the hero ended on a hard step, luminance
-        // 45 → 27 in one row (measured 5 Sep). A tall copy is unchanged.
-        let land = max(1, h - 40)
-        // The ramp's body scales with the strength, each stop above a FLOOR that keeps the last
-        // stretch to the landing a ramp and not a step: at the least strength the stops run
-        // 0.03 / 0.10 / 0.20 / 0.35 / 0.55 / 0.80 / 1 — the picture stays lit behind the copy
-        // and the frame still eases onto canvas.
-        let s = strength
-        func a(_ full: Double, floor: Double) -> Double { max(full * s, floor) }
-        // The last stretch to full canvas is never shorter than `tail`: with the 0.95 mark
-        // clamped to `land` itself, a short copy (≤ 160 pt, any lockup without actions) put two
-        // stops on one point and the frame ended on a hard seam — (21,36,46) → (0,26,44) in
-        // 1.5 pt on 3 Body Problem (review i4, N4). Every earlier mark is a share of what is left.
-        let tail = min(32, land * 0.2)
-        let body = land - tail
-        let marks: [(y: CGFloat, alpha: Double)] = [
-            (0, 0),
-            (min(lead * 0.35, body * 0.25), a(0.08, floor: 0)),
-            (min(lead * 0.70, body * 0.50), a(0.28, floor: 0)),
-            (min(lead, body * 0.72), a(0.56, floor: 0.20)),
-            (min(lead + 28, body * 0.84), a(0.72, floor: 0.35)),
-            (min(lead + 72, body * 0.95), a(0.86, floor: 0.55)),
-            (min(lead + 128, body), a(0.95, floor: 0.80)),
-            (land, 1), (h, 1),
-        ]
-        var out: [Gradient.Stop] = []
-        var last: CGFloat = 0
-        for mark in marks {
-            last = max(last, min(max(0, mark.y), h))
-            out.append(.init(color: mark.alpha == 0 ? .clear : landing.opacity(mark.alpha),
-                             location: last / h))
-        }
-        return out
-    }
-
-    var body: some View {
-        LinearGradient(stops: stops, startPoint: .top, endPoint: .bottom)
-        .frame(height: height)
-        .frame(maxWidth: .infinity)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
 /// Artwork in a LANDSCAPE frame — a shelf card, a browse tile.
 ///
 /// A banner fills it. A portrait cover does not: `.fill`ed into a 1.6–2.1:1 frame, a 2:3 poster
@@ -2240,7 +1962,7 @@ struct FilterChipLabel: View {
     var body: some View {
         HStack(spacing: 5) {
             Text(text)
-            Image(systemName: "xmark").font(.system(size: 10, weight: .bold))
+            AppGlyph(systemName: "xmark").font(.system(size: 10, weight: .bold))
         }
     }
 }
@@ -2320,7 +2042,7 @@ struct AccountDisc: View {
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
             } else {
-                PreviouslyMark(width: diameter * 0.28)
+                PreviouslyMark(width: diameter * 0.40, style: .glyph)
             }
         }
         .frame(width: diameter, height: diameter)
@@ -2354,7 +2076,7 @@ struct DrawnCheck: View {
     @State private var progress: CGFloat = 0
 
     var body: some View {
-        Image(systemName: "checkmark")
+        AppGlyph(systemName: "checkmark")
             .font(.system(size: size, weight: .bold))
             .foregroundStyle(tint)
             .mask(alignment: .leading) {
@@ -2486,123 +2208,6 @@ struct MarkRing: View {
     }
 }
 
-/// "Mark as watched" with the batch options behind a real split.
-///
-/// One capsule containing two 44-pt targets separated by a hairline: tapping the label marks,
-/// tapping the chevron opens the batch menu. Lifted out of `TodayView` because Detail — the surface
-/// where a user actually catches up six episodes — had the batch behind a chevron-less
-/// `Menu(primaryAction:)` that only a long press could reach.
-struct MarkSplitButton: View {
-    let episode: Int
-    let committed: Bool
-    let behind: Int
-    let title: String
-    /// Episodes the committed write marked: a batch confirms its COUNT ("5 episodes watched"),
-    /// not the last episode's number (review i5, F4).
-    var committedCount: Int = 1
-    let onMark: () -> Void
-    let onMarkThrough: (Int) -> Void
-    let onMarkAll: () -> Void
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var showsMenu: Bool { behind > 1 }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onMark) {
-                HStack(spacing: 0) {
-                    // Mounted unconditionally and collapsed to zero width when there is nothing to
-                    // draw. A conditional insert inside an `.animation` container gave the check an
-                    // implicit opacity transition on top of its own left-to-right mask, so the one
-                    // moment the product exists to deliver rendered as a smear. The mask IS the
-                    // animation; nothing else may touch this glyph's opacity.
-                    DrawnCheck(on: committed, tint: ThemeColor.accent)
-                        .padding(.trailing, ThemeSpace.x2)
-                        .frame(width: committed ? nil : 0, alignment: .leading)
-                        .clipped()
-                    // The CTA names its object. "Mark as watched" sat under a hero showing three
-                    // numbers (behind-count, next episode, latest-aired) with no way to tell which
-                    // one the button touches; "Mark episode 1 watched" is the same verb with its
-                    // object attached, and it is the exact fact the committed state confirms.
-                    // "Mark as watched" (2 Sep): the hero and Detail's block now state exactly ONE
-                    // episode directly above this capsule, so the number the label used to repeat
-                    // is no longer disambiguating anything. VoiceOver still hears the episode
-                    // (see the accessibility label below). The committed form keeps its number:
-                    // "Episode 12 watched" is a receipt.
-                    Text(committed ? (committedCount > 1 ? Copy.Toast.batchWatched(committedCount) : Copy.Progress.episodeWatched(episode)) : Copy.Action.markAsWatched)
-                        .type(ThemeType.button)
-                        // One line, scaled before wrapped: "Mark episode 12 watched" broke into a
-                        // two-line capsule beside `Details`. A capsule's label compresses a step;
-                        // it does not stack.
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .allowsTightening(true)
-                        // `.interpolate` tried to morph two unrelated strings and printed
-                        // "Mark as watched" and "Episode 19 watched" superimposed as an unreadable
-                        // smear, twice per mark. Two different sentences crossfade; they do not
-                        // interpolate.
-                        .contentTransition(.opacity)
-                }
-                .foregroundStyle(committed ? ThemeColor.accent : ThemeColor.onAccent)
-                .padding(.horizontal, ThemeSpace.x5)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(SplitHalfStyle())
-            .allowsHitTesting(!committed)
-            .accessibilityRemoveTraits(committed ? .isButton : [])
-            .accessibilityLabel(committed
-                                ? (committedCount > 1 ? Copy.Toast.batchWatched(committedCount) : Copy.Progress.episodeWatched(episode))
-                                : "\(Copy.Action.markEpisodeWatched(episode)), \(title)")
-
-            if showsMenu {
-                Rectangle()
-                    .fill(ThemeColor.onAccent.opacity(0.18))
-                    .frame(width: 1, height: 24)
-                Menu {
-                    // The menu is anchored to the show it writes to: with two number-carrying
-                    // commands floating free, the reader had to reconstruct whose episodes "2–5"
-                    // are. A Section header is the one Menu element that names without acting.
-                    Section(title) {
-                        let through = min(episode + 4, episode + behind - 1)
-                        // Only when it is a strict subset of "all" (interactive review: with two
-                        // behind, "Mark episodes 20–21" and "Mark all 2 episodes" were one command).
-                        if through > episode, through < episode + behind - 1 {
-                            Button(Copy.Action.markThrough(from: episode, to: through)) { onMarkThrough(through) }
-                        }
-                        Button(Copy.Action.markAll(behind)) { onMarkAll() }
-                    }
-                } label: {
-                    Image(systemName: "chevron.down")
-                        // Scales with the capsule's own words (review, 23 Sep: a fixed 12 pt
-                        // beside AX-XL type).
-                        .font(.system(.footnote, weight: .semibold))
-                        .foregroundStyle(ThemeColor.onAccent)
-                        .frame(width: 46, height: 48)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(SplitHalfStyle())
-                .allowsHitTesting(!committed)
-                .opacity(committed ? 0.45 : 1)
-                .accessibilityLabel("More ways to mark")
-                .accessibilityHidden(committed)
-            }
-        }
-        // A past-tense fact does not get the app's one primary colour: the committed capsule
-        // keeps its shape and drops to a soft tint with accent ink.
-        .background(committed ? ThemeColor.accent.opacity(0.18) : ThemeColor.accent)
-        .clipShape(Capsule())
-        // The lit top edge every filled control in this app carries: a flat #F0A24E rectangle is
-        // a swatch, the same rectangle with one lit edge is an object.
-        .overlay(Capsule().strokeBorder(
-            LinearGradient(colors: [ThemeColor.controlSheen, .clear],
-                           startPoint: .top, endPoint: .center),
-            lineWidth: 1))
-        .animation(ThemeMotion.pick(ThemeMotion.uiMicro, reduceMotion: reduceMotion), value: committed)
-    }
-}
-
 // MARK: - Colour is never the only carrier
 
 /// The shape carrier for a state that is otherwise encoded in colour alone.
@@ -2622,7 +2227,7 @@ struct DifferentiateMark: View {
 
     var body: some View {
         if differentiate {
-            Image(systemName: symbol)
+            AppGlyph(systemName: symbol)
                 .font(.system(size: size, weight: .bold))
                 .foregroundStyle(tint)
                 .accessibilityHidden(true)
@@ -2677,7 +2282,7 @@ struct OwnedMark: View {
     var body: some View {
         ZStack {
             Circle().fill(ThemeColor.accent)
-            Image(systemName: "checkmark")
+            AppGlyph(systemName: "checkmark")
                 .font(.system(size: size * 0.5, weight: .bold))
                 .foregroundStyle(ThemeColor.onAccent)
         }

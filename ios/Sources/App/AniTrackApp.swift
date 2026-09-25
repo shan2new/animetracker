@@ -88,6 +88,9 @@ struct AniTrackApp: App {
 
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
+
+        // Navigation bar titles are NOT set here: SwiftUI ignores UIKit's bar appearances for its
+        // own bars, so each screen draws its title in Outfit (`brandNavigationTitle`).
     }
 
     private static func applyBrandFont(to itemAppearance: UITabBarItemAppearance,

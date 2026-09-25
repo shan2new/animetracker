@@ -1,0 +1,108 @@
+{
+ "fill": {
+  "solid": "display-p3:0,0,0,1"
+ },
+ "groups": [
+  {
+   "lighting": "individual",
+   "specular": true,
+   "shadow": {
+    "kind": "layer-color",
+    "opacity": 0.5
+   },
+   "translucency": {
+    "enabled": false,
+    "value": 0.0
+   },
+   "blur": 0.0,
+   "layers": [
+    {
+     "name": "stop",
+     "image-name": "stop.png",
+     "glass": true
+    }
+   ]
+  },
+  {
+   "lighting": "individual",
+   "specular": true,
+   "shadow": {
+    "kind": "neutral",
+    "opacity": 0.3
+   },
+   "translucency": {
+    "enabled": false,
+    "value": 0.0
+   },
+   "blur": 0.0,
+   "layers": [
+    {
+     "name": "letter-top",
+     "image-name": "letter-top.png",
+     "glass": false
+    },
+    {
+     "name": "letter-bottom",
+     "image-name": "letter-bottom.png",
+     "glass": false
+    }
+   ]
+  },
+  {
+   "lighting": "individual",
+   "specular": true,
+   "shadow": {
+    "kind": "neutral",
+    "opacity": 0.5
+   },
+   "translucency": {
+    "enabled": true,
+    "value": 0.22
+   },
+   "blur": 0.35,
+   "layers": [
+    {
+     "name": "pins",
+     "image-name": "pins.png",
+     "glass": true
+    },
+    {
+     "name": "flaps-top",
+     "image-name": "flaps-top.png",
+     "glass": true
+    },
+    {
+     "name": "flaps-bottom",
+     "image-name": "flaps-bottom.png",
+     "glass": true
+    }
+   ]
+  },
+  {
+   "lighting": "individual",
+   "specular": false,
+   "shadow": {
+    "kind": "neutral",
+    "opacity": 0.0
+   },
+   "translucency": {
+    "enabled": false,
+    "value": 0.0
+   },
+   "blur": 0.0,
+   "layers": [
+    {
+     "name": "ground",
+     "image-name": "ground.png",
+     "glass": false
+    }
+   ]
+  }
+ ],
+ "supported-platforms": {
+  "circles": [
+   "watchOS"
+  ],
+  "squares": "shared"
+ }
+}

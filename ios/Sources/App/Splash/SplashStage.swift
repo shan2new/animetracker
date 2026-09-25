@@ -73,6 +73,9 @@ extension SplashFilm {
 
 /// The film. `-splashDirection <name>` (DEBUG) picks a variant while one is being explored.
 enum SplashDirection: String, CaseIterable {
+    /// The departures board turns to "P.", then the name surfaces (`SplashFlapFilm`): the
+    /// Split-Flap identity's own gesture (26 Sep).
+    case flap
     /// Five layers of coloured glass come into register as the mark (`SplashAlignScript`).
     case align
     /// One ribbon of silk light that becomes the mark (`SplashRibbonScript`).
@@ -95,12 +98,13 @@ enum SplashDirection: String, CaseIterable {
         if let raw = UserDefaults.standard.string(forKey: "splashDirection"),
            let d = SplashDirection(rawValue: raw) { return d }
         #endif
-        return .align
+        return .flap
     }
 
     @MainActor
     func film() -> SplashFilm {
         switch self {
+        case .flap: return SplashFlapFilm()
         case .align: return SplashGlassFilm { SplashAlignScript(scene: $0) }
         case .ribbon: return SplashGlassFilm { SplashRibbonScript(scene: $0) }
         case .silk: return SplashGlassFilm { SplashSilkScript(scene: $0) }

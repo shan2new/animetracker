@@ -51,7 +51,7 @@ struct ReportSheet: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .background(ThemeColor.canvas.ignoresSafeArea())
-            .navigationTitle(Copy.Social.reportTitle)
+            .brandNavigationTitle(Copy.Social.reportTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -86,13 +86,13 @@ struct ReportSheet: View {
             VStack(spacing: 0) {
                 HStack(spacing: ThemeSpace.x3) {
                     Text(Copy.Social.reasonTitle(r))
-                        .type(ThemeType.feedBody)
+                        .type(ThemeType.feedLight)
                         .foregroundStyle(ThemeColor.feedText)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                     // The chosen reason is a STATE (a filled check), never an action colour.
-                    Image(systemName: reason == r ? "checkmark.circle.fill" : "circle")
-                        .font(ThemeType.feedBody.font)
+                    AppGlyph(systemName: reason == r ? "checkmark.circle.fill" : "circle")
+                        .font(ThemeType.feedMeta.font)
                         .imageScale(.large)
                         .foregroundStyle(reason == r ? ThemeColor.accent : ThemeColor.feedSecondary)
                         .accessibilityHidden(true)
@@ -110,7 +110,7 @@ struct ReportSheet: View {
 
     private var noteField: some View {
         TextField(Copy.Social.reportNoteLabel, text: $note, axis: .vertical)
-            .type(ThemeType.feedBody)
+            .type(ThemeType.feedLight)
             .foregroundStyle(ThemeColor.feedText)
             .lineLimit(3...6)
             .focused($noteFocused)

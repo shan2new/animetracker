@@ -326,6 +326,14 @@ extension AppModel {
         return reels
     }
 
+    /// The reels the tray shows: only the ones still to be SEEN. A story is an alert that a new
+    /// episode is out, so a reel leaves once its latest drop has been viewed or watched, and comes
+    /// back only when a newer episode airs (`hasViewed` compares against `latestAired`). An empty
+    /// tray is the normal state — something to wait for, not a row of grey rings.
+    var trayReels: [StoryReel] {
+        storyReels.filter { !$0.seen && !hasViewed($0) }
+    }
+
     /// A post already composed: from the loaded tabs' rows, else a loaded post page.
     func feedPost(id: String) -> FeedPostModel? {
         for tab in FeedTab.allCases where feedTabs[tab]?.response != nil {

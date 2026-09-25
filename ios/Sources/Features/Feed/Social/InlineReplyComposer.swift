@@ -80,8 +80,9 @@ struct InlineReplyComposer: View {
         Button { begin(target) } label: {
             HStack(spacing: ThemeSpace.x3) {
                 AccountDisc(identity: auth.identity, diameter: FeedMetrics.replyBarAvatar, quiet: true)
+                // A draft is a reply's words (SF); the invitation is the app's (Outfit).
                 Text(count > 0 ? draft : placeholder)
-                    .type(ThemeType.storyReply)
+                    .type(count > 0 ? ThemeType.feedNote : ThemeType.storyReply)
                     .foregroundStyle(count > 0 ? ThemeColor.feedText : ThemeColor.feedSecondary)
                     .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -106,7 +107,7 @@ struct InlineReplyComposer: View {
         VStack(alignment: .leading, spacing: ThemeSpace.x2) {
             HStack(alignment: .firstTextBaseline, spacing: ThemeSpace.x2) {
                 Text(replyingLine)
-                    .type(ThemeType.feedNote)
+                    .type(ThemeType.feedSubhead)
                     .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 expandButton
@@ -116,6 +117,7 @@ struct InlineReplyComposer: View {
                 TextField(placeholder, text: $draft, axis: .vertical)
                     .type(ThemeType.composeField)
                     .foregroundStyle(ThemeColor.feedText)
+                    .readingLines(FeedPostLayout.lineHeightLarge)
                     .lineLimit(1...5)
                     .focused($focused)
                     .submitLabel(.return)
@@ -162,8 +164,8 @@ struct InlineReplyComposer: View {
             close()
             onFullComposer(full)
         } label: {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(ThemeType.feedNote.font.weight(.semibold))
+            AppGlyph(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(ThemeType.feedSubhead.font.weight(.semibold))
                 .foregroundStyle(ThemeColor.interactive)
                 .frame(width: FeedMetrics.actionHitHeight, height: FeedMetrics.actionHitHeight)
                 .contentShape(Rectangle())
@@ -177,7 +179,7 @@ struct InlineReplyComposer: View {
     /// Who can read it (an episode room's spoiler rule), the ring, the pill.
     private var foot: some View {
         HStack(spacing: ThemeSpace.x2) {
-            Image(systemName: episode == nil ? "globe" : "eye.slash")
+            AppGlyph(systemName: episode == nil ? "globe" : "eye.slash")
                 .font(ThemeType.feedSmall.font)
                 .accessibilityHidden(true)
             Text(episode.map(Copy.Social.episodeAudience) ?? Copy.Social.everyoneCanReply)

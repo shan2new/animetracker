@@ -2,7 +2,8 @@ import SwiftUI
 
 // iOS 26 chrome, each gated behind `if #available(iOS 26.0, *)` with a graceful fallback so the
 // project compiles and runs on iOS 18 too. Two families live here: Liquid Glass (with an
-// `.ultraThinMaterial` fallback) and the scroll-edge/tab-bar effects below.
+// `.ultraThinMaterial` fallback) and the scroll-edge/tab-bar effects below — and one text shim,
+// the reading line at the foot.
 //
 // Glass is applied ONLY to the navigation/functional chrome (tab bar, toolbars, sheet headers,
 // floating action buttons, the "mark caught up" buttons, chips) — never stacked on poster/content
@@ -45,13 +46,11 @@ enum ChromeEdge {
 extension View {
     /// Suppresses the system scroll-edge effect.
     ///
-    /// **`.top` is the only edge a screen here passes any more** (8 Sep). The top band is OURS
-    /// because it is a bar — opaque canvas through the whole bar's height, a docked title riding on
-    /// it — which no blur can stand in for. The BOTTOM edge is the system's: from iOS 26 the tab bar
-    /// floats and the layout is not inset by it, so our bottom band lands 180 pt below the screen
-    /// (`ScrollEdgeChrome.systemOwnsBottom` carries the measurement) and suppressing the system's
-    /// effect on top of that left the glass pill refracting live body copy. A PUSHED screen now
-    /// hides nothing at all — the system owns both of its edges.
+    /// **`.top` is the only edge a screen here passes** (8 Sep). The top band is OURS because it is
+    /// a bar — opaque canvas through the whole bar's height, a docked title riding on it — which no
+    /// blur can stand in for. The bottom has no system effect to suppress: the app's bar
+    /// (`AppTabBar`, 25 Sep) is a plain safe-area inset, not a system bar, and content never passes
+    /// under it. A PUSHED screen hides nothing — the system owns its navigation bar's edge.
     ///
     /// Below iOS 26 there is no system effect to suppress and the shim is a plain no-op — which is
     /// exact, not a degradation.
@@ -79,20 +78,6 @@ extension View {
             case .top: scrollEdgeEffectStyle(.hard, for: .top)
             case .bottom: scrollEdgeEffectStyle(.hard, for: .bottom)
             }
-        } else {
-            self
-        }
-    }
-
-    /// The tab bar's bottom accessory (iOS 26) — the lane Music's mini player lives in, which
-    /// collapses into the bar when it minimises. Below 26 there is no such lane; the caller keeps
-    /// whatever it draws instead (the receipt spike's bar direction, 5 Sep).
-    @ViewBuilder
-    func chromeBottomAccessory<A: View>(isEnabled: Bool, @ViewBuilder _ accessory: @escaping () -> A) -> some View {
-        if #available(iOS 26.1, *) {
-            // `isEnabled:` (26.1) — a conditionally EMPTY accessory still reserves its lane
-            // (Apple Developer Forums thread 803428); the enabled flag is what removes it.
-            tabViewBottomAccessory(isEnabled: isEnabled) { accessory() }
         } else {
             self
         }
@@ -133,3 +118,21 @@ extension View {
     }
 }
 
+// MARK: - The reading line (iOS 26)
+
+extension View {
+    /// Lines `factor` × the point size apart, whatever the fonts' own ascent and descent: X's fixed
+    /// rhythm for a post's words (`FeedPostLayout.lineHeight`, 15 on 20). SwiftUI's own line follows
+    /// the fonts, and the system opens SF's for a tall-script language anywhere in the preferred list
+    /// — the QA sim's en-IN + hi-IN set 15 on 23, English alone 15 on 20 (bundled Outfit never
+    /// moved). Below 26 Text cannot hold a line height, so the words keep SwiftUI's line — X's own
+    /// with English alone — opened by `below26` points.
+    @ViewBuilder
+    func readingLines(_ factor: CGFloat, below26 spacing: CGFloat = 0) -> some View {
+        if #available(iOS 26.0, *) {
+            lineHeight(.multiple(factor: factor))
+        } else {
+            lineSpacing(spacing)
+        }
+    }
+}
