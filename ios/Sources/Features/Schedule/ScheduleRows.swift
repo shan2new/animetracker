@@ -35,9 +35,14 @@ struct ScheduleAgendaRow<Trailing: View>: View {
     let state: AiringState
     /// What VoiceOver says for the row (the date column is hidden from it).
     let spoken: String
+    /// What the lit Schedule adds (`ScheduleLit.swift`): the show's colour under its face, today's
+    /// countdown. `.none` is the plain row (Home's Recently aired).
+    var decor: ScheduleRowDecor = .none
     let onOpen: () -> Void
     @ViewBuilder var trailing: () -> Trailing
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The show's palette colour, once resolved (the cache answers at once on a later visit).
+    @State private var resolvedHue: Color?
 
     var body: some View {
         Group {
@@ -46,6 +51,19 @@ struct ScheduleAgendaRow<Trailing: View>: View {
         .padding(.leading, AgendaMetrics.leading)
         .padding(.trailing, AgendaMetrics.trailing)
         .padding(.vertical, AgendaMetrics.vertical)
+        .task(id: decor.hueURL) { await resolveHue() }
+    }
+
+    /// The show's colour, from the palette cache (a dictionary read) or once resolved.
+    private var hue: Color? {
+        resolvedHue ?? decor.hueURL.flatMap { PaletteCache.shared.tint(for: $0) }
+    }
+
+    private func resolveHue() async {
+        guard let url = decor.hueURL, PaletteCache.shared.tint(for: url) == nil else { return }
+        let resolved = await PaletteCache.shared.resolveIfAvailable(url: url, maxPixel: 160)
+        guard !Task.isCancelled, let resolved else { return }
+        withAnimation(ThemeMotion.uiPoster) { resolvedHue = resolved }
     }
 
     /// Date, face, words, ladder — four columns at four fixed x's.
@@ -96,9 +114,23 @@ struct ScheduleAgendaRow<Trailing: View>: View {
     /// The show as an ACCOUNT — the feed's rounded square (`ShowAvatar`; circles are people and
     /// the story tray), so a show wears one face on every screen. A watched airing gives it up a
     /// step, as the ladder's disc says it is spent.
+    ///
+    /// Lit: the face sits in a breath of its own colour — the palette colour as light under it,
+    /// drawn by a canvas-filled copy of its shape (the shadow is the colour; the fill is the page,
+    /// so a watched face's lowered opacity never shows the colour through it).
     private var face: some View {
         ShowAvatar(franchise: franchise, size: AgendaMetrics.avatar)
             .opacity(state.isWatched ? 0.55 : 1)
+            .background {
+                if decor.hueURL != nil, let light = ScheduleHue.glow(hue) {
+                    ShowAvatar.shape(AgendaMetrics.avatar)
+                        .fill(ThemeColor.canvas.shadow(.drop(
+                            color: light.opacity(state.isWatched ? ScheduleWhisperMetrics.glowOpacityWatched
+                                                                 : ScheduleWhisperMetrics.glowOpacity),
+                            radius: ScheduleWhisperMetrics.glowRadius, x: 0, y: ScheduleWhisperMetrics.glowDrop)))
+                        .transition(.opacity)
+                }
+            }
     }
 
     private var words: some View {
@@ -107,12 +139,25 @@ struct ScheduleAgendaRow<Trailing: View>: View {
                 .type(ThemeType.feedName)
                 .foregroundStyle(state.isWatched ? ThemeColor.feedSecondary : ThemeColor.feedText)
                 .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
-            Text(line)
-                .type(ThemeType.feedMeta)
-                .foregroundStyle(ThemeColor.feedSecondary)
-                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+            caption
         }
         .multilineTextAlignment(.leading)
+    }
+
+    /// "Episode 14 · 4:30 PM" — ONE concatenated `Text` (the row's rule), today's countdown in
+    /// accent where it counts ("Episode 14 · in 2h 14m").
+    private var caption: some View {
+        captionText
+            .type(ThemeType.feedMeta)
+            .foregroundStyle(ThemeColor.feedSecondary)
+            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+    }
+
+    private var captionText: Text {
+        if let tail = decor.accentTail, line.hasSuffix(tail) {
+            return Text(String(line.dropLast(tail.count))) + Text(tail).foregroundStyle(ThemeColor.accent)
+        }
+        return Text(line)
     }
 }
 
@@ -140,92 +185,6 @@ struct ScheduleEmptyDayRow: View {
         .padding(.vertical, AgendaMetrics.vertical)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spoken)
-    }
-}
-
-/// The next thing to watch, as one card: the show's poster to the card's edges, and at its foot one
-/// amber line (the moment), the show's logo else its name, the episode, and the mark once it is out.
-struct ScheduleTonightCard: View {
-    let franchise: Franchise
-    let eyebrow: String
-    let line: String
-    let state: AiringState
-    let canToggle: Bool
-    let markLabel: String
-    let onToggle: () -> Void
-    let onOpen: () -> Void
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    private static let aspect: CGFloat = 1.0
-    private static let scrimLead: CGFloat = 96
-
-    var body: some View {
-        let width = ThemeMetrics.windowWidth - 2 * ThemeMetrics.gutter
-        let height = (width * Self.aspect).rounded()
-        let shape = RoundedRectangle(cornerRadius: ThemeRadius.card, style: .continuous)
-        let name = franchise.billboardName
-        ZStack(alignment: .bottom) {
-            Button(action: onOpen) {
-                RemoteImageView(url: franchise.billboardArt.url ?? franchise.portraitArt, contentMode: .fill,
-                                maxPixel: 1400, alignment: .top, placeholderHidden: true)
-                    .frame(width: width, height: height)
-                    .clipped()
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(eyebrow), \(franchise.displayTitle), \(line)")
-            .accessibilityHint(Copy.Accessibility.opensTheShowHint)
-            VStack(spacing: ThemeSpace.x2) {
-                Text(eyebrow)
-                    .type(ThemeType.feedEyebrow)
-                    .textCase(.uppercase)
-                    .foregroundStyle(ThemeColor.accent)
-                    .lineLimit(1)
-                    .shadow(.art)
-                if case .logo = name, name.hasGraphicLogo {
-                    ArtworkLogo(name: name, title: franchise.displayTitle, height: 64)
-                        .padding(.horizontal, ThemeSpace.x10)
-                } else {
-                    Text(franchise.displayTitle)
-                        .type(ThemeType.displayL)
-                        .foregroundStyle(ThemeColor.textPrimary)
-                        .multilineTextAlignment(.center)
-                        // A name may grow at the accessibility sizes; it may not lose the show.
-                        .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
-                        .minimumScaleFactor(0.75)
-                        .shadow(.art)
-                }
-                Text(line)
-                    .type(ThemeType.feedMeta)
-                    .foregroundStyle(ThemeColor.textPrimary.opacity(0.85))
-                    .lineLimit(1)
-                    .shadow(.art)
-                if canToggle {
-                    ScheduleMarkPill(watched: state.isWatched, label: markLabel, action: onToggle)
-                        .padding(.top, ThemeSpace.x1)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, ThemeSpace.x4)
-            .padding(.bottom, ThemeSpace.x4)
-            // The scrim is sized to the WORDS, not to the card: a ramp of `scrimLead` above them,
-            // then a ground under them — so the amber moment reads at 0.6 whether the pill is
-            // there or not, at every text size (a fixed ramp left "OUT NOW" on the bright middle
-            // of the art once the pill pushed the words up).
-            .background(alignment: .bottom) {
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: Self.scrimLead)
-                    LinearGradient(colors: [.black.opacity(0.6), .black.opacity(0.9)], startPoint: .top, endPoint: .bottom)
-                }
-                .padding(.top, -Self.scrimLead)
-                .allowsHitTesting(false)
-            }
-            .accessibilityElement(children: .contain)
-        }
-        .frame(width: width, height: height)
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(ThemeColor.posterEdge, lineWidth: 1))
-        .padding(.horizontal, ThemeMetrics.gutter)
     }
 }
 

@@ -286,6 +286,18 @@ is empty and every route the build calls is on production (`/me/feed`, `/discove
 401, never 404). So the order is just: archive, export, upload, add the build to the tester group.
 App Privacy answers are unchanged (nothing new is collected).
 
+## Shipping build 4 (1.0 build 4, 26 Sep): app only
+
+Schedule is a tab again (Home · Schedule · Feed · Library · Discover), Home's billboard always
+offers something you can watch before anything upcoming, posters are chosen by eye on the device
+(`PosterPick`) with the show's logo drawn on clean art (dark logos white), the billboard GLOWS
+(arrival on the launch's curtain, scroll parallax, tilt, halo), Recently aired is a shelf of DROPS,
+and Schedule is LIT (the Tonight card as Home's billboard at card size, faces in their show's colour,
+today's countdown, the landing fixed). **No server change** — every route is the one build 3 used —
+so again: archive, export + upload, add the build to the tester group. App Privacy is unchanged
+(CoreMotion's device attitude, read only while Home's billboard is on screen, needs no prompt and
+is never stored or sent).
+
 ## Comments stay off until you switch them on
 
 The Today feed's replies and episode discussions are user-generated content, behind the server

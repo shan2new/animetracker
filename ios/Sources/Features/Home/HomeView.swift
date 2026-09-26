@@ -3,18 +3,20 @@ import SwiftUI
 // Home — the departures board (26 Sep 2026).
 //
 // "I think the today screen should become Feed… feed should not be the home screen for sure"
-// (owner). Home is what the mark stands for — "P." on a departures board, what arrives next — and
-// it answers the reason the app is opened, in the order a person acts on it:
+// (owner). Home answers the reason the app is opened — what can I watch now — in the order a
+// person acts on it:
 //   · the BILLBOARD — the next thing to watch, full bleed, as the old Today's was ("let's make it
-//     like the full bleed art it was earlier", owner): a drop you have not seen, else tonight's
-//     airing, else the top of your queue;
+//     like the full bleed art it was earlier", owner): a drop you have not seen, else the newest
+//     episode out this week you have not marked, else the top of your queue — and only when nothing
+//     is out at all, the next airing (`HomeCompose`);
 //   · RECENTLY AIRED — the past week's episodes you have not marked ("what about previous week /
 //     unmarked episodes?", owner), each one tap from marked;
 //   · UP NEXT — the rest of your queue as the Library's poster cards, at the episode you left off,
-//     including the shows that are NOT airing — which a calendar never shows;
-//   · THIS WEEK — the next airings; "This week ›" and the bar's calendar open the whole Schedule.
-// Each show appears once, in the first place that carries it. It is short by construction: it lists
-// what can be acted on, so it is never a wall and never empty while a show is in progress.
+//     including the shows that are NOT airing — which a calendar never shows.
+// The calendar is not here: it is the Schedule TAB again (26 Sep, "combining home with Schedule was a
+// bad decision… Some people specifically want the schedule view as the muscle memory", owner), and
+// "This week" went with the push that it opened. Each show appears once, in the first place that
+// carries it. It is short by construction: it lists what can be acted on, so it is never a wall.
 //
 // A mark is an EVENT here (26 Sep, "it doesn't feel as delightful as it should be", owner): the
 // control fills and says so for a beat (`commitBeat`), then the write lands and what it changed
@@ -22,6 +24,7 @@ import SwiftUI
 // tile, the billboard handing over to the next thing).
 struct HomeView: View {
     let onOpenDetail: (_ franchiseId: String, _ zoomID: String, _ focus: EpisodeFocus?) -> Void
+    /// Selects the Schedule tab (Recently aired's chevron, the caught-up state's button).
     let onOpenSchedule: () -> Void
     let onOpenLibrary: (WatchStatus) -> Void
     let onOpenRoute: (FeedRoute) -> Void
@@ -49,6 +52,15 @@ struct HomeView: View {
     @State private var artMarked = false
     /// The billboard art's palette colour: the page's ground and the bar are painted from it.
     @State private var heroTint: Color?
+    /// The picture each show's billboard settled on (`HomeBillboard.settle`), by franchise id.
+    @State private var heroArts: [String: String] = [:]
+    /// RINGS (`RecentDirection`): the story viewer, opened from Recently aired's rings as the feed's
+    /// tray opens it — the ring turns while the first picture loads (≤ 0.9 s), then the story.
+    @State private var story: StoryLaunch?
+    @State private var storyLoading: String?
+    @State private var storyReels: [StoryReel] = []
+    @State private var storyTask: Task<Void, Never>?
+    @State private var storyOrigins = StoryOrigins()
 
     private enum Anchor {
         static let top = "home/top"
@@ -65,10 +77,24 @@ struct HomeView: View {
     private var billboardHeight: CGFloat { (ThemeMetrics.windowHeight * Self.billboardFraction).rounded() }
     private var band: CGFloat { ThemeMetrics.topSafeInset + FeedMetrics.headerRow }
 
+    /// The billboard's picture: what it settled on, else the show's stored pick (`PosterPick`),
+    /// else the catalogue's selection.
+    private func heroArt(_ feed: HomeFeed) -> String? {
+        guard let f = feed.hero?.franchise else { return nil }
+        if let settled = heroArts[f.id] { return settled }
+        if let pick = PosterPick.shared.choice(for: f) { return WideArt.billboard(portrait: pick.url, landscape: nil).url }
+        return f.billboardArt.url
+    }
+
     /// The art's colour — resolved this visit, else remembered from the last (`PaletteCache`
     /// persists), so the page opens in its colour on the first frame.
     private func tint(_ feed: HomeFeed) -> Color? {
-        heroTint ?? PaletteCache.shared.tint(for: feed.hero?.franchise.billboardArt.url)
+        heroTint ?? PaletteCache.shared.tint(for: heroArt(feed))
+    }
+
+    /// The shows whose pictures Home is about to draw: the billboard's first, then the shelf's.
+    private func pickRequest(_ feed: HomeFeed) -> String {
+        ([feed.hero?.franchise.id] + feed.queue.map(\.id)).compactMap { $0 }.joined(separator: ",")
     }
 
     /// The show's hue at canvas depth — where the billboard lands and the bar sits (canvas with no
@@ -125,15 +151,14 @@ struct HomeView: View {
                 HomeHeader(chrome: chrome,
                            ground: groundTop(feed),
                            onProfile: { showProfile = true },
-                           onTop: { scrollToTop(proxy) },
-                           onSchedule: onOpenSchedule)
+                           onTop: { scrollToTop(proxy) })
             }
             .onChange(of: topSignal) { _, _ in
                 dismissAll()
                 scrollToTop(proxy)
             }
             #if DEBUG
-            // `-homeAnchor recent|upnext|week` (DEBUG): a capture scrolled to a section.
+            // `-homeAnchor recent|upnext` (DEBUG): a capture scrolled to a section.
             .task(id: appModel.library.isEmpty) {
                 guard !appModel.library.isEmpty, let anchor = UserDefaults.standard.string(forKey: "homeAnchor") else { return }
                 try? await Task.sleep(for: .milliseconds(1200))
@@ -145,6 +170,15 @@ struct HomeView: View {
         // The bar is Home's own; no system edge effect and no system navigation bar under it.
         .chromeScrollEdgeHidden(.top)
         .toolbar(.hidden, for: .navigationBar)
+        .fullScreenCover(item: $story) { start in
+            StoryViewer(reels: storyReels, start: start, origins: storyOrigins,
+                        onOpenShow: { id in
+                            closeStory()
+                            onOpenDetail(id, "story/\(id)", nil)
+                        },
+                        onClose: { closeStory() })
+                .presentationBackground(.clear)
+        }
         .sheet(isPresented: $showProfile, onDismiss: profileDismissed) {
             ProfileView(onOpenLibrary: { status in
                             showProfile = false
@@ -176,10 +210,16 @@ struct HomeView: View {
         .onChange(of: feed.hero == nil && !(appModel.loading && appModel.library.isEmpty), initial: true) { _, nothing in
             if nothing { markArtReady() }
         }
-        .task(id: feed.hero?.franchise.billboardArt.url) {
-            guard let url = feed.hero?.franchise.billboardArt.url else { return }
+        .task(id: heroArt(feed)) {
+            guard let url = heroArt(feed) else { return }
             let resolved = await PaletteCache.shared.resolve(url: url, maxPixel: 360)
             withAnimation(ThemeMotion.uiPoster) { heroTint = resolved }
+        }
+        // Each show's picture is chosen by eye (`PosterPick`, graded once and kept): the
+        // billboard's show first — the billboard waits a moment for it — then the shelf's.
+        .task(id: pickRequest(feed)) {
+            if let hero = feed.hero { await PosterPick.shared.resolve(hero.franchise) }
+            for item in feed.queue { await PosterPick.shared.resolve(item.franchise) }
         }
         .onAppear {
             #if DEBUG
@@ -212,7 +252,8 @@ struct HomeView: View {
                               onOpen: { open(hero) },
                               onMark: { markHero(hero) },
                               onArtLoaded: markArtReady,
-                              onCopyTop: { chrome.trackCopy(top: $0) })
+                              onCopyTop: { chrome.trackCopy(top: $0) },
+                              onArt: { url in heroArts[hero.franchise.id] = url })
                     .franchiseQuickActions(appModel.isInLibrary(hero.franchise.id) ? hero.franchise : nil,
                                            appModel: appModel)
                     // A new show on the billboard (the last one caught up): the old picture leaves,
@@ -232,12 +273,11 @@ struct HomeView: View {
             let lead = feed.hero != nil
             if !feed.recent.isEmpty { recent(feed.recent, leading: lead) }
             if !feed.queue.isEmpty { upNext(feed.queue, leading: lead && feed.recent.isEmpty) }
-            if !feed.week.isEmpty { week(feed.week, leading: lead && feed.recent.isEmpty && feed.queue.isEmpty) }
         }
     }
 
-    /// Nothing out, nothing queued, nothing this week: the board is clear — said once, calmly, with
-    /// the way to the whole Schedule.
+    /// Nothing out, nothing queued, nothing airing this week: the board is clear — said once, calmly,
+    /// with the way to the Schedule tab.
     private var caughtUp: some View {
         EmptyState(Copy.Home.caughtUp, prominence: .major, primary: onOpenSchedule)
             .padding(.horizontal, ThemeMetrics.gutter)
@@ -248,7 +288,108 @@ struct HomeView: View {
 
     /// The past week's episodes you have not marked: the agenda's own row with the day in its date
     /// column and the ring — the one next step on the row — to mark it. A marked row leaves.
+    @ViewBuilder
     private func recent(_ items: [HomeAiring], leading: Bool) -> some View {
+        switch RecentDirection.active {
+        case .rows: recentRows(items, leading: leading)
+        case .drops: recentDrops(items, leading: leading)
+        case .rings: recentRings(items, leading: leading)
+        }
+    }
+
+    /// DROPS: a shelf of the shows' scenes, newest drop first.
+    private func recentDrops(_ items: [HomeAiring], leading: Bool) -> some View {
+        VStack(alignment: .leading, spacing: ThemeMetrics.labelGap) {
+            SectionHeaderRow(Copy.Home.recentlyAired, action: onOpenSchedule)
+                .padding(.horizontal, ThemeMetrics.gutter)
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: ThemeMetrics.shelfGap) {
+                    ForEach(items) { item in
+                        let e = item.entry
+                        HomeDropCard(entry: e, run: max(1, e.episode - e.part.progress), now: appModel.nowMinute,
+                                     committing: committingRows.contains(item.id),
+                                     onOpen: {
+                                         onOpenDetail(e.franchise.id, "home-drop/\(item.id)",
+                                                      EpisodeFocus(mediaId: e.part.mediaId, episode: e.part.progress + 1))
+                                     },
+                                     onMark: { markThrough(item) })
+                            .franchiseQuickActions(appModel.isInLibrary(e.franchise.id) ? e.franchise : nil, appModel: appModel)
+                            .scrollTransition(axis: .horizontal) { content, phase in
+                                content
+                                    .scaleEffect(phase.isIdentity || reduceMotion ? 1 : 0.95, anchor: .bottom)
+                                    .opacity(phase.isIdentity ? 1 : 0.75)
+                            }
+                            .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    }
+                }
+                .scrollTargetLayout()
+                .animation(ThemeMotion.pick(ThemeMotion.uiSettle, reduceMotion: reduceMotion), value: items.map(\.id))
+            }
+            .contentMargins(.horizontal, ThemeMetrics.gutter, for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+        }
+        .padding(.top, leading ? ThemeSpace.x4 : ThemeMetrics.sectionGap)
+        .id("home/recent")
+    }
+
+    /// RINGS: the feed's stories for the shows with a new episode — a tap is the story.
+    private func recentRings(_ items: [HomeAiring], leading: Bool) -> some View {
+        let byShow = Dictionary(appModel.storyReels.map { ($0.franchiseId, $0) }, uniquingKeysWith: { a, _ in a })
+        let reels = items.compactMap { byShow[$0.entry.franchise.id] }
+        return VStack(alignment: .leading, spacing: ThemeSpace.x3) {
+            SectionHeaderRow(Copy.Home.recentlyAired, action: onOpenSchedule)
+                .padding(.horizontal, ThemeMetrics.gutter)
+            StoryTray(reels: reels, loadingReelId: storyLoading, origins: storyOrigins) { index in
+                openStory(reels, index)
+            }
+        }
+        .padding(.top, leading ? ThemeSpace.x4 : ThemeMetrics.sectionGap)
+        .id("home/recent")
+    }
+
+    /// The feed's open: the ring turns while the story's first picture loads (never past 0.9 s),
+    /// then the story grows out of it.
+    private func openStory(_ reels: [StoryReel], _ index: Int) {
+        guard storyLoading == nil, reels.indices.contains(index) else { return }
+        let reel = reels[index]
+        storyLoading = reel.id
+        storyTask?.cancel()
+        storyTask = Task {
+            let started = ContinuousClock.now
+            if let u = reel.frames.first?.art.url, let url = URL(string: u) {
+                await withTaskGroup(of: Void.self) { group in
+                    group.addTask { _ = try? await ImageLoader.shared.image(for: url, maxPixel: StoryStyle.portraitPixelCap) }
+                    group.addTask { try? await Task.sleep(for: .milliseconds(900)) }
+                    await group.next()
+                    group.cancelAll()
+                }
+            }
+            let spent = started.duration(to: .now)
+            if spent < .milliseconds(260) { try? await Task.sleep(for: .milliseconds(260) - spent) }
+            guard !Task.isCancelled else { return }
+            storyReels = reels
+            storyLoading = nil
+            storyTask = nil
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { story = StoryLaunch(reelIndex: index, frameIndex: 0) }
+        }
+    }
+
+    private func closeStory() {
+        // A mark's receipt is drawn inside the viewer; leaving with it live hands its Undo to the lane.
+        if var undo = appModel.undo, case .inPlace(let host) = undo.placement, host.hasPrefix("story/") {
+            undo.placement = .lane
+            appModel.presentUndo(undo)
+        }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { story = nil }
+    }
+
+    private func recentRows(_ items: [HomeAiring], leading: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             SectionHeaderRow(Copy.Home.recentlyAired, action: onOpenSchedule)
                 .padding(.horizontal, ThemeMetrics.gutter)
@@ -257,7 +398,7 @@ struct HomeView: View {
                 let first = i == 0 || items[i - 1].day != item.day
                 let e = item.entry
                 let count = max(1, e.episode - e.part.progress)
-                airingRow(item, first: first, state: .toWatch) {
+                airingRow(item, first: first, state: .toWatch, run: count) {
                     AiringStateControl(state: .toWatch, episode: e.episode,
                                        committing: committingRows.contains(item.id),
                                        title: e.franchise.displayTitle, batch: count > 1, count: count,
@@ -291,6 +432,13 @@ struct HomeView: View {
                                        },
                                        onMark: { markTile(item) })
                             .franchiseQuickActions(item.franchise, appModel: appModel)
+                            // A card entering from the shelf's edge grows into place — a
+                            // carousel's depth, read in the render pass (no body re-runs).
+                            .scrollTransition(axis: .horizontal) { content, phase in
+                                content
+                                    .scaleEffect(phase.isIdentity || reduceMotion ? 1 : 0.94, anchor: .bottom)
+                                    .opacity(phase.isIdentity ? 1 : 0.72)
+                            }
                             .transition(.scale(scale: 0.85).combined(with: .opacity))
                     }
                 }
@@ -306,32 +454,15 @@ struct HomeView: View {
         .id("home/upnext")
     }
 
-    // MARK: - This week
-
-    private func week(_ items: [HomeAiring], leading: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SectionHeaderRow(Copy.Home.thisWeek, action: onOpenSchedule)
-                .padding(.horizontal, ThemeMetrics.gutter)
-                .padding(.bottom, ThemeSpace.x2)
-            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                let first = i == 0 || items[i - 1].day != item.day
-                airingRow(item, first: first, state: .upcoming) { EmptyView() }
-                    .padding(.top, first && i > 0 ? ThemeSpace.x3 : 0)
-            }
-        }
-        .padding(.top, leading ? ThemeSpace.x4 : ThemeMetrics.sectionGap)
-        .id("home/week")
-    }
-
     // MARK: - Rows
 
     /// Schedule's agenda row: the date on a day's first row, the show's face, its name, "Episode 14
     /// · 7:30 PM", and the trailing slot.
-    private func airingRow<Trailing: View>(_ item: HomeAiring, first: Bool, state: AiringState,
+    private func airingRow<Trailing: View>(_ item: HomeAiring, first: Bool, state: AiringState, run: Int = 1,
                                            @ViewBuilder trailing: @escaping () -> Trailing) -> some View {
         let e = item.entry
         let f = e.franchise
-        let line = airingLine(e)
+        let line = airingLine(e, run: run)
         let p = Formatting.localParts(item.noon)
         return ScheduleAgendaRow(franchise: f,
                                  date: first ? (Formatting.weekdayShort(p.wd), "\(p.d)") : nil,
@@ -345,8 +476,12 @@ struct HomeView: View {
             .franchiseQuickActions(appModel.isInLibrary(f.id) ? f : nil, appModel: appModel)
     }
 
-    /// "Episode 14 · 7:30 PM" — a premiere in its own words; a date-only airing has no clock.
-    private func airingLine(_ e: AppModel.ScheduleEntry) -> String {
+    /// "Episode 18" — a premiere in its own words — and, for what has aired, no clock: the date
+    /// column already says when, and a time of day on a Wednesday that has passed is noise ("6:30
+    /// PM" on one row of three read as a stray). A show more than one episode behind names the run
+    /// it has to watch, "Episodes 22–24".
+    private func airingLine(_ e: AppModel.ScheduleEntry, run: Int = 1) -> String {
+        if run > 1, e.part.kind != .movie { return Copy.episodeRange(e.episode - run + 1, e.episode) }
         let what: String
         if e.part.kind == .movie || e.episode == 1 {
             let label = e.part.kind == .movie
@@ -356,7 +491,7 @@ struct HomeView: View {
         } else {
             what = Copy.episode(e.episode)
         }
-        guard !e.dateOnly else { return what }
+        guard !e.dateOnly, !e.aired else { return what }
         return "\(what) \u{00B7} \(Formatting.fmtTime(e.at, anchor: e.franchise.timeAnchor))"
     }
 

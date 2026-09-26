@@ -429,3 +429,8 @@ extension Copy {
         }
     }
 }
+
+extension Copy.Schedule {
+    /// A countdown to today's next airing, where its caption's clock was: "in 2h 14m", "in 27m".
+    static func countdown(_ wait: String) -> String { "in \(wait)" }
+}

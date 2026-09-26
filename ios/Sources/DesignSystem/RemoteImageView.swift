@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreImage
 import Vision
 
 // Cover/banner image with the legacy gradient fallback. Poster art is the star — no glass here.
@@ -538,15 +539,195 @@ struct ArtworkLogo: View {
     let title: String
     var height: CGFloat = 66
     var alignment: Alignment = .center
+    /// A soft halo of the logo's own light (`LogoImage.halo`) — the billboard's.
+    var halo: Double = 0
 
     var body: some View {
         if case .logo(let logo) = name, name.hasGraphicLogo {
-            RemoteImageView(url: logo.url, contentMode: .fit, maxPixel: 800,
-                            alignment: alignment, placeholderHidden: true)
+            LogoImage(url: logo.url, alignment: alignment, halo: halo)
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: alignment)
                 .frame(height: height)
+                .accessibilityElement(children: .ignore)
                 .accessibilityLabel(title)
+                .accessibilityAddTraits(.isImage)
         }
+    }
+}
+
+/// A show's logo, legible on the dark grounds this app always draws logos on (a billboard's scrim,
+/// a tile's foot gradient, a scene card's shade): a DARK logo — black ink; The Eminence in Shadow's
+/// only English logo is black type on nothing, and on its dark poster it was a shadow of a word
+/// (26 Sep) — is drawn as a white silhouette of itself. A light or coloured logo is drawn as it is.
+struct LogoImage: View {
+    let url: String
+    var alignment: Alignment = .center
+    /// A soft halo of the logo's own light behind it (0 = none) — Home's billboard (GLOW).
+    var halo: Double = 0
+
+    @State private var image: UIImage?
+    @State private var dark: Bool
+    @State private var glow: LogoHalo.Glow?
+
+    static let decodePixels: CGFloat = 800
+
+    init(url: String, alignment: Alignment = .center, halo: Double = 0) {
+        self.url = url
+        self.alignment = alignment
+        self.halo = halo
+        // A logo decoded earlier this session is on screen from the first frame, in its final ink.
+        let hit = URL(string: url).flatMap { ImageCache.shared.image(for: $0, atLeast: Self.decodePixels) }
+        _image = State(initialValue: hit)
+        let dark = LogoInk.known(url) ?? hit.map { LogoInk.measure(url, $0) } ?? false
+        _dark = State(initialValue: dark)
+        _glow = State(initialValue: halo > 0 ? LogoHalo.cached(url, dark: dark) : nil)
+    }
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image)
+                    .renderingMode(dark ? .template : .original)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .foregroundStyle(Color.white)
+                    .background {
+                        if halo > 0, let glow {
+                            GeometryReader { g in
+                                Image(uiImage: glow.image)
+                                    .resizable()
+                                    .frame(width: g.size.width * glow.scale.width, height: g.size.height * glow.scale.height)
+                                    .position(x: g.size.width / 2, y: g.size.height / 2)
+                                    .opacity(halo)
+                            }
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                        }
+                    }
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: alignment)
+        .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        guard let address = URL(string: url) else { return }
+        let picture: UIImage
+        if let image {
+            picture = image
+        } else {
+            guard let loaded = try? await ImageLoader.shared.image(for: address, maxPixel: Self.decodePixels) else { return }
+            picture = loaded
+        }
+        let key = url
+        let isDark = await Task.detached(priority: .userInitiated) { LogoInk.measure(key, picture) }.value
+        dark = isDark
+        if image == nil { withAnimation(ThemeMotion.uiPoster) { image = picture } }
+        if halo > 0, glow == nil {
+            let made = await Task.detached(priority: .utility) { LogoHalo.make(key, picture, dark: isDark) }.value
+            withAnimation(ThemeMotion.uiPoster) { glow = made }
+        }
+    }
+}
+
+/// A logo's halo: its own light — the logo, or its white silhouette where it is drawn white —
+/// blurred ONCE into a bitmap with room around it (a blur is a property of the image, never of a
+/// layer: the performance rule of 5 Sep), kept beside the decodes.
+enum LogoHalo {
+    struct Glow {
+        let image: UIImage
+        /// The halo's size over the logo's: the blur's room on each side.
+        let scale: CGSize
+    }
+
+    /// Room around the logo for the blur to spread into, as a share of its longer side.
+    private static let room: CGFloat = 0.22
+
+    private static func key(_ url: String, dark: Bool) -> String { "logo-halo|\(dark ? "w" : "c")|\(url)" }
+
+    static func cached(_ url: String, dark: Bool) -> Glow? {
+        guard let image = ImageCache.shared.derived(key(url, dark: dark)), let cg = image.cgImage else { return nil }
+        return glow(image, cg.width, cg.height)
+    }
+
+    private static func glow(_ image: UIImage, _ width: Int, _ height: Int) -> Glow {
+        // The stored bitmap is the logo plus `pad` pixels a side; `pad` follows from its size.
+        let long = CGFloat(max(width, height)) / (1 + 2 * room)
+        let pad = long * room
+        let w = CGFloat(width) - 2 * pad, h = CGFloat(height) - 2 * pad
+        return Glow(image: image, scale: CGSize(width: CGFloat(width) / max(1, w), height: CGFloat(height) / max(1, h)))
+    }
+
+    static func make(_ url: String, _ picture: UIImage, dark: Bool) -> Glow? {
+        guard let cg = picture.cgImage else { return nil }
+        // Small: a halo is soft by nature, and a 256-px bitmap blurs in a moment.
+        let fit = min(1, 256 / CGFloat(max(cg.width, cg.height)))
+        let w = max(1, Int(CGFloat(cg.width) * fit)), h = max(1, Int(CGFloat(cg.height) * fit))
+        let pad = Int(CGFloat(max(w, h)) * room)
+        let W = w + 2 * pad, H = h + 2 * pad
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let rect = CGRect(x: pad, y: pad, width: w, height: h)
+        if dark {
+            // Its white silhouette, as the logo itself is drawn.
+            ctx.clip(to: rect, mask: cg)
+            ctx.setFillColor(UIColor.white.cgColor)
+            ctx.fill(rect)
+        } else {
+            ctx.draw(cg, in: rect)
+        }
+        guard let drawn = ctx.makeImage() else { return nil }
+        let input = CIImage(cgImage: drawn)
+        let blurred = input.applyingGaussianBlur(sigma: Double(max(w, h)) * 0.045).cropped(to: input.extent)
+        guard let out = CIContext(options: [.useSoftwareRenderer: false]).createCGImage(blurred, from: input.extent) else { return nil }
+        let image = UIImage(cgImage: out)
+        ImageCache.shared.storeDerived(image, key: key(url, dark: dark))
+        return glow(image, out.width, out.height)
+    }
+}
+
+/// Whether a logo's ink is too dark for the dark grounds it is drawn on: less than a third of its
+/// opaque pixels are LEGIBLE there — OKLab L 0.6 and up, or a saturated colour from L 0.45 (chroma
+/// 0.12 and up: One Punch Man's red). Black type (The Eminence in Shadow) and Mushoku Tensei's
+/// bronze lettering fail it and are drawn white; Slime's blue bubble letters — dark-outlined, but
+/// mostly bright — keep their colour. Measured once per logo (a 32×32 sample), remembered.
+enum LogoInk {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var answers: [String: Bool] = [:]
+
+    static func known(_ url: String) -> Bool? { lock.withLock { answers[url] } }
+
+    static func measure(_ url: String, _ image: UIImage) -> Bool {
+        if let known = known(url) { return known }
+        let dark = isDark(image)
+        lock.withLock { answers[url] = dark }
+        return dark
+    }
+
+    static func isDark(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        let w = 32, h = 32
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return false }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var bright = 0.0, n = 0.0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            let a = Double(px[i + 3]) / 255
+            guard a > 0.5 else { continue }
+            // The context is premultiplied: undo it before reading the colour.
+            let (l, ca, cb) = PaletteCache.oklab(r: min(1, Double(px[i]) / 255 / a),
+                                                 g: min(1, Double(px[i + 1]) / 255 / a),
+                                                 b: min(1, Double(px[i + 2]) / 255 / a))
+            if l >= 0.6 || (l >= 0.45 && (ca * ca + cb * cb).squareRoot() >= 0.12) { bright += 1 }
+            n += 1
+        }
+        guard n >= 8 else { return false }
+        return bright / n < 0.33
     }
 }
 

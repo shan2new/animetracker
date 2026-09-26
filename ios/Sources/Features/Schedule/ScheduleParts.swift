@@ -45,6 +45,17 @@ enum ScheduleDebug {
         #endif
     }
 
+    /// `-scheduleDemoCountdown 1`: the countdown on the NEXT airing whatever its day, so it can be
+    /// photographed on a day with nothing airing. It changes what is DRAWN, never what is stored, and
+    /// the count it draws is the real one.
+    static var demoCountdown: Bool {
+        #if DEBUG
+        return UserDefaults.standard.bool(forKey: "scheduleDemoCountdown")
+        #else
+        return false
+        #endif
+    }
+
     /// `-scheduleDemoStates 1` — the test account has no AIRED-AND-UNWATCHED airing (both past
     /// slots are watched, and Mushoku is `planned`, so its four are correctly off the calendar),
     /// so the ladder cannot be photographed with all three rungs on real data. This draws the most

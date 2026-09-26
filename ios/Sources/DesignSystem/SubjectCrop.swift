@@ -206,8 +206,9 @@ final class SubjectCrop {
     }
 
     /// The simulator's Neural Engine path never returns: run every stage on the CPU there.
-    /// (`usesCPUOnly` is deprecated; the compute device is chosen per stage instead.)
-    nonisolated private static func preferCPUInSimulator(_ requests: [VNRequest]) {
+    /// (`usesCPUOnly` is deprecated; the compute device is chosen per stage instead.) Shared with
+    /// `PosterPick`'s text reading.
+    nonisolated static func preferCPUInSimulator(_ requests: [VNRequest]) {
         #if targetEnvironment(simulator)
         for request in requests {
             guard let stages = try? request.supportedComputeStageDevices else { continue }

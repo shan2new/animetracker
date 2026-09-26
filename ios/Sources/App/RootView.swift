@@ -88,16 +88,19 @@ struct RootView: View {
 
 }
 
-// The four tabs: Home (the departures board), the Feed, Library, Discover (26 Sep — "the today
-// screen should become Feed… feed should not be the home screen for sure", owner). `today` IS the
-// feed; the case keeps its name so every route and flag that means the feed still does. Schedule
-// is no longer a tab: Home's bar and "This week ›" push it.
+// The five tabs: Home (what to watch now), Schedule, the Feed, Library, Discover.
+// 26 Sep — "the today screen should become Feed… feed should not be the home screen for sure", then
+// the same day, of Schedule pushed from Home: "combining home with Schedule was a bad decision… Some
+// people specifically want the schedule view as the muscle memory" (owner). Schedule is a tab again,
+// in the slot it held before Home arrived (second). `today` IS the feed; the case keeps its name so
+// every route and flag that means the feed still does.
 enum AppTab: Int, CaseIterable, Hashable {
-    case home, today, library, discover
+    case home, schedule, today, library, discover
 
     var label: String {
         switch self {
         case .home:     "Home"
+        case .schedule: Copy.Schedule.title
         case .today:    "Feed"
         case .library:  "Library"
         // "Discover" (25 Sep): the tab is more than its field now — a top pick, recommendations,
@@ -111,6 +114,7 @@ enum AppTab: Int, CaseIterable, Hashable {
     var titleKey: LocalizedStringKey {
         switch self {
         case .home:     "Home"
+        case .schedule: "Schedule"
         case .today:    "Feed"
         case .library:  "Library"
         case .discover: "Discover"
@@ -122,6 +126,7 @@ enum AppTab: Int, CaseIterable, Hashable {
     var icon: String {
         switch self {
         case .home:     "TabHome"
+        case .schedule: "TabSchedule"
         case .today:    "TabToday"
         case .library:  "TabLibrary"
         case .discover: "TabDiscover"
@@ -171,15 +176,15 @@ struct MainTabView: View {
         Binding(get: { paths[tab] ?? NavigationPath() }, set: { paths[tab] = $0 })
     }
 
-    /// `-openTab today|schedule|library|discover` (DEBUG, like `-recapDemo`): open a scripted
+    /// `-openTab schedule|today|library|discover` (DEBUG, like `-recapDemo`): open a scripted
     /// simulator run on a given tab for captures. `-openAllTitles 1` lives on `LibraryView`.
     private static var launchTab: AppTab {
         #if DEBUG
         switch UserDefaults.standard.string(forKey: "openTab") {
+        case "schedule": return .schedule
         case "today", "feed": return .today
         case "library": return .library
         case "discover", "search": return .discover
-        // Schedule is Home's page now: `-openTab schedule` lands on Home and pushes it (`body`).
         default: return .home
         }
         #else
@@ -253,10 +258,10 @@ struct MainTabView: View {
             TabView(selection: selection) {
                 Tab(AppTab.home.titleKey, image: AppTab.home.icon, value: AppTab.home) {
                     NavigationStack(path: path(.home)) {
-                        // Home is the landing (26 Sep): what is out, what is next, this week. The
-                        // whole Schedule is its page, and Profile's door is its bar's disc too.
+                        // Home is the landing (26 Sep): what you can watch now. The calendar is the
+                        // Schedule TAB (its links switch to it), and Profile's door is the bar's disc.
                         HomeView(onOpenDetail: openEpisode,
-                                 onOpenSchedule: { push(.home, HomeRoute.schedule) },
+                                 onOpenSchedule: { selection.wrappedValue = .schedule },
                                  onOpenLibrary: { status in
                                      libraryRequest = .init(status: status)
                                      selectedTab = .library
@@ -269,20 +274,24 @@ struct MainTabView: View {
                                  topSignal: homePops,
                                  dismissSignal: feedDismissals)
                             .detailDestinations(push: { push(.home, $0) })
-                            .navigationDestination(for: HomeRoute.self) { route in
-                                switch route {
-                                case .schedule:
-                                    ScheduleView(onOpenDetail: openEpisode,
-                                                 onAddShow: { appModel.searchFieldRequested = true; selectedTab = .discover })
-                                        .pushedScreenChrome()
-                                        .perfScreen("Schedule")
-                                }
-                            }
                             .perfScreen("Home")
                             .tabBarReserve()
                     }
                     .tint(ThemeColor.interactive)
                     .pageInTransition(isActive: selectedTab == .home && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
+                    .systemTabBarHidden()
+                }
+                Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
+                    NavigationStack(path: path(.schedule)) {
+                        ScheduleView(onOpenDetail: openEpisode,
+                                     onAddShow: { appModel.searchFieldRequested = true; selectedTab = .discover },
+                                     active: selectedTab == .schedule && appModel.surfaceReady)
+                            .detailDestinations(push: { push(.schedule, $0) })
+                            .perfScreen("Schedule")
+                            .tabBarReserve()
+                    }
+                    .tint(ThemeColor.interactive)
+                    .pageInTransition(isActive: selectedTab == .schedule && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
                     .systemTabBarHidden()
                 }
                 Tab(AppTab.today.titleKey, image: AppTab.today.icon, value: AppTab.today) {
@@ -402,9 +411,6 @@ struct MainTabView: View {
                 SyncCenter.shared.startMonitoring()
                 #if DEBUG
                 ToastDemo.arm(appModel)
-                if UserDefaults.standard.string(forKey: "openTab") == "schedule" {
-                    paths[.home] = NavigationPath([HomeRoute.schedule])
-                }
                 if UserDefaults.standard.bool(forKey: "verifyArtworkIdentity") {
                     ArtworkIdentityRegression.run()
                 }

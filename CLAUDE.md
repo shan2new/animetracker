@@ -158,41 +158,104 @@ to `news:` with every social row, in one transaction, when research adopts the p
   from the raw API status/release fields. Keep this logic in the model layer, not the views, and
   reuse the existing sort-key accessors instead of re-inlining `?? .max` / `?? 0` sentinels.
 - **Home is the landing, the feed is a tab (26 Sep: "the today screen should become Feed… feed should
-  not be the home screen for sure", owner).** Tabs: **Home · Feed · Library · Discover** (`AppTab`:
-  `home`, `today` = the FEED — the case kept its name so every route and flag meaning the feed still
-  does; `-openTab today|feed`). Schedule left the bar: Home's calendar glyph and "This week ›" push it
-  (`HomeRoute.schedule`; `-openTab schedule` lands on Home and pushes it). Profile opens from Home's
-  disc as well as the feed's. `HomeView` + `HomeParts` (Features/Home) — the departures board the
-  mark stands for, each show in the FIRST place that carries it (`HomeCompose`, memoised on
-  `scheduleFeedKey`):
+  not be the home screen for sure", owner).** Tabs: **Home · Schedule · Feed · Library · Discover**
+  (`AppTab`: `home`, `schedule`, `today` = the FEED — the case kept its name so every route and flag
+  meaning the feed still does; `-openTab schedule|today|feed`). **Schedule is a TAB, in the second
+  slot it held before Home arrived** — build 3 folded it into Home (a calendar glyph and "This week ›"
+  pushed it) and the owner reversed that the same day: "combining home with Schedule was a bad
+  decision… Some people specifically want the schedule view as the muscle memory". Home keeps no
+  calendar: no glyph, no "This week" section, no `HomeRoute`; Recently aired's chevron and the
+  caught-up state's button SELECT the Schedule tab. Profile opens from Home's disc as well as the
+  feed's. `HomeView` + `HomeParts` (Features/Home) — what you can watch now, each show in the FIRST
+  place that carries it (`HomeCompose`, memoised on `scheduleFeedKey`):
   - **The billboard, full bleed** ("let's make it like the full bleed art it was earlier", then "make
     the art take more height"): the retired Today billboard's grammar at 0.84 × the window —
     `ArtHeader` on `billboardArt` (portrait-first, textless, drifting; a name set in TYPE starts its
     poster under the bar), `HeroTopVeil`, the restored `HeroCopyScrim` (Features/Home), then centred:
     `HeroBadge` ("New episode", "2 episodes behind" while airing, "3 episodes LEFT" in a finished
     season), the logo else the name, "Season 4 · Episode 22", the season bar, "Episode 24 aired
-    yesterday" under a backlog, and X's white "Mark as watched" pill. The pick: a drop you have not
-    seen (`freshCount` — `outNow`'s test WITHOUT its still-releasing gate: a finale's season stops
-    releasing the moment it airs), else tonight's airing, else the top of the queue, else the week's
-    first airing. It stretches on a pull (`visualEffect`, no body re-run); its copy rises in once.
+    yesterday" under a backlog, and X's white "Mark as watched" pill. **The pick is something you can
+    WATCH before anything you can only wait for** ("it shows Mushoku Tensei as the Hero but it is
+    upcoming, while I haven't watched Slime that aired yesterday", owner — build 3 put tonight's
+    airing above the queue, and a drop counted only on a Watching show): a fresh drop on a Watching
+    show (`freshCount` — `outNow`'s test WITHOUT its still-releasing gate: a finale's season stops
+    releasing the moment it airs), newest first; else the newest Recently aired episode on a part you
+    are FOLLOWING (`dropItem`, `isNews` — whatever shelf the show sits on: Paused and Watched shows
+    list there too); else the top of the queue ("Start watching" on one not begun,
+    `Copy.Today.startOrContinue`); and only when nothing is out, the next airing (today's, else the
+    week's first). It stretches on a pull (`visualEffect`, no body re-run); its copy rises in once.
+  - **Home's picture of a show is chosen by EYE** ("choose the best-looking poster, even if it is
+    from an earlier season", owner, 26 Sep — Slime's Season 4 key visual, dark and diagonal with its
+    faces at the edges, had taken the billboard). `PosterPick` (DesignSystem) grades every portrait
+    the catalogue holds for a show, ONCE, on the device, from a 480-px decode: mean OKLab L over the
+    band the billboard shows, Hasler–Süsstrunk colourfulness, the subject (`SubjectCrop.subject`),
+    LETTERING (Vision text recognition, CJK included — minimum height 3 %, so a billing block does
+    not count) and the measured width. Three passes, so a first visit is not kept waiting: TMDB's
+    untagged posters (read, since the tag is an uploader's word — Slime's second "textless" Season 4
+    poster prints the Japanese title), then TMDB's language-tagged ones (titled by definition: tone
+    and subject only), then the seasons' AniList covers (460 px — soft on a billboard). Grades and
+    picks persist (`Caches/poster-pick-v2.json`; a pick is keyed on its candidate list's FNV
+    signature, so a new upload re-decides). The billboard waits `pickPatience` (2 s) on first sight,
+    then SETTLES once and never swaps under the reader (a cold pick measured 1.1 s on the sim). The
+    NAME follows the picture (`Choice.billboardName`): the show's logo on a clean picture ("the posters
+    used to have Picture Series Logos", owner); nothing where the picture's own lettering is in view
+    between the bar and the words (`.embedded` — the lockup draws no title; type at AX sizes); else
+    the logo, else type. Up next tiles wear the same pick, the logo on a clean one. Why the server's
+    choice was not enough: `rankArtwork` keeps a show's six BIGGEST uploads for the show as a whole,
+    and never looks at one. `-homeHero <franchiseId>` (DEBUG) photographs a show on the billboard.
+    The LOCAL database carries TMDB galleries for ten of the owner's shows, copied from TMDB's public
+    pages (26 Sep) so the picker could be photographed; every other local show is AniList-only.
+  - **The billboard GLOWS** ("utterly delightful and an eye candy without going overboard", then
+    "Glow is sick, let's do that", owner, 26 Sep — `HomeHeroScene.swift`): light and depth, nothing
+    added to the page. The arrival plays as the launch's CURTAIN lifts (`LaunchHandoff.emerging`) —
+    at launch it used to finish under the splash — the picture settling into focus from 5 % large
+    (`FocusSettle`), the logo resolving out of a blur (`LogoResolve`) with a halo of its own light
+    (`LogoImage(halo:)`: the logo, or its white silhouette, blurred ONCE into a cached bitmap), the
+    words rising under it; the art moves at 0.42 of the page's speed and leans ±6 pt with the phone
+    (`HeroTilt`, CoreMotion, read only by `TiltShift`; 3.5 % oversize so a lean never shows an
+    edge, clipped below the frame by `BelowClip`); the lockup sits in a pool of the poster's colour
+    (`HeroLight.glow`, `plusLighter`); a mark sends one ring out of the pill (`MarkPulse`). Reduce
+    Motion: all of it still. Tried and DELETED the same day: COVER — the logo as a masthead in the
+    picture with the poster's subject cut out in front of it (Vision's foreground instance mask, the
+    Lock Screen's depth effect): striking on One Punch Man, but it hid "Shadow" behind heads on The
+    Eminence in Shadow and had nowhere to go on key visuals whose characters fill the top. The
+    simulator cannot run that model ("Could not create inference context").
+  - **A dark logo is drawn white** (`LogoImage` + `LogoInk` behind `ArtworkLogo`, so app-wide): the
+    app draws logos only on dark grounds (a scrim, a tile's foot gradient, a scene's shade), and a
+    logo whose opaque ink is less than a third LEGIBLE there (OKLab L ≥ 0.6, or a saturated colour
+    from L 0.45) becomes a white silhouette of itself — The Eminence in Shadow's only English logo
+    is black type, Mushoku Tensei's bronze; One Punch Man's red and Slime's blue keep their colour.
   - **The page sits in the show's hue** ("maybe add subtle gradient too", owner): `HomeGround` — the
     scrim lands on `DetailTint.ground(tint, groundTopLightness)` and the page eases to canvas over
     520 pt, one faint pool of the tint; the bar's solid ground is that colour, and it turns solid the
     moment the billboard's COPY reaches it (`HomeChrome.trackCopy`), never with words under its glyphs.
   - **Recently aired** ("what about previous week / unmarked episodes?", owner): the last seven days'
-    aired, unmarked episodes, newest first, as Schedule's agenda rows with the ring (a batch confirms
-    its count). **Up next**: the rest of the queue (Library's Continue rule) as the LIBRARY's poster
+    aired, unmarked episodes, newest first, ONE PER SHOW — its newest episode ("Only the most recent
+    episode of that series NOT multiple unseen episodes", owner), naming the run still to watch
+    ("Episodes 22–24") and marking through it (a batch confirms its count). Since 26 Sep it is a
+    shelf of DROPS ("recently air feels really dull and uninteresting. Not delightful at all", owner,
+    of the agenda rows it began as — `HomeRecent.swift`): Apple TV's Up Next, a 300-pt 16:9 card of
+    the show's own SCENE (`Franchise.sceneArt`: a TMDB backdrop, textless first, never an AniList
+    banner; else the picked poster filled from its top), its logo at the foot on a shade, NEW / 3
+    NEW, the mark disc in the corner, a soft pool of the scene's colour under it; beneath, "Episodes
+    10–12" and "Aired Monday". RINGS — the feed's story tray on Home, a tap opening the story viewer
+    — was built beside it and looked sparse (and a season that has just finished has no reel, so its
+    finale fell out); `-recentDirection rows|rings` (DEBUG) keeps both for comparison until the
+    owner picks. Up next leads with what you are IN THE
+    MIDDLE OF (a fresh drop first, then any show with progress), never-begun Watching shows last —
+    the shelf's biggest-backlog order had put an unstarted show first; a card without a bar keeps
+    the bar's 3 pt so the captions share a baseline, and a card entering from the shelf's edge grows
+    from 0.94 (`scrollTransition`, render pass only). **Up next**: the rest of the queue (Library's Continue rule) as the LIBRARY's poster
     card (`HomeUpNextTile` = `ArtworkPoster` 150 pt, 2:3) with the bar under the poster, a NEW tag on
     a fresh drop and the mark as the corner disc (`HomeMarkDisc` — For you's add, with a check). The
     16:9 episode cards it replaced composited covers in boxes for most anime ("utter trash", owner).
-    **This week**: the next seven days' airings in the agenda row; "›" opens Schedule.
   - **A mark is an event**: the control holds its marked state for `commitBeat` (0.55 s), then the
     write lands inside `uiSettle` and what changed ROLLS (`.contentTransition(.numericText())` on the
     badge, the episode, the caption), a finished row or tile leaves, and a caught-up billboard hands
     over (`.handoff`). The launch hands off on the billboard's picture (`HomeView.markArtReady`).
   - The four "directions" (tray / card / both / deck) were photographed on the owner's library on a
-    second simulator before this; the full-bleed billboard won. `-homeAnchor recent|upnext|week`
-    (DEBUG) scrolls a capture to a section.
+    second simulator before this; the full-bleed billboard won. `-homeAnchor recent|upnext` (DEBUG)
+    scrolls a capture to a section.
 - **Today is the feed (25 Sep — the build brief's decisions are final; ios-spec's iD1–iD21 are the
   ones this build added; since 26 Sep it is the FEED tab, not the landing — see Home above).** `FeedView` (Features/Feed) is the Today root: `FeedHeader` (the leading
   account disc → the Profile sheet, which is the ONLY way into Profile — settings, sign-out and
@@ -411,14 +474,14 @@ to `news:` with every social row, in one transaction, when research adopts the p
 - **The bottom bar is the APP'S, and it is X's (25 Sep: "iOS nav is too large and it competes with
   the content too… We need a deep overhaul of this… Use X's not insta's", owner).** `AppTabBar`
   (App/AppTabBar.swift), measured off X on the owner's iPhone: a 49-pt band above the home
-  indicator, FLUSH with the page (canvas), one physical pixel of `feedSeparator` on top, four equal
-  slots across the full width, ICONS ONLY, every glyph in one ink (`feedText`) — the selected tab
+  indicator, FLUSH with the page (canvas), one physical pixel of `feedSeparator` on top, five equal
+  slots across the full width (X's own count), ICONS ONLY, every glyph in one ink (`feedText`) — the selected tab
   is told apart by its glyph alone, FILLED where the rest are outlines (Discover's magnifier goes
   heavier; nothing to fill). No amber on the bar any more: X draws no colour there, so the old
   "a selected tab is state, so it is amber" rule is retired with the pill. Glyphs are Tabler
   icons (26 Sep — see "Every icon is a Tabler icon"): outline at rest, Tabler's own filled form when
-  selected — `home` (Home), `device-tv` (the Feed), `library`, `search` (`TabHome/Today/Library/
-  Discover` + `Fill`; `TabSchedule` stays in the catalogue unused), redrawn by icon/tabler/icons.py
+  selected — `home` (Home), `calendar` (Schedule), `device-tv` (the Feed), `library`, `search`
+  (`TabHome/Schedule/Today/Library/Discover` + `Fill`), redrawn by icon/tabler/icons.py
   with 1.5 units of air so the ink lands ~21 pt in the 28-pt frame. Drawn at 28 pt: ~20-pt
   ink, centred 24.5 pt under the rule (X: 20.7 / 24.5). What it replaced: iOS 26's floating
   glass pill — ~62 pt of labelled capsule lifted over the content, amber selection.
@@ -819,7 +882,7 @@ to `news:` with every social row, in one transaction, when research adopts the p
   `zoomSource` registrations stay but nothing consumes them (see `detailDestinations`);
   re-selecting the active tab pops to root — Library also drops its All-titles item destination
   (`LibraryView.popSignal`). A tapped episode alert opens its show: `EpisodeNotifications.onOpen`
-  → `AppModel.pendingOpen` → `MainTabView` selects Today and pushes `DetailRoute` (verified with
+  → `AppModel.pendingOpen` → `MainTabView` selects Home and pushes `DetailRoute` (verified with
   `xcrun simctl push` + a banner tap); a reply or reminder alert carries a typed route
   (`pendingRoute` → `FeedRoute`, see "Today is the feed"). Alerts: three per watching anime show from `part.airings`,
   round-robin so every show keeps its soonest before any gets its second, armed the moment the
@@ -838,6 +901,22 @@ to `news:` with every social row, in one transaction, when research adopts the p
   and Detail's `load()` ignore it, and `loadError` flips inside `withAnimation(uiGentle)` so every
   "couldn't refresh" footnote fades in instead of shoving the content under it.
 - `API_BASE_URL` is a build setting in `project.yml` → `Info.plist` → `AppConfig.apiBaseURL`.
+- **Schedule is LIT (26 Sep: "Schedule UI/UX needs to feel more beautiful and delightful", owner —
+  two directions filmed on the owner's calendar; they chose POLISH, "but the horizontal timeline is
+  distracting and irritating").** `ScheduleLit.swift`: the Tonight card is Home's billboard at card
+  scale (`ScheduleLitCard`, square — the show's `PosterPick` poster as a PICTURE, `HeroCopyScrim`
+  only under the words scaled by `HeroProtection` and landing on the art's hue at depth, the logo on
+  clean art, an OUT NOW tag, a glow of the art's colour drawn by the card's shape); each row's face
+  sits in a breath of its show's colour (`ScheduleRowDecor.hueURL`, a canvas-filled shape whose
+  shadow is the colour); today's next airing reads "Episode 14 · in 2h 14m" with the countdown in
+  accent (`countdownRow`; `-scheduleDemoCountdown 1` puts it on the next airing of any day for a
+  capture); the card's words and the rows rise in once per VISIT (`active` from `RootView`, the
+  launch's curtain respected) in under 0.3 s; and the feed LANDS on today from its first frame and
+  holds there until the reader touches it (`landingProbe` + `reland`, ≤ 8 re-lands) — it used to draw
+  the past days first and jump ~130 ms later. REJECTED and deleted: the NOW line (Apple Calendar's
+  amber hairline with a time capsule — "distracting and irritating"), BOARD (each date's numeral on
+  split-flap tiles turning from blank, a countdown on flaps) and the clock tinted in the show's hue
+  (every time came out salmon on this library's warm posters). The old `ScheduleTonightCard` is gone.
 - **Schedule is TONIGHT over an agenda (25 Sep rebuild — "We need to Overhaul the Schedule Screen
   completely for this new awesome UX", owner; three directions were spiked on the real calendar —
   X timeline posts, X's compact agenda, a card over the agenda — the owner chose the card, then
