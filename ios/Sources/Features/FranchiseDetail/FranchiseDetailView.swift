@@ -143,6 +143,7 @@ struct FranchiseDetailView: View {
                 }
             }
         }
+        .preference(key: TabBarGroundKey.self, value: groundFoot)
         // This screen hides its navigation-bar background so the hero can own the top. Two veils
         // replace the system edge, Today's anatomy exactly:
         //  * while ARTWORK is behind the toolbar, a soft one fades in with the scroll — the

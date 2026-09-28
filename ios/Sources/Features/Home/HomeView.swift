@@ -141,11 +141,11 @@ struct HomeView: View {
                         }
                     }
                 }
-                // The billboard runs under the status bar and the bar, as the old Today's did.
+                // Keep the billboard full bleed at the top; the compact navigation reserve
+                // stops cards above the icon row, rather than letting artwork compete with it.
                 .ignoresSafeArea(edges: .top)
                 .scrollIndicators(.hidden)
-                .tabBarContentMargin()
-                .laneClearance(appModel)
+                .laneClearance(appModel, base: ThemeSpace.x3)
                 .previouslyRefreshable { await appModel.reload() }
 
                 HomeHeader(chrome: chrome,
@@ -167,8 +167,9 @@ struct HomeView: View {
             #endif
         }
         .background(ThemeColor.canvas.ignoresSafeArea())
+        .preference(key: TabBarGroundKey.self, value: chrome.solid ? ThemeColor.canvas : groundTop(feed))
         // The bar is Home's own; no system edge effect and no system navigation bar under it.
-        .chromeScrollEdgeHidden(.top)
+        .chromeScrollEdgeHidden(.all)
         .toolbar(.hidden, for: .navigationBar)
         .fullScreenCover(item: $story) { start in
             StoryViewer(reels: storyReels, start: start, origins: storyOrigins,

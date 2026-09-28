@@ -5,7 +5,7 @@ import UIKit
 /// with the content too… We need a deep overhaul of this… Use X's not insta's", owner).
 ///
 /// Measured off X on the owner's iPhone (393 pt wide): a 49-pt band above the home indicator,
-/// FLUSH with the page (X's black; ours is the canvas), one physical pixel of rule on top, the tabs
+/// FLUSH with the page (X's black; ours is the page's opaque ground), no dividing rule, the tabs
 /// in equal slots across the whole width, ICONS ONLY — no labels — every glyph in one ink, and the
 /// selected tab told apart by its glyph alone: filled where the others are outlines (search goes
 /// heavier, having nothing to fill). The glyphs draw ~21 pt at a ~2-pt stroke, centred in the band.
@@ -30,6 +30,8 @@ protocol ScrollAwayChrome: AnyObject {
 
 struct AppTabBar: View {
     let selected: AppTab
+    /// An opaque surface matching the page; artwork never competes with the icons.
+    var ground: Color = ThemeColor.canvas
     /// The scrolling header of the page in front — the feed's, Discover's — else nil. The bar rides
     /// the header's own offset — slid down by the same fraction the header has slid up — so the
     /// two leave together, come back together and settle together.
@@ -39,10 +41,15 @@ struct AppTabBar: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     /// The band above the home indicator — UIKit's tab-bar height, and X's.
-    static let height: CGFloat = 49
+    nonisolated static let height: CGFloat = 49
     /// The glyph's frame. The 30-pt template pads 3 pt each side, so the drawn glyph is ~20 pt
     /// at a ~1.9-pt stroke (X: 20.7 / 2.0).
     static let glyph: CGFloat = 28
+    /// Use part of the bottom safe area to bring the icon row closer to the edge.
+    /// Retain the rest for the home gesture; phones without that inset keep the normal layout.
+    nonisolated static var bottomOverlap: CGFloat { min(18, ThemeMetrics.bottomSafeInset) }
+    /// The space every page reserves above the window's own bottom safe area.
+    nonisolated static var reservedHeight: CGFloat { height - bottomOverlap }
 
     /// How far the bar has gone: 0 (all there) … 1 (off the bottom edge). VoiceOver keeps it —
     /// a bar that leaves with a scroll is one the reader cannot find again by touch.
@@ -56,8 +63,9 @@ struct AppTabBar: View {
     var body: some View {
         let away = away
         bar
-            // Its whole height, the rule and the home-indicator strip included, clears the edge.
-            .offset(y: away * (ThemeMetrics.tabBarVisualHeight + FeedMetrics.hairline))
+            .offset(y: Self.bottomOverlap)
+            // Its whole visible height, including the home-indicator strip, clears the edge.
+            .offset(y: away * ThemeMetrics.tabBarVisualHeight)
             // Leaving the feed with the bar away (a post opened, a show) brings it back in a
             // slide, not a jump — keyed on the SOURCE only, so a scroll still moves it point for
             // point with the finger, never behind it.
@@ -74,13 +82,10 @@ struct AppTabBar: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: Self.height)
-        .background(alignment: .top) {
-            Rectangle()
-                .fill(ThemeColor.feedSeparator)
-                .frame(height: FeedMetrics.hairline)
+        .background {
+            ground.ignoresSafeArea(edges: .bottom)
         }
-        .background(ThemeColor.canvas.ignoresSafeArea(edges: .bottom))
-        // VoiceOver reads a real tab bar: "Today, tab, 1 of 4, selected".
+        // VoiceOver reads a real tab bar: "Home, tab, 1 of 5, selected".
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isTabBar)
     }
@@ -104,6 +109,47 @@ struct AppTabBar: View {
         .accessibilityShowsLargeContentViewer {
             Label { Text(tab.label) } icon: { Image(tab.icon).renderingMode(.template) }
         }
+    }
+}
+
+/// The visible page reports its ground so the persistent navigation meets it without a seam.
+struct TabBarGroundKey: PreferenceKey {
+    // Unstyled overlays must not replace the page color when preferences are combined.
+    static var defaultValue: Color? { nil }
+    static func reduce(value: inout Color?, nextValue: () -> Color?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+private struct TabBarGroundActionKey: EnvironmentKey {
+    static var defaultValue: (Color) -> Void { { _ in } }
+}
+
+extension EnvironmentValues {
+    var tabBarGroundChanged: (Color) -> Void {
+        get { self[TabBarGroundActionKey.self] }
+        set { self[TabBarGroundActionKey.self] = newValue }
+    }
+}
+
+/// Report from each page's own hosting controller. Preferences do not cross NavigationStack's
+/// destination hosts. A covered page may finish loading artwork, but must not recolor the bar.
+struct TabBarGroundReporter: ViewModifier {
+    @Environment(\.tabBarGroundChanged) private var report
+    @State private var ground = ThemeColor.canvas
+    @State private var visible = false
+
+    func body(content: Content) -> some View {
+        content
+            .onPreferenceChange(TabBarGroundKey.self) { next in
+                ground = next ?? ThemeColor.canvas
+                if visible { report(ground) }
+            }
+            .onAppear {
+                visible = true
+                report(ground)
+            }
+            .onDisappear { visible = false }
     }
 }
 

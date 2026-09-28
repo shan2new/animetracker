@@ -157,6 +157,7 @@ struct MainTabView: View {
     @State private var todayPops = 0
     /// Bumped when Home is re-selected: its covers close and it goes to its top.
     @State private var homePops = 0
+    @State private var tabGrounds: [AppTab: Color] = [:]
     /// Bumped by the notification routes: the feed closes every cover and sheet first, so the page
     /// the route pushes is the one on screen.
     @State private var feedDismissals = 0
@@ -209,7 +210,9 @@ struct MainTabView: View {
     @ViewBuilder
     private var tabBar: some View {
         if !keyboard.covering {
-            AppTabBar(selected: selectedTab, scrollAway: scrollingHeader) {
+            AppTabBar(selected: selectedTab,
+                      ground: tabGrounds[selectedTab] ?? ThemeColor.canvas,
+                      scrollAway: scrollingHeader) {
                 selection.wrappedValue = $0
             }
             .transition(.opacity)
@@ -280,6 +283,7 @@ struct MainTabView: View {
                     .tint(ThemeColor.interactive)
                     .pageInTransition(isActive: selectedTab == .home && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
                     .systemTabBarHidden()
+                    .environment(\.tabBarGroundChanged, { tabGrounds[.home] = $0 })
                 }
                 Tab(AppTab.schedule.titleKey, image: AppTab.schedule.icon, value: AppTab.schedule) {
                     NavigationStack(path: path(.schedule)) {
@@ -293,6 +297,7 @@ struct MainTabView: View {
                     .tint(ThemeColor.interactive)
                     .pageInTransition(isActive: selectedTab == .schedule && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
                     .systemTabBarHidden()
+                    .environment(\.tabBarGroundChanged, { tabGrounds[.schedule] = $0 })
                 }
                 Tab(AppTab.today.titleKey, image: AppTab.today.icon, value: AppTab.today) {
                     NavigationStack(path: path(.today)) {
@@ -322,6 +327,7 @@ struct MainTabView: View {
                     .tint(ThemeColor.interactive)
                     .pageInTransition(isActive: selectedTab == .today && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
                     .systemTabBarHidden()
+                    .environment(\.tabBarGroundChanged, { tabGrounds[.today] = $0 })
                 }
                 Tab(AppTab.library.titleKey, image: AppTab.library.icon, value: AppTab.library) {
                     NavigationStack(path: path(.library)) {
@@ -336,6 +342,7 @@ struct MainTabView: View {
                     .tint(ThemeColor.interactive)
                     .pageInTransition(isActive: selectedTab == .library && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
                     .systemTabBarHidden()
+                    .environment(\.tabBarGroundChanged, { tabGrounds[.library] = $0 })
                 }
                 // An ORDINARY tab, not the search role: the field lives under the title on the
                 // screen itself (Apple Music's Search — user reference, 24 Aug).
@@ -353,6 +360,7 @@ struct MainTabView: View {
                     .tint(ThemeColor.interactive)
                     .pageInTransition(isActive: selectedTab == .discover && appModel.surfaceReady, fadeIn: launch?.finished ?? true)
                     .systemTabBarHidden()
+                    .environment(\.tabBarGroundChanged, { tabGrounds[.discover] = $0 })
                 }
             }
             .environment(\.zoomNamespace, zoom)
@@ -452,7 +460,7 @@ struct MainTabView: View {
             // the bar's own height while the bar is up.
             ToastHost()
                 .padding(.horizontal, ThemeMetrics.gutter)
-                .padding(.bottom, (keyboard.covering ? 0 : AppTabBar.height) + ThemeSpace.x3)
+                .padding(.bottom, (keyboard.covering ? 0 : AppTabBar.reservedHeight) + ThemeSpace.x3)
 
             // A suspended account (iD14): the app is covered — Sign out and Delete account only.
             if appModel.accountSuspended {

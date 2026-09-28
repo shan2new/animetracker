@@ -249,7 +249,7 @@ enum ThemeMetrics {
     /// strip under it. For a measurement taken in WINDOW coordinates — the feed's pager, which
     /// ignores the safe area, and the autoplay's viewport; a view laid out inside the safe area is
     /// already clear of the bar.
-    static var tabBarVisualHeight: CGFloat { AppTabBar.height + bottomSafeInset }
+    static var tabBarVisualHeight: CGFloat { AppTabBar.reservedHeight + bottomSafeInset }
 
     // Row heights. A row's height is set by its ART, not by a hairline grid: 68 pt everywhere is
     // what makes a media app look like a list of settings.

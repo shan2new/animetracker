@@ -1282,7 +1282,7 @@ private struct TabBarReserve: ViewModifier {
     func body(content: Content) -> some View {
         content.safeAreaInset(edge: .bottom, spacing: 0) {
             Color.clear
-                .frame(height: KeyboardPresence.shared.covering ? 0 : AppTabBar.height)
+                .frame(height: KeyboardPresence.shared.covering ? 0 : AppTabBar.reservedHeight)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
@@ -1356,6 +1356,8 @@ extension View {
     /// (`pushedScreenChrome`); a sheet or a cover has no bar and no reserve.
     func tabBarReserve() -> some View {
         modifier(TabBarReserve())
+            .chromeScrollEdgeHidden(.bottom)
+            .modifier(TabBarGroundReporter())
     }
 
     /// Native Liquid Glass for chrome, with the Reduce Transparency fallback the spec requires
