@@ -25,7 +25,11 @@
   "upload": {
     "attempted": true,
     "completed": false,
-    "error": "App Store Connect access is required; Xcode Apple Accounts is signed out."
+    "method": "Documented xcodebuild -exportArchive CLI with ExportOptions-upload.plist and -allowProvisioningUpdates",
+    "exitCode": 70,
+    "error": "exportArchive Failed to Use Accounts: App Store Connect access for YLPZXZS2F4 is required.",
+    "log": "release-upload.txt",
+    "alternateAppStoreConnectAPIKeyConfigured": false
   },
   "testFlight": {
     "processingVerified": false,

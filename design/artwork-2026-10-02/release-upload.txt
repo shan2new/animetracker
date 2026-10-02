@@ -1,0 +1,5 @@
+2026-10-02 11:56:16.683 xcodebuild[98962:4739963] [MT] IDEDistribution: -[IDEDistributionLogging _createLoggingBundleAtPath:]: Created bundle at path "/var/folders/t8/18rddswj5r76q9782g0hlc9m0000gn/T/AniTrack_2026-10-02_11-56-16.683.xcdistributionlogs".
+error: exportArchive Failed to Use Accounts
+  App Store Connect access for “YLPZXZS2F4” is required. Ensure that your Apple Account usernames and passwords are correct in Accounts settings.
+
+** EXPORT FAILED **

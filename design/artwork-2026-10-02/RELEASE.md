@@ -48,6 +48,10 @@ Release archive, and inspection verified app/widget version 1.0 (6), iOS 18 mini
 production API, configured Clerk key, all four selected assets and valid code signing.
 The existing Clerk key is a development key, matching the previous beta configuration.
 
-The App Store Connect upload is currently blocked before transmission: Xcode Apple Accounts
-is signed out. The native sign-in dialog is open for the user. Upload, processing and tester
-availability remain unverified. [Current release receipt](release-receipt.json).
+The documented `xcodebuild -exportArchive` upload, using `ExportOptions-upload.plist` and
+`-allowProvisioningUpdates`, exits 70 with `exportArchive Failed to Use Accounts`:
+App Store Connect access for team `YLPZXZS2F4` is required. Xcode Apple Accounts is signed out,
+and no App Store Connect API key is configured as an alternative. The native sign-in dialog
+is open for restoring account access; the upload will be completed through the CLI.
+Upload, processing and tester availability remain unverified.
+[Current release receipt](release-receipt.json), [CLI upload log](release-upload.txt).
