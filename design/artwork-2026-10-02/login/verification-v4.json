@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-02",
+  "scope": "Compact welcome branding and removal of the slogan over the cozy room backdrop",
+  "build": {
+    "passed": true,
+    "scheme": "AniTrack",
+    "configuration": "Debug",
+    "simulator": "iPhone 14 Pro / iOS 27.0",
+    "durationSeconds": 19.2,
+    "receipt": "build-v4.log"
+  },
+  "nativeChecks": {
+    "ordinaryText": "10-welcome-compact.jpg",
+    "accessibilityText": "11-compact-accessibility.jpg",
+    "accessibilityCategory": "UICTContentSizeCategoryAccessibilityXXXL",
+    "gitDiffCheck": "passed"
+  },
+  "treatment": {
+    "slogan": null,
+    "markWidthPoints": 56,
+    "wordmarkBaseSizePoints": 20,
+    "identityCenterHeightFraction": 0.32,
+    "background": "login-cozy-backdrop-v3",
+    "launchIdentityGeometryChanged": false
+  },
+  "boundaries": {
+    "renderingVerified": true,
+    "launchTransitionVerified": false,
+    "touchNavigationVerified": false,
+    "oauthAttempted": false,
+    "credentialsEntered": false,
+    "smallDeviceRendering": false,
+    "realDevice": false,
+    "productionSettingsChanged": false,
+    "productionDataChanged": false,
+    "uploaded": false,
+    "committed": false,
+    "userAccepted": true
+  }
+}

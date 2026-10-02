@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-02",
+  "branch": "spike/today-feed",
+  "scope": "Original quiet artwork in empty Library, first-use Schedule and successfully loaded empty Saved",
+  "simulator": {
+    "id": "492DD323-4FF6-4DC7-991B-175E57A359F1",
+    "device": "iPhone 14 Pro",
+    "os": "iOS 27.0"
+  },
+  "build": {
+    "passed": true,
+    "durationSeconds": 27.2,
+    "warnings": 6,
+    "newWarnings": 0,
+    "receipt": "build.log",
+    "scheme": "AniTrack",
+    "configuration": "Debug",
+    "overrides": [
+      "API_BASE_URL=http://localhost:18789",
+      "CLERK_PUBLISHABLE_KEY="
+    ]
+  },
+  "checks": {
+    "nativeLibrary": "06-library-current.jpg",
+    "nativeSchedule": "03-schedule-after.jpg",
+    "nativeSaved": "04-saved-after.jpg",
+    "accessibilitySchedule": "05-schedule-accessibility.jpg",
+    "gitDiffCheck": "passed",
+    "priorLibraryAccessibility": "../scout/13-library-accessibility.jpg",
+    "priorPopulatedLibrary": "../scout/14-library-populated-after.jpg",
+    "savedAccessibility": "Shared fallback code inspected; separate capture not performed",
+    "populatedSchedule": "Original native scout inspected; not recaptured after first-use-only change"
+  },
+  "evidenceBoundary": {
+    "nativeRendering": true,
+    "semanticTouchNavigation": false,
+    "realDevice": false,
+    "productionWrites": false,
+    "productionSettingsChanged": false,
+    "uploaded": false,
+    "committed": false
+  },
+  "generatedAssets": [
+    {
+      "name": "empty-library-episode-frames-v2",
+      "bytes": 144883
+    },
+    {
+      "name": "empty-schedule-flap-calendar-v1",
+      "bytes": 170674
+    },
+    {
+      "name": "empty-saved-bookmark-frames-v1",
+      "bytes": 153631
+    }
+  ],
+  "model": "Built-in imagegen; Sunburst not selectable or verified",
+  "preview": {
+    "data": "Explicit empty responses; earlier populated captures use actual read-only catalogue/library records",
+    "savedAdapterCorrection": "/me/saves corrected to /me/saved; adapter error capture excluded from valid scout",
+    "screenshotAssertionCorrection": "Library wait text corrected from Start your library to Your library is empty; actual native state verified"
+  },
+  "assets": {
+    "transparent": true,
+    "slotPoints": [
+      128,
+      100
+    ],
+    "scales": [
+      2,
+      3
+    ],
+    "packaging": "Crop transparent padding and resample only"
+  }
+}

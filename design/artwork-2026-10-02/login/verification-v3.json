@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-02",
+  "scope": "Cozy welcome background replacing inline illustration",
+  "build": {
+    "passed": true,
+    "scheme": "AniTrack",
+    "configuration": "Debug",
+    "simulator": "iPhone 14 Pro / iOS 27.0",
+    "durationSeconds": 17.3,
+    "receipt": "build-v3.log"
+  },
+  "nativeChecks": {
+    "ordinaryText": "08-welcome-backdrop.jpg",
+    "accessibilityText": "09-backdrop-accessibility.jpg",
+    "comparison": "welcome-backdrop-comparison.jpg",
+    "gitDiffCheck": "passed"
+  },
+  "asset": {
+    "name": "login-cozy-backdrop-v3",
+    "source": "../source/login-cozy-backdrop-v3.png",
+    "sourcePixels": [
+      853,
+      1844
+    ],
+    "imagesetBytes": 333000,
+    "prompt": "prompt-v3.json",
+    "tool": "Built-in imagegen",
+    "sunburst": "Not selectable or verified"
+  },
+  "boundaries": {
+    "renderingVerified": true,
+    "touchNavigationVerified": false,
+    "oauthAttempted": false,
+    "credentialsEntered": false,
+    "smallDeviceRendering": false,
+    "realDevice": false,
+    "productionSettingsChanged": false,
+    "productionDataChanged": false,
+    "uploaded": false,
+    "committed": false
+  },
+  "treatment": {
+    "fullScreen": true,
+    "static": true,
+    "decorative": true,
+    "interceptsTouches": false,
+    "dimming": "Gradient over title/caption and bottom action; extra 0.20 canvas overlay at accessibility text sizes",
+    "caption": "Ivory ink"
+  }
+}

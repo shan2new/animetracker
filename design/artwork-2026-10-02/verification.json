@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-02",
+  "app": "Previously.",
+  "scheme": "AniTrack",
+  "configuration": "Debug",
+  "device": "iPhone 14 Pro",
+  "os": "iOS 27.0",
+  "simulatorId": "492DD323-4FF6-4DC7-991B-175E57A359F1",
+  "build": "passed",
+  "buildLog": "quiet-build-v2.log",
+  "scoutScreenStates": 11,
+  "scout": "scout/SCOUT.md",
+  "selectedPlacement": "Empty Library only",
+  "nativeSlotPoints": [
+    128,
+    100
+  ],
+  "generatedAssets": 1,
+  "packagedPNGBytes": 144883,
+  "source": "source/empty-library-episode-frames-v2.png",
+  "prompt": "quiet-artwork-prompt-v2.json",
+  "generator": "Built-in image_gen",
+  "model": "Sunburst selection unavailable and unverified",
+  "captures": {
+    "beforeOriginal": "scout/01-library-empty-before.jpg",
+    "priorDirection": "scout/12-library-empty-after.jpg",
+    "after": "scout/15-library-flap-v2.jpg",
+    "themeComparison": "scout/library-theme-v2.jpg",
+    "originalComparison": "scout/library-native-v2.jpg"
+  },
+  "renderReview": "V2 native screenshot reviewed: dark panels readable, single small coral accent, existing text and action intact",
+  "interaction": "Unverified: semantic tap reported success without navigation; launch arguments used for rendering",
+  "data": "Read-only real catalogue/library/feed snapshots; local empty-account responses for first-use screens; no production credentials",
+  "oldGenreExperiment": "Retired, removed from active asset catalogue, original lookup restored",
+  "productionBackendChanged": false,
+  "testflightUploaded": false,
+  "revision": 2,
+  "feedback": "V1 looked nice but did not match the app theme and character",
+  "artDirection": "Graphite hinged episode frames, ivory play mark, coral period; Previously split-flap vocabulary",
+  "buildSeconds": 22.0,
+  "accessibilityAndPopulatedChecks": "Previously passed in v1; branch and slot unchanged, not repeated in asset-only v2 revision",
+  "oldLibraryExperiment": "V1 imageset removed from active catalogue and saved in retired-library-v1; source/prompt/captures preserved"
+}
