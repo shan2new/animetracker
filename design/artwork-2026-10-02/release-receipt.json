@@ -1,0 +1,35 @@
+{
+  "archivePath": "/Users/shan2new/Library/Developer/Xcode/Archives/2026-10-02/AniTrack 02-10-26, 11.53\u202fAM.xcarchive",
+  "bundleIdentifier": "com.anitrack.app",
+  "displayName": "Previously.",
+  "version": "1.0",
+  "build": "6",
+  "widgetVersion": "1.0",
+  "widgetBuild": "6",
+  "apiBaseURL": "https://anime.cognipin.com",
+  "clerkConfigured": true,
+  "clerkKeyType": "development",
+  "sdk": "iphoneos27.0",
+  "minimumOS": "18.0",
+  "codeSigningValid": true,
+  "artworkAssets": [
+    "empty-library-episode-frames-v2",
+    "empty-schedule-flap-calendar-v1",
+    "empty-saved-bookmark-frames-v1",
+    "login-cozy-backdrop-v3"
+  ],
+  "retiredArtworkExcluded": true,
+  "binaryBuildVersion": "LC_BUILD_VERSION\n  cmdsize 32\n platform 2\n    minos 18.0\n      sdk 27.0\n   ntools 1\n     tool 3\n  version 27037.1\nLoad command 12\n      cmd LC_SOURCE_VERSION\n  ",
+  "sourceCommit": "21c9c2e075cdb90f108f08dcf445206924d9d0cc",
+  "archiveMethod": "Native Xcode Product > Archive",
+  "upload": {
+    "attempted": true,
+    "completed": false,
+    "error": "App Store Connect access is required; Xcode Apple Accounts is signed out."
+  },
+  "testFlight": {
+    "processingVerified": false,
+    "testerAvailabilityVerified": false,
+    "deviceInstallVerified": false
+  }
+}

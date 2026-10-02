@@ -43,4 +43,11 @@ transition were not verified. The artwork introduces no new runtime network requ
 
 `ios/project.yml` declares version 1.0, build 6. The release retains the configured
 `https://anime.cognipin.com` API and existing Clerk instance. No server deployment is needed.
-Archive, upload and TestFlight processing receipts will be recorded separately after delivery.
+Source commit `21c9c2e` was pushed to `origin/spike/today-feed`. Native Xcode 27 produced the
+Release archive, and inspection verified app/widget version 1.0 (6), iOS 18 minimum, SDK 27.0,
+production API, configured Clerk key, all four selected assets and valid code signing.
+The existing Clerk key is a development key, matching the previous beta configuration.
+
+The App Store Connect upload is currently blocked before transmission: Xcode Apple Accounts
+is signed out. The native sign-in dialog is open for the user. Upload, processing and tester
+availability remain unverified. [Current release receipt](release-receipt.json).
