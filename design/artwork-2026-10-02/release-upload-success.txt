@@ -1,0 +1,5 @@
+ContentDelivery.log: 2026-10-02 12:03:20.463 DEBUG: [ContentDelivery.Uploader.7B25718BC0] Show Progress: Uploaded package is processing.
+ContentDelivery.log: 2026-10-02 12:03:20.470 DEBUG: [ContentDelivery.Uploader.7B25718BC0] Show Progress: Upload succeeded.
+ContentDelivery.log: UPLOAD SUCCEEDED with no errors
+ContentDelivery.log: Delivery UUID: 54df8f93-f8ae-4e7e-a44d-44c32724403e
+IDEDistribution.standard.log: 2026-10-02 06:33:20 +0000 [MT] Upload succeeded for archive AniTrack

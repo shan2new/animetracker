@@ -48,10 +48,17 @@ Release archive, and inspection verified app/widget version 1.0 (6), iOS 18 mini
 production API, configured Clerk key, all four selected assets and valid code signing.
 The existing Clerk key is a development key, matching the previous beta configuration.
 
-The documented `xcodebuild -exportArchive` upload, using `ExportOptions-upload.plist` and
-`-allowProvisioningUpdates`, exits 70 with `exportArchive Failed to Use Accounts`:
-App Store Connect access for team `YLPZXZS2F4` is required. Xcode Apple Accounts is signed out,
-and no App Store Connect API key is configured as an alternative. The native sign-in dialog
-is open for restoring account access; the upload will be completed through the CLI.
-Upload, processing and tester availability remain unverified.
-[Current release receipt](release-receipt.json), [CLI upload log](release-upload.txt).
+The user restored Apple account access and completed the native distribution flow.
+Xcode confirms `AniTrack 1.0 (6) uploaded` and `Uploaded to Apple`. The distribution log
+records `UPLOAD SUCCEEDED with no errors` at 12:03 PM IST on 2 October 2026, with delivery UUID
+`54df8f93-f8ae-4e7e-a44d-44c32724403e`. The upload reported that the package is processing.
+No duplicate CLI upload was attempted after this success.
+
+After Refresh, native macOS TestFlight shows Previously. version **1.0 (6)** with an **Install**
+button for the signed-in owner, size 26.7 MB, release date 2 October and expiry 31 December 2026
+at 12:04 PM IST. Processing and owner availability are verified. No installation was performed.
+[Native TestFlight status](release-testflight-status.txt).
+[Current release receipt](release-receipt.json), [upload success evidence](release-upload-success.txt).
+
+The earlier documented CLI attempt failed before transmission with `Failed to Use Accounts`,
+exit 70. [Historical CLI failure log](release-upload.txt). This authentication blocker is resolved.

@@ -24,16 +24,35 @@
   "archiveMethod": "Native Xcode Product > Archive",
   "upload": {
     "attempted": true,
-    "completed": false,
-    "method": "Documented xcodebuild -exportArchive CLI with ExportOptions-upload.plist and -allowProvisioningUpdates",
-    "exitCode": 70,
-    "error": "exportArchive Failed to Use Accounts: App Store Connect access for YLPZXZS2F4 is required.",
-    "log": "release-upload.txt",
-    "alternateAppStoreConnectAPIKeyConfigured": false
+    "completed": true,
+    "method": "Native Xcode Organizer, following user-restored Apple account access",
+    "completedAtUTC": "2026-10-02T06:33:20Z",
+    "completedAtIST": "2026-10-02T12:03:20+05:30",
+    "deliveryUUID": "54df8f93-f8ae-4e7e-a44d-44c32724403e",
+    "errorCount": 0,
+    "log": "release-upload-success.txt",
+    "nativeUI": "App upload complete: AniTrack 1.0 (6) uploaded; Organizer Uploaded to Apple",
+    "priorCLIUploadAttempt": {
+      "attempted": true,
+      "completed": false,
+      "method": "Documented xcodebuild -exportArchive CLI with ExportOptions-upload.plist and -allowProvisioningUpdates",
+      "exitCode": 70,
+      "error": "exportArchive Failed to Use Accounts: App Store Connect access for YLPZXZS2F4 is required.",
+      "log": "release-upload.txt",
+      "alternateAppStoreConnectAPIKeyConfigured": false
+    }
   },
   "testFlight": {
-    "processingVerified": false,
-    "testerAvailabilityVerified": false,
+    "uploadReportedProcessing": true,
+    "processingCompletionVerified": true,
+    "testerAvailabilityVerified": true,
+    "availabilityScope": "Signed-in owner in native macOS TestFlight",
+    "latestBuildObservedInNativeApp": "1.0 (6)",
+    "nativeAction": "Install",
+    "appStoreConnectAppID": "6809458022",
+    "sizeMB": 26.7,
+    "releaseDate": "2026-10-02",
+    "expiresAtIST": "2026-12-31T12:04:00+05:30",
     "deviceInstallVerified": false
   }
 }
