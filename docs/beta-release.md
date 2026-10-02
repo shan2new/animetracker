@@ -75,7 +75,7 @@ the laptop's `tsx watch` on :8787 looks deployed and is not:
 
 ```bash
 # on the Mac mini
-cd ~/…/animetracker && git pull && cd server && npm install && npm run db:migrate
+cd ~/…/previously && git pull && cd server && npm install && npm run db:migrate
 # then restart however the process is supervised (launchd / pm2 / tmux)
 ```
 

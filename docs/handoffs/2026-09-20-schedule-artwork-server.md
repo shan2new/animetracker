@@ -14,7 +14,7 @@ The user requested: **“Fix the bug and deploy then verify.”** They then requ
 handover to the Mac mini agent. Complete the server fix and deployment on the actual
 Previously backend, not a laptop development server.
 
-Repository: `git@github.com:shan2new/animetracker.git`.
+Repository: `git@github.com:shan2new/previously.git`.
 Production API: `https://anime.cognipin.com`.
 
 Preserve unrelated work. The laptop has substantial uncommitted iOS design changes;
