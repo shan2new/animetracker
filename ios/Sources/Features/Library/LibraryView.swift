@@ -101,6 +101,7 @@ struct LibraryView: View {
                             // card sat above ~1,000 pt of black while the identical card on Today
                             // was centred.
                             EmptyState(appModel.emptyStateCopy, prominence: .major,
+                                       artwork: appModel.surfacePhase == .emptyAccount ? .episodeFrames : nil,
                                        primary: emptyStateAction)
                                 .padding(.horizontal, ThemeMetrics.gutter)
                                 .centredState(contentH: contentHeight)

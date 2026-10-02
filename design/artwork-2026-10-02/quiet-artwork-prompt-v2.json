@@ -1,0 +1,13 @@
+{
+  "useCase": "stylized-concept",
+  "placement": "Empty Library",
+  "generator": "Built-in image_gen",
+  "model": "No model selector exposed; Sunburst unverified",
+  "transparentBackground": true,
+  "revision": "Match Previously graphite split-flap, ivory and coral identity after user feedback",
+  "references": [
+    "scout/12-library-empty-after.jpg (app context; rejected artwork)",
+    "scout/10-discover-genres.jpg (cinematic mood)"
+  ],
+  "prompt": "Use case: stylized-concept. Asset type: one small decorative empty-Library illustration for the actual Previously. iOS app. Input image 1 is the native app screenshot: use ONLY its dark canvas, restrained typography and visual density as context; the cream fabric holder in that screenshot is the rejected subject and must not appear. Input image 2 is the app's existing genre-art grid: reference its cinematic, serious entertainment mood only; do not depict its particular artwork or any show character. Generate a NEW isolated illustration asset, not a screenshot, not app UI, not a logo. Subject: three compact offset graphite episode frames made like matte split-flap cinema panels, one main front frame with two narrow frames peeking behind it. Nearly front-on, very slight perspective; low rectangular composition. The front frame has two flat hinged halves with one clean horizontal seam and small mechanical pins at the edges, a subtle slim ivory right-facing play triangle in the center, and ONE tiny coral-red circular period in the lower-right, echoing the app's own split-flap brand. Rear frames stay blank. The silhouette should feel like a small organized collection of stories, not a storage box, book, stationery, computer folder or dashboard widget. Visual language: precise crisp graphic planes, controlled subtle depth, smooth matte graphite charcoal (#292931 to #45454F), soft warm ivory (#F4F1EC) for the small play mark, and only the tiny coral (#F0563F) accent. Dark restrained cinematic craftsmanship; broad simple shapes that read at about 128 by 100 points. The panels must be distinguishable against the native near-black #09090B canvas using modest edge highlights, with no bright cream surfaces. Premium and quietly inviting. Fully transparent background, modest transparent padding. No background rectangle, no glow, rays, colored wash, confetti, sparkles, glossy bevels, cloth, fabric grain, paper texture, beige, yellow, amber bookmark, words, numbers, letters, logos, people, animals, faces, named shows, recognizable fictional props or brand marks from other companies."
+}

@@ -728,7 +728,10 @@ struct ScheduleView: View {
                            primary: { Task { await appModel.reload() } })
             }
         } else if appModel.libraryEmpty {
-            centred { EmptyState(.emptySchedule, prominence: .major, primary: onAddShow) }
+            centred {
+                EmptyState(.emptySchedule, prominence: .major, artwork: .flapCalendar,
+                           primary: onAddShow)
+            }
         } else {
             if appModel.sectionFailed {
                 InlineNotice(Copy.Notice.schedule) { Task { await appModel.reload() } }

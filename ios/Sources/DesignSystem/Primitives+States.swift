@@ -66,6 +66,13 @@ enum Announce {
 /// recoverable. Ordering makes the trailing-closure form correct by construction; the DEBUG
 /// assertion below catches the rest.
 struct EmptyState: View {
+    /// Optional decoration for a quiet empty state, selected explicitly by its screen.
+    enum Artwork: String {
+        case episodeFrames = "empty-library-episode-frames-v2"
+        case flapCalendar = "empty-schedule-flap-calendar-v1"
+        case bookmarkFrames = "empty-saved-bookmark-frames-v1"
+    }
+
     enum Prominence {
         /// The whole surface has nothing to show.
         case major
@@ -75,6 +82,7 @@ struct EmptyState: View {
 
     let copy: EmptyStateCopy
     var prominence: Prominence = .major
+    var artwork: Artwork? = nil
     var primary: (() -> Void)? = nil
     var secondary: (() -> Void)? = nil
 
@@ -84,10 +92,12 @@ struct EmptyState: View {
 
     init(_ copy: EmptyStateCopy,
          prominence: Prominence = .major,
+         artwork: Artwork? = nil,
          primary: (() -> Void)? = nil,
          secondary: (() -> Void)? = nil) {
         self.copy = copy
         self.prominence = prominence
+        self.artwork = artwork
         self.primary = primary
         self.secondary = secondary
         #if DEBUG
@@ -113,7 +123,14 @@ struct EmptyState: View {
     // that made every failure in the app look like a SaaS product had crashed (user, 2 Sep).
     var body: some View {
         VStack(spacing: 0) {
-            if let symbol = copy.symbol {
+            if let artwork, prominence == .major, !copy.isRecovery, !isAX {
+                Image(artwork.rawValue)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: ThemeMetrics.emptyStateArtWidth, height: ThemeMetrics.emptyStateArtHeight)
+                    .padding(.bottom, ThemeSpace.x4)
+                    .accessibilityHidden(true)
+            } else if let symbol = copy.symbol {
                 AppGlyph(systemName: symbol)
                     .font(.system(size: glyph, weight: .regular))
                     .foregroundStyle(ThemeColor.textTertiary)

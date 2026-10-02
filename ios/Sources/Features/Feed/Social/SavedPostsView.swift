@@ -44,7 +44,7 @@ struct SavedPostsView: View {
                 .padding(.horizontal, ThemeMetrics.gutter)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .loaded:
-                EmptyState(.savedEmpty, prominence: .major)
+                EmptyState(.savedEmpty, prominence: .major, artwork: .bookmarkFrames)
                     .padding(.horizontal, ThemeMetrics.gutter)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

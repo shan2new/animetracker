@@ -238,6 +238,9 @@ enum ThemeMetrics {
     static let titleGap: CGFloat = 3
     /// Art → the text it belongs to.
     static let artGap: CGFloat = 14
+    /// A small decorative object in a first-use state; bounded so the action stays dominant.
+    static let emptyStateArtWidth: CGFloat = 128
+    static let emptyStateArtHeight: CGFloat = 100
     /// Below a hero, before the first content block.
     static let heroClearance: CGFloat = 26
     /// The breathing room under a scroll view's last row. NOT a clearance for the bar: the app's

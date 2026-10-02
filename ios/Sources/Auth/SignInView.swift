@@ -5,18 +5,8 @@ import ClerkKitUI
 // First run (spec board 07): the brand, one action. Nothing to read, nothing to configure.
 // The developer sign-in exists only in debug builds without a Clerk key.
 //
-// Polish pass. There is no user artwork on first run, so the mark IS the art — and it has to be
-// lit like art rather than decorated like a logo:
-//
-//  • The accent wash ran from the status bar downward while the mark sat in the middle of the
-//    screen, so the screen's only light source had nothing to do with its only object. The bloom
-//    is now centred ON the mark.
-//  • `PreviouslyMark` carried a raw `.shadow(color: accent.opacity(0.3), …)` — a coloured glow
-//    behind a logo, and not a `ShadowToken`. Removed; the bloom does that job honestly.
-//  • Two equal spacers pinned the identity to the exact vertical centre and stapled the button to
-//    the floor. The identity now sits on the upper third, where a title card sits.
-//  • The developer card was a `surfaceRaised` box with a grey outline round it — the exact
-//    wireframe grammar this pass exists to remove. It is a `.raised` surface now.
+// A compact brand signature sits above the viewing room. The launch retains its display-scale
+// identity; credential forms keep their focused layout.
 struct SignInView: View {
     @Environment(AuthManager.self) private var auth
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -31,14 +21,13 @@ struct SignInView: View {
     var body: some View {
         ZStack {
             ThemeColor.canvas.ignoresSafeArea()
+            if AppConfig.isClerkConfigured {
+                welcomeBackdrop
+            }
 
-            // The identity stands where the launch film lands (`LaunchLockup`, on the upper
-            // third), at every text size the app allows, so a signed-out launch hands the ribbon to
-            // this screen without a seam: only the line under the name and the button arrive.
             GeometryReader { geo in
                 identity
-                    .padding(.top, LaunchLockup.markFrame(in: geo.size).minY)
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.32)
             }
             .ignoresSafeArea()
             VStack(spacing: 0) {
@@ -53,22 +42,35 @@ struct SignInView: View {
     // MARK: - Identity
 
     private var identity: some View {
-        VStack(spacing: 0) {
-            // The icon's ribbon, lit, under the screen's one light; then the name with its coral
-            // full stop. The same views the launch film lands on (`LaunchLockup`).
-            LaunchLockup.mark
-                .background { LaunchLockup.Bloom() }
-            LaunchLockup.name
-                .padding(.top, LaunchLockup.nameGap)
-            Text("Know what changed. Record what you watched.")
-                .type(ThemeType.heroMeta)
-                .foregroundStyle(ThemeColor.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, ThemeMetrics.labelGap)
-                .padding(.horizontal, isAX ? ThemeSpace.x6 : ThemeSpace.x6 * 2)
+        VStack(spacing: ThemeSpace.x3) {
+            PreviouslyMark(width: 56, lit: true)
+                .accessibilityHidden(true)
+            BrandWord(style: ThemeType.brandWordmark)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var welcomeBackdrop: some View {
+        GeometryReader { geo in
+            Image("login-cozy-backdrop-v3")
+                .resizable()
+                .scaledToFill()
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
+                .overlay {
+                    LinearGradient(stops: [
+                        .init(color: ThemeColor.canvas.opacity(0.42), location: 0),
+                        .init(color: ThemeColor.canvas.opacity(0.48), location: 0.42),
+                        .init(color: ThemeColor.canvas.opacity(0.12), location: 0.62),
+                        .init(color: ThemeColor.canvas.opacity(0.18), location: 0.80),
+                        .init(color: ThemeColor.canvas.opacity(0.76), location: 1)
+                    ], startPoint: .top, endPoint: .bottom)
+                }
+                .overlay { ThemeColor.canvas.opacity(isAX ? 0.20 : 0) }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     // MARK: - Action
@@ -115,6 +117,11 @@ struct SignInView: View {
         .animation(ThemeMotion.pick(ThemeMotion.uiGentle, reduceMotion: reduceMotion), value: auth.lastError)
         .sheet(isPresented: $showClerkAuth) {
             AuthView()
+                .clerkAppIconView {
+                    PreviouslyMark(width: 36, lit: true)
+                        .padding(.bottom, ThemeSpace.x6)
+                        .accessibilityHidden(true)
+                }
                 .environment(Clerk.shared)
                 .onChange(of: Clerk.shared.session != nil) { _, signedIn in
                     if signedIn {
@@ -123,6 +130,15 @@ struct SignInView: View {
                     }
                 }
         }
+        #if DEBUG
+        // Capture the actual public credential sheet without starting an authentication attempt.
+        .onAppear {
+            if AppConfig.isClerkConfigured,
+               UserDefaults.standard.bool(forKey: "signInCaptureSheet") {
+                showClerkAuth = true
+            }
+        }
+        #endif
     }
 }
 
