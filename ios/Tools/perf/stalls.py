@@ -17,11 +17,11 @@ ev = [json.loads(l) for l in open(f'{D}/perf.jsonl') if l.strip()]
 steps = json.load(open(f'{D}/steps.jsonl'))
 stalls = [e for e in ev if e['event'] == 'stall' and e['ms'] >= mn]
 
-APP = '[AniTrack.debug.dylib] '
+APP = '[Previously.debug.dylib] '
 def is_app(f):
-    return f != '?' and (not f.startswith('[') or f.startswith(APP) or f.startswith('[AniTrack] '))
+    return f != '?' and (not f.startswith('[') or f.startswith(APP) or f.startswith('[Previously] '))
 def app_sym(f):
-    return f[len(APP):] if f.startswith(APP) else (f[len('[AniTrack] '):] if f.startswith('[AniTrack] ') else f)
+    return f[len(APP):] if f.startswith(APP) else (f[len('[Previously] '):] if f.startswith('[Previously] ') else f)
 names = set()
 for st in stalls:
     for s in st['samples']:
@@ -33,7 +33,7 @@ if names:
     r = subprocess.run(['xcrun', 'swift-demangle', '--compact'], input='\n'.join(sorted(names)), capture_output=True, text=True, env=env)
     for raw, d in zip(sorted(names), r.stdout.splitlines()):
         d = re.sub(r'\(.*?\)', '()', d)           # drop parameter lists
-        d = re.sub(r'AniTrack\.', '', d)
+        d = re.sub(r'Previously\.', '', d)
         d = d.replace('closure #', 'c#').replace(' in ', '←')
         dem[raw] = d[:140]
 

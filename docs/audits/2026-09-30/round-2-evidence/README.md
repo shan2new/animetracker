@@ -4,15 +4,15 @@ All files concern commit `572cb857d73222f5a1b16a4025a24fe1566387c8` on 30 Septem
 
 ## Release build
 
-Executed from `/Users/shan2new/Projects/animetracker`:
+Executed from the repository root:
 
 ```sh
-xcodebuild -project ios/AniTrack.xcodeproj -scheme AniTrack \
+xcodebuild -project ios/Previously.xcodeproj -scheme Previously \
   -configuration Release -destination 'generic/platform=iOS Simulator' build \
   > docs/audits/2026-09-30/round-2-evidence/ios-release-simulator-build.log 2>&1
 ```
 
-Normal simulator signing and configuration; succeeded. `release-bundle-inspection.json` records selected Info.plist fields, privacy-manifest paths and distinct warning diagnostics. It records Clerk key environment without reproducing the full publishable key. The inspected bundle is the resulting DerivedData `Release-iphonesimulator/AniTrack.app`. This is not an archive, App Store validator result, physical-device build or runtime proof. The Release app was not installed over the normal signed Debug simulator installation restored in the first pass.
+Normal simulator signing and configuration; succeeded. `release-bundle-inspection.json` records selected Info.plist fields, privacy-manifest paths and distinct warning diagnostics. It records Clerk key environment without reproducing the full publishable key. The inspected bundle is the resulting DerivedData `Release-iphonesimulator/Previously.app`. This is not an archive, App Store validator result, physical-device build or runtime proof. The Release app was not installed over the normal signed Debug simulator installation restored in the first pass.
 
 ## Real database reproduction
 
@@ -20,7 +20,7 @@ Normal simulator signing and configuration; succeeded. `release-bundle-inspectio
 python3 docs/audits/2026-09-30/round-2-evidence/run-database-probe.py
 ```
 
-The wrapper verifies that a generated `anitrack_release_audit_tests_20260930_<8 hex digits>` database does not exist, creates it on loopback, applies repository migrations and runs the actual Fastify routes/services/SQL through `tsx`. The TypeScript probe checks the DB name/host and synthetic environment before doing work. Dev bypass is enabled only in the test process; provider, LLM and TMDB keys are blank; search correction, grouping and news are disabled. Requests use two invented identities and invented catalogue/social records.
+The wrapper verifies that a generated `previously_release_audit_tests_20260930_<8 hex digits>` database does not exist, creates it on loopback, applies repository migrations and runs the actual Fastify routes/services/SQL through `tsx`. The TypeScript probe checks the DB name/host and synthetic environment before doing work. Dev bypass is enabled only in the test process; provider, LLM and TMDB keys are blank; search correction, grouping and news are disabled. Requests use two invented identities and invented catalogue/social records.
 
 The wrapper closes clients and checks zero connections before dropping **only its newly owned database**, without force. `database-probe-run.json` records cleanup. Results/assertions in `database-probe-results.json` concern:
 
@@ -33,7 +33,7 @@ The wrapper closes clients and checks zero connections before dropping **only it
 
 Direct SQL seeding of a ban is followed by the existing `invalidateBanCache()` hook. Ordinary operator writes respect the documented cache TTL. The hook is test setup, not a product-bug workaround. Clearing `resetErasures()` models loss of the hold; it is not an actual process restart or a real JWT/provider test.
 
-The final successful DB was `anitrack_release_audit_tests_20260930_dab0de7b` and was removed. Earlier harness-only corrections concerned ESM module format, typed JSON parameter setup and ban-cache invalidation after direct test seeding; those are not reported as app defects. Each wrapper run removed its own database, including failed runs. Existing databases were not targeted.
+The final successful DB was `previously_release_audit_tests_20260930_dab0de7b` and was removed. Earlier harness-only corrections concerned ESM module format, typed JSON parameter setup and ban-cache invalidation after direct test seeding; those are not reported as app defects. Each wrapper run removed its own database, including failed runs. Existing databases were not targeted.
 
 ## Platform lifecycle diagnostic
 

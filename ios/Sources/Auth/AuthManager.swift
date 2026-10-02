@@ -24,7 +24,7 @@ final class AuthManager: TokenProvider {
     /// Surfaced to the UI for inline error display.
     var lastError: String?
 
-    private let devIdDefaultsKey = "anitrack.devClerkId"
+    private let devIdDefaultsKey = "previously.devClerkId"
 
     init() {
         // Default to dev mode when no real Clerk key is configured.
@@ -44,7 +44,7 @@ final class AuthManager: TokenProvider {
     private(set) var bootstrapped = false
     private var sessionWatch: Task<Void, Never>?
 
-    /// Derive initial sign-in state. Clerk.configure() is called earlier in AniTrackApp.init().
+    /// Derive initial sign-in state. Clerk.configure() is called earlier in PreviouslyApp.init().
     ///
     /// The session used to be read exactly once, the instant this ran — before Clerk had
     /// necessarily restored it — and never re-derived, so a returning user could land on

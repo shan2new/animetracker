@@ -198,7 +198,7 @@ export class OpenRouterGrouper implements LlmGrouper {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
-        'X-Title': 'AniTrack franchise grouper',
+        'X-Title': 'Previously franchise grouper',
       },
       body: JSON.stringify({
         model: this.model,

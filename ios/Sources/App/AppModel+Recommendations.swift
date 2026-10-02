@@ -156,14 +156,14 @@ extension AppModel {
         return pick
     }
 
-    nonisolated static let stageDayKey = "anitrack.forYouStageDay"
-    nonisolated static let unavailableKey = "anitrack.recommendationsUnavailableUntil"
+    nonisolated static let stageDayKey = "previously.forYouStageDay"
+    nonisolated static let unavailableKey = "previously.recommendationsUnavailableUntil"
 
     /// The server answered 404 within the last day: draw no skeleton for a shelf that will not come.
     var recommendationsRecentlyUnavailable: Bool {
         UserDefaults.standard.double(forKey: Self.unavailableKey) > Double(Int64.nowMs)
     }
-    nonisolated static let stageKey = "anitrack.forYouStageKey"
+    nonisolated static let stageKey = "previously.forYouStageKey"
 
     // MARK: Actions
 

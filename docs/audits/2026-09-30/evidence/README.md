@@ -18,8 +18,8 @@ Run from the repository root with its installed server dependencies and local Po
 
 ```sh
 swiftc -parse-as-library ios/Sources/App/RewatchStore.swift \
-  docs/audits/2026-09-30/evidence/rewatch-probe.swift -o /tmp/anitrack-rewatch-audit
-/tmp/anitrack-rewatch-audit
+  docs/audits/2026-09-30/evidence/rewatch-probe.swift -o /tmp/previously-rewatch-audit
+/tmp/previously-rewatch-audit
 ```
 
 The probe uses only a unique temporary directory and presentation-only copy stubs. It explicitly removes the synthetic primary file to exercise existing backup recovery, then removes its temporary data. It does not assert a natural file failure or a detached-write race occurred.

@@ -3,7 +3,7 @@
 This is the brain of *Previously.* — the one object every screen reads from and writes through. `AppModel` is a single main-thread-confined observable store that owns the signed-in account's library, a 20-second wall clock, the search subsystem, all derived feeds (Today's stacks, the Schedule agenda, the Library shelves), and every mutation the app can perform. `SyncCenter` is a separate singleton that owns *trust*: how fresh the data is, whether the device has a network path, and which of the user's writes the server never accepted (persisted across launches). `RewatchStore` is a device-local JSON store of watch sessions. `Routing` is one 10-line value type (`DetailRoute`) plus the per-tab navigation stacks in `MainTabView`. The rules that make this subsystem correct are not obvious from the type signatures: **a progress mark never rolls back, membership and status writes always do**; **one progress PUT is in flight per part, newest-wins, superseded targets are dropped**; **every derived "is it out / when is the next one" question is computed from the per-episode `airings` list, never from the catalogue's counters**; and **the library has an offline copy on disk so a launch with no network opens on the shows, not on an error**. A port that gets the pixels right and these rules wrong is wrong.
 
 Source files specified here (all under `ios/`):
-`Sources/App/AppModel.swift` (1375 lines), `Sources/App/AppModel+Writes.swift`, `Sources/App/AppModel+States.swift`, `Sources/App/SyncCenter.swift`, `Sources/App/RewatchStore.swift`, `Sources/App/Routing.swift`. Supporting reads: `Sources/Models/Models.swift`, `Models+Shared.swift`, `Util/Formatting.swift`, `DesignSystem/Copy.swift`, `DesignSystem/UndoToast.swift`, `DesignSystem/ThemeTokens.swift`, `App/RootView.swift`, `App/AniTrackApp.swift`.
+`Sources/App/AppModel.swift` (1375 lines), `Sources/App/AppModel+Writes.swift`, `Sources/App/AppModel+States.swift`, `Sources/App/SyncCenter.swift`, `Sources/App/RewatchStore.swift`, `Sources/App/Routing.swift`. Supporting reads: `Sources/Models/Models.swift`, `Models+Shared.swift`, `Util/Formatting.swift`, `DesignSystem/Copy.swift`, `DesignSystem/UndoToast.swift`, `DesignSystem/ThemeTokens.swift`, `App/RootView.swift`, `App/PreviouslyApp.swift`.
 
 ---
 
@@ -74,7 +74,7 @@ All time values are milliseconds unless noted. `Formatting.D = 86_400_000`, `For
 | `surfaceReady` | `Bool` | `false` | Set `true` by `RootView.handOffIfReady()` once the splash has left. Today's recap waits on it. |
 | `loadError` | `Bool` | `false` | Last library refresh failed (never a cancellation, never a 401). |
 | `localProgress` | `[Int: LocalWrite]` (private) | `[:]` | Optimistic progress overlay keyed by `mediaId`. See §7.4. |
-| `onSessionExpired` | `(@MainActor () -> Void)?` | `nil` | Installed in `AniTrackApp.init`; calls `auth.sessionExpired()`. |
+| `onSessionExpired` | `(@MainActor () -> Void)?` | `nil` | Installed in `PreviouslyApp.init`; calls `auth.sessionExpired()`. |
 | `pendingOpen` | `String?` | `nil` | A franchise id a tapped episode alert (or `-openDetail`) asks to open. §10.3. |
 
 ### 3.2 Clock
@@ -1070,7 +1070,7 @@ Navigation is **silent**: no haptic on `openDetail`.
 ### 10.3 `pendingOpen` — the alert-tap route
 
 ```
-// AniTrackApp.init
+// PreviouslyApp.init
 EpisodeNotifications.shared.onOpen = { [weak model] id in model?.pendingOpen = id }
 #if DEBUG
 if let id = UserDefaults.standard.string(forKey: "openDetail"), !id.isEmpty { model.pendingOpen = id }

@@ -8,7 +8,7 @@ dist
 *.log
 
 # Plain-SQL data dump — contains user emails + Clerk IDs, must never be committed
-anitrack-2026-06-24.sql
+previously-2026-06-24.sql
 
 # Local fastembed ONNX model cache (re-downloadable, ~87MB)
 .fastembed_cache/

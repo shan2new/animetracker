@@ -33,7 +33,6 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'moderation',
   'official',
   'previously',
-  'anitrack',
   'app',
   'api',
   'www',
@@ -68,7 +67,6 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
  */
 export const RESERVED_HANDLE_PREFIXES: readonly string[] = [
   'previously',
-  'anitrack',
   'official',
   'admin',
   'support',
@@ -146,7 +144,6 @@ export const HANDLE_INNOCENT_WORDS: readonly string[] = [
  */
 export const RESERVED_NAME_WORDS: readonly string[] = [
   'previously',
-  'anitrack',
   'admin',
   'administrator',
   'moderator',

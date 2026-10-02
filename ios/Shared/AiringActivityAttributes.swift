@@ -2,7 +2,7 @@ import Foundation
 import ActivityKit
 
 // The Live Activity contract shared by the app (which starts/updates activities) and the
-// AniTrackWidgets extension (which renders them). This file is a member of BOTH targets —
+// PreviouslyWidgets extension (which renders them). This file is a member of BOTH targets —
 // ActivityKit matches app and widget by the attributes type name, so it must be identical.
 struct AiringActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {

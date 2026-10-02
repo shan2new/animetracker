@@ -1,6 +1,6 @@
 {
   "boundary": "Isolated PostgreSQL; real routes and SQL; synthetic dev identity; no Clerk or upstream calls",
-  "database": "anitrack_release_audit_tests_20260930_65a65243",
+  "database": "previously_release_audit_tests_20260930_65a65243",
   "erasure": {
     "response": {
       "deleted": true

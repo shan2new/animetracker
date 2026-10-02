@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render AniTrack's hand-authored, Hugeicons-inspired UI glyphs into template assets.
+"""Render Previously's hand-authored, Hugeicons-inspired UI glyphs into template assets.
 
 The SVG paths in this file are original drawings on a 24-unit grid. Run from any directory:
     python3 icon/glyphs/generate.py

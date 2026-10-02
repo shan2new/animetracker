@@ -1,6 +1,6 @@
 # Domain models and derived presentation logic
 
-This is the data spine of the app: the wire types decoded from the AniTrack REST API
+This is the data spine of the app: the wire types decoded from the Previously REST API
 (`docs/api-contract.md`) and — far more importantly — the ~50 **derived** properties computed on top
 of them. The house rule that governs this whole subsystem is stated in `CLAUDE.md`: *"Presentation is
 **derived, not stored**"*. The server sends raw catalogue facts (counts, timestamps, statuses); the

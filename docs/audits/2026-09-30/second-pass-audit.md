@@ -1,6 +1,6 @@
 # Previously App Store readiness — second pass
 
-30 September 2026. Source: `572cb857d73222f5a1b16a4025a24fe1566387c8`, branch `spike/today-feed`. This extends the [main release audit](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/app-store-readiness.md), which contains the native walkthrough, original R1–R10/F1–F7/E1–E10 backlog, import strategy, and Clerk research.
+30 September 2026. Source: `572cb857d73222f5a1b16a4025a24fe1566387c8`, branch `spike/today-feed`. This extends the [main release audit](app-store-readiness.md), which contains the native walkthrough, original R1–R10/F1–F7/E1–E10 backlog, import strategy, and Clerk research.
 
 **Assessment: submission readiness is still unproven.** The second pass adds specific media-policy, durability, account-lifecycle and API-contract gaps. It also strengthens evidence that several existing controls work. Missing product features and mandatory store requirements have different priorities; a free app does not need purchases, every possible import source, or every optional Clerk feature to ship.
 
@@ -10,21 +10,21 @@ P0 means a submission/public-release gate. P1 means finish before the intended l
 
 | Check | Result | What it does not prove |
 | --- | --- | --- |
-| Normal signed Release simulator build | **Succeeded.** No fixture/config overrides. [Build log](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/ios-release-simulator-build.log) | Distribution archive, signing for a physical device, minimum-iOS execution, TestFlight delivery, App Store validation |
-| Actual Release bundle inspection | `com.anitrack.app`, Previously., 1.0/build 5, iOS 18 minimum, public API URL, **development Clerk key**. App, ClerkKit, ClerkKitUI and PhoneNumberKit privacy manifests present. No Face ID description or URL schemes in this bundle. [Inspection](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/release-bundle-inspection.json) | Manifests being present does not prove their completeness or store-label accuracy. Missing Face ID description becomes relevant when biometrics are enabled; missing URL schemes requires checking the chosen callback flow, rather than assuming every OAuth flow is broken |
-| Real PostgreSQL API probe | All migrations; two synthetic identities; validation, canonical counts, overflow/rollback, export ownership, suspended access and social erasure exercised. [Results](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/database-probe-results.json) | Real Clerk tokens/providers, production parity, every ownership endpoint, every combination of social relationships or concurrent requests |
+| Normal signed Release simulator build | **Succeeded.** No fixture/config overrides. [Build log](round-2-evidence/ios-release-simulator-build.log) | Distribution archive, signing for a physical device, minimum-iOS execution, TestFlight delivery, App Store validation |
+| Actual Release bundle inspection | `com.cognipin.previously`, Previously., 1.0/build 5, iOS 18 minimum, public API URL, **development Clerk key**. App, ClerkKit, ClerkKitUI and PhoneNumberKit privacy manifests present. No Face ID description or URL schemes in this bundle. [Inspection](round-2-evidence/release-bundle-inspection.json) | Manifests being present does not prove their completeness or store-label accuracy. Missing Face ID description becomes relevant when biometrics are enabled; missing URL schemes requires checking the chosen callback flow, rather than assuming every OAuth flow is broken |
+| Real PostgreSQL API probe | All migrations; two synthetic identities; validation, canonical counts, overflow/rollback, export ownership, suspended access and social erasure exercised. [Results](round-2-evidence/database-probe-results.json) | Real Clerk tokens/providers, production parity, every ownership endpoint, every combination of social relationships or concurrent requests |
 | Deletion across 17 seeded tables | Correct deletion and preservation for the tested relationships; surviving other-author reply becomes top-level; ban remains effective | Provider deletion, Apple token revocation, backup retention, durable erasure tombstones or local-device cleanup |
-| Network monitor lifecycle | macOS platform probe: initial object delivered, canceled object did not deliver after restart, new object delivered. [Probe log](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/path-monitor-probe.log) | A full native sign-out/sign-in/offline workflow on iPhone |
-| Public health recheck | Public and local API both **200 at 07:30 UTC / 13:00 IST**. [Check](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/health-recheck.json) | Sustained uptime, external-network/cellular access, authenticated usage, database/catalogue freshness |
+| Network monitor lifecycle | macOS platform probe: initial object delivered, canceled object did not deliver after restart, new object delivered. [Probe log](round-2-evidence/path-monitor-probe.log) | A full native sign-out/sign-in/offline workflow on iPhone |
+| Public health recheck | Public and local API both **200 at 07:30 UTC / 13:00 IST**. [Check](round-2-evidence/health-recheck.json) | Sustained uptime, external-network/cellular access, authenticated usage, database/catalogue freshness |
 | Native interaction | Device Hub exists; another accessibility-control attempt timed out | No new tap, OAuth, VoiceOver, trailer playback or notification-delivery proof. The first pass's current-run screenshots remain the visual evidence |
 
-The newly owned audit database was removed after the probe closed its connections, without forced disconnection. All identity/provider/LLM credentials were blank in the probe environment. No production users, source code, dependencies, configuration, feature flags or deployments were changed. Reproduction commands and boundaries are in the [second-pass evidence README](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/README.md).
+The newly owned audit database was removed after the probe closed its connections, without forced disconnection. All identity/provider/LLM credentials were blank in the probe environment. No production users, source code, dependencies, configuration, feature flags or deployments were changed. Reproduction commands and boundaries are in the [second-pass evidence README](round-2-evidence/README.md).
 
 ## Additional findings
 
 ### N01 — YouTube player cropping and application identity
 
-**P0 — source-confirmed provider-policy mismatch.** [TrailerPlayback](/Users/shan2new/Projects/animetracker/ios/Sources/Features/Trailer/TrailerPlayback.swift:15) explicitly describes making the player three frames tall to hide the title/channel/logo/related UI. The HTML uses `top:-100%; height:300%`, disables interaction with the web view, and supplies `https://previously.local` as its origin/referrer. This is a deliberate implementation, rather than a hypothetical concern about using an embedded player.
+**P0 — source-confirmed provider-policy mismatch.** [TrailerPlayback](../../../ios/Sources/Features/Trailer/TrailerPlayback.swift:15) explicitly describes making the player three frames tall to hide the title/channel/logo/related UI. The HTML uses `top:-100%; height:300%`, disables interaction with the web view, and supplies `https://previously.local` as its origin/referrer. This is a deliberate implementation, rather than a hypothetical concern about using an embedded player.
 
 YouTube prohibits obscuring attribution and player functionality; its minimum-functionality rules also prohibit obscuring overlays and require the explicit WebView referrer to identify the app using its registered application ID. The source's fabricated host is different from the Release bundle ID. Choosing supported player parameters such as `controls:0` alone is not the finding; the crop, masking and identity are. [Developer policies](https://developers.google.com/youtube/terms/developer-policies), [required minimum functionality](https://developers.google.com/youtube/terms/required-minimum-functionality).
 
@@ -34,7 +34,7 @@ YouTube prohibits obscuring attribution and player functionality; its minimum-fu
 
 ### N02 — Consent and data handling for AI-assisted search
 
-**Conditional P0 when raw-user-query correction is enabled.** [correctSearchQuery](/Users/shan2new/Projects/animetracker/server/src/services/queryCorrect.ts:46) sends the trimmed search string as a user message to Cerebras. The feature is disabled when its flag/key disables it, but it has no per-user permission boundary. No native AI-consent surface was found. The draft legal copy mentions AI search; a policy paragraph does not supply an explicit in-app choice before personal data is shared.
+**Conditional P0 when raw-user-query correction is enabled.** [correctSearchQuery](../../../server/src/services/queryCorrect.ts:46) sends the trimmed search string as a user message to Cerebras. The feature is disabled when its flag/key disables it, but it has no per-user permission boundary. No native AI-consent surface was found. The draft legal copy mentions AI search; a policy paragraph does not supply an explicit in-app choice before personal data is shared.
 
 Apple 5.1.2(i) requires disclosure and explicit permission before sharing personal data with third parties, including third-party AI. User-entered search can contain personal information. This is a conditional release review gap for that raw-input path, not a claim that all AI processing of public catalogue metadata requires personal-data consent. [Apple privacy guidelines](https://developer.apple.com/app-store/review/guidelines/).
 
@@ -44,7 +44,7 @@ Apple 5.1.2(i) requires disclosure and explicit permission before sharing person
 
 ### N03 — Failed-write recovery is not a durable outbox
 
-**P1 — source-confirmed crash window.** [SyncCenter.retry](/Users/shan2new/Projects/animetracker/ios/Sources/App/SyncCenter.swift:261), `retryAll` and `replayProgress` remove rows and persist the removal **before** awaiting the replay. A process termination in that interval loses the durable retry intent. Normal progress writes first enter an in-memory lane; their intent is saved after a caught failure rather than before dispatch. A retry that fails normally re-records itself, and restored rows without a runnable intent correctly remain visible; those safeguards do not cover termination between removal and acknowledgement.
+**P1 — source-confirmed crash window.** [SyncCenter.retry](../../../ios/Sources/App/SyncCenter.swift:261), `retryAll` and `replayProgress` remove rows and persist the removal **before** awaiting the replay. A process termination in that interval loses the durable retry intent. Normal progress writes first enter an in-memory lane; their intent is saved after a caught failure rather than before dispatch. A retry that fails normally re-records itself, and restored rows without a runnable intent correctly remain visible; those safeguards do not cover termination between removal and acknowledgement.
 
 **Work:** save owner-scoped commands before dispatch, retain pending/in-flight commands until acknowledged, and replay safely after interruption. Keep per-part ordering and coalescing so older progress does not overwrite the user's latest intent. Add operation identity/receipt semantics for compound actions; failed and in-flight are both unsynced states. A restored status/membership replay must await its actual network outcome, rather than settling merely because it scheduled a task.
 
@@ -52,7 +52,7 @@ Apple 5.1.2(i) requires disclosure and explicit permission before sharing person
 
 ### N04 — Connectivity monitoring cannot restart after sign-out
 
-**P1 — source and platform lifecycle confirmed.** [SyncCenter](/Users/shan2new/Projects/animetracker/ios/Sources/App/SyncCenter.swift:138) owns a single `let NWPathMonitor`. Teardown calls `cancel()`, and the next signed-in root calls `startMonitoring()` on that same object. Apple DTS explicitly says a canceled monitor must be replaced. The standalone host probe confirmed that a newly created replacement delivers while the canceled object does not. [Apple DTS explanation](https://developer.apple.com/forums/thread/124486).
+**P1 — source and platform lifecycle confirmed.** [SyncCenter](../../../ios/Sources/App/SyncCenter.swift:138) owns a single `let NWPathMonitor`. Teardown calls `cancel()`, and the next signed-in root calls `startMonitoring()` on that same object. Apple DTS explicitly says a canceled monitor must be replaced. The standalone host probe confirmed that a newly created replacement delivers while the canceled object does not. [Apple DTS explanation](https://developer.apple.com/forums/thread/124486).
 
 **Impact:** after sign-out/sign-in, online/constrained/expensive state can remain stale, affecting notices, queued-social flushing and trailer data policy.
 
@@ -72,7 +72,7 @@ The single-progress route correctly rejects `10,000,000,000` with 400. The bulk 
 
 ### N06 — Writes acknowledge less than the client needs
 
-**P1 — two concrete response mismatches reproduced.** A releasing season with 5 aired episodes accepted a request for 12, correctly stored 5, and returned only `{ok:true}`. [PUT /me/progress](/Users/shan2new/Projects/animetracker/server/src/routes/me.ts:185) discards the service's canonical `episodes`; [putProgress](/Users/shan2new/Projects/animetracker/ios/Sources/App/AppModel.swift:1747) settles the requested value. A later library reload correctly retires a disagreeing settled overlay, so this is temporary inconsistency, not an assertion that the client pins the wrong count forever.
+**P1 — two concrete response mismatches reproduced.** A releasing season with 5 aired episodes accepted a request for 12, correctly stored 5, and returned only `{ok:true}`. [PUT /me/progress](../../../server/src/routes/me.ts:185) discards the service's canonical `episodes`; [putProgress](../../../ios/Sources/App/AppModel.swift:1747) settles the requested value. A later library reload correctly retires a disagreeing settled overlay, so this is temporary inconsistency, not an assertion that the client pins the wrong count forever.
 
 Separately, PATCHing a valid franchise's status without an existing subscription returned 200 with **zero subscription rows**. The update does not distinguish missing membership from a successful status change. This can arise from stale UI or a second device removing membership.
 
@@ -82,7 +82,7 @@ Separately, PATCHing a valid franchise's status without an existing subscription
 
 ### N07 — Existing-library bulk marks can partially commit
 
-**P1 — source-confirmed; atomic server capability already works.** [markWatched](/Users/shan2new/Projects/animetracker/ios/Sources/App/AppModel+Writes.swift:21) uses independent per-part progress writes plus a separate status update for a show already in Library. The same action for a new show uses the atomic franchise endpoint. Existing-library marks and their Undo therefore can persist only some parts if connectivity/termination intervenes, while presenting one batch receipt.
+**P1 — source-confirmed; atomic server capability already works.** [markWatched](../../../ios/Sources/App/AppModel+Writes.swift:21) uses independent per-part progress writes plus a separate status update for a show already in Library. The same action for a new show uses the atomic franchise endpoint. Existing-library marks and their Undo therefore can persist only some parts if connectivity/termination intervenes, while presenting one batch receipt.
 
 The real-DB probe verified the server's atomic endpoint: a later-part overflow rolled the earlier part back; a valid request returned both canonical part counts and status. This is a client integration gap, rather than a missing backend transaction.
 
@@ -92,7 +92,7 @@ The real-DB probe verified the server's atomic endpoint: a later-part overflow r
 
 ### N08 — Account changes must be keyed by identity, not a Boolean
 
-**P0 integration gate for account isolation; expands R5.** [AuthManager.refreshClerkSignInState](/Users/shan2new/Projects/animetracker/ios/Sources/Auth/AuthManager.swift:77) publishes session presence. [RootView](/Users/shan2new/Projects/animetracker/ios/Sources/App/RootView.swift:24) starts/tears down the app on a signed-in Boolean transition. An A-to-B active-session change that stays non-nil does not establish a new account generation. Persisted library/retry records also have no owner identity. [TokenRefresher](/Users/shan2new/Projects/animetracker/ios/Sources/Networking/APIClient.swift:155) reuses a successful token for three seconds without an account-scoped reset.
+**P0 integration gate for account isolation; expands R5.** [AuthManager.refreshClerkSignInState](../../../ios/Sources/Auth/AuthManager.swift:77) publishes session presence. [RootView](../../../ios/Sources/App/RootView.swift:24) starts/tears down the app on a signed-in Boolean transition. An A-to-B active-session change that stays non-nil does not establish a new account generation. Persisted library/retry records also have no owner identity. [TokenRefresher](../../../ios/Sources/Networking/APIClient.swift:155) reuses a successful token for three seconds without an account-scoped reset.
 
 Ordinary sign-out already clears substantial state and cancels lanes; this is not a claim that teardown is absent. No A-to-B native switch was exercised, and the current UI does not expose a dedicated account switcher. The missing boundary matters when adding Clerk profile/session management, restoring externally changed sessions, or recovering after interrupted cleanup.
 
@@ -102,7 +102,7 @@ Ordinary sign-out already clears substantial state and cancels lanes; this is no
 
 ### N09 — Ambient tasks can outlive the account that scheduled them
 
-**P1 — source-confirmed race risk; expands F6/R5.** [EpisodeNotifications.sync](/Users/shan2new/Projects/animetracker/ios/Sources/Notifications/EpisodeNotifications.swift:73) suspends for permission settings and individual additions. A prior sync can resume after `cancelAll()` and add captured old-library alerts. [AiringLiveActivityManager](/Users/shan2new/Projects/animetracker/ios/Sources/Notifications/AiringLiveActivityManager.swift:49) launches detached, untracked tasks for sync and end-all, so those operations are not ordered by account generation. No interleaving was induced on an iPhone in this pass.
+**P1 — source-confirmed race risk; expands F6/R5.** [EpisodeNotifications.sync](../../../ios/Sources/Notifications/EpisodeNotifications.swift:73) suspends for permission settings and individual additions. A prior sync can resume after `cancelAll()` and add captured old-library alerts. [AiringLiveActivityManager](../../../ios/Sources/Notifications/AiringLiveActivityManager.swift:49) launches detached, untracked tasks for sync and end-all, so those operations are not ordered by account generation. No interleaving was induced on an iPhone in this pass.
 
 **Work:** serialize/cancel scheduling work with owner generation and current desired revision; make teardown await a final clear or prevent older tasks from publishing afterward. Use stable franchise/episode IDs rather than only title/episode to identify an activity. Surface scheduling errors instead of swallowing every add failure.
 
@@ -112,7 +112,7 @@ Notification routing is already implemented through typed `OpenRoute`, with cold
 
 ### N10 — TMDB notice exists; its required logo is not rendered
 
-**P1 — corrects an incomplete first-pass conclusion.** [Profile colophon](/Users/shan2new/Projects/animetracker/ios/Sources/Features/Profile/ProfileView.swift:1128) contains the required notice. `TMDBLogo.imageset` exists, but no `TMDBLogo` use was found in native source. TMDB requires both approved logo attribution and the notice in an About/Credits-type section. [TMDB requirements](https://developer.themoviedb.org/docs/faq).
+**P1 — corrects an incomplete first-pass conclusion.** [Profile colophon](../../../ios/Sources/Features/Profile/ProfileView.swift:1128) contains the required notice. `TMDBLogo.imageset` exists, but no `TMDBLogo` use was found in native source. TMDB requires both approved logo attribution and the notice in an About/Credits-type section. [TMDB requirements](https://developer.themoviedb.org/docs/faq).
 
 **Work:** display the existing approved asset with readable attribution in the credits surface; preserve prominence/aspect/color rules and verify the asset against the approved original. Record catalogue, artwork, trailer, fonts and icon licenses; establish permission for the intended commercial use before introducing revenue. This audit does not prove every asset is unlicensed.
 
@@ -120,7 +120,7 @@ Notification routing is already implemented through typed `OpenRoute`, with cold
 
 ### N11 — Search terms can enter diagnostic logs
 
-**P1 — source and isolated request-log behavior confirmed.** Fastify uses default request logging, including request URLs. Native [retry logs](/Users/shan2new/Projects/animetracker/ios/Sources/Networking/APIClient.swift:784) mark the path as public; search puts `q` in that path. Raw query text can therefore enter server logs and device unified logs during retry. The dedicated `search.profile` object itself records length/timings/counts, rather than raw query; preserve that more restrained telemetry.
+**P1 — source and isolated request-log behavior confirmed.** Fastify uses default request logging, including request URLs. Native [retry logs](../../../ios/Sources/Networking/APIClient.swift:784) mark the path as public; search puts `q` in that path. Raw query text can therefore enter server logs and device unified logs during retry. The dedicated `search.profile` object itself records length/timings/counts, rather than raw query; preserve that more restrained telemetry.
 
 **Work:** log route templates and request IDs, redact query strings/identifiers and review error bodies before logging. Set retention/access controls; inventory search processing/storage for privacy disclosures and providers. An app manifest lacking a Search History entry does not by itself establish the correct store answer; decide from the actual collection/retention and Apple's definitions. ATT is not automatically required merely because the app has diagnostics or embeds a provider.
 
@@ -171,7 +171,7 @@ The original feature backlog stands. These are additional acceptance details, no
 | Media | Compliant inline playback, captions, provider failure fallback, data/autoplay preference, orientation/fullscreen recovery, screen-reader controls and foreground/background/audio-session behavior |
 | Support/recovery | Reachable final support/privacy/deletion pages; actionable errors without secret detail; data/export recovery; operator moderation/erasure retry and ownership-safe account migration |
 
-![Previously Profile from the first pass, at the same audited commit: mode, market/provider and import settings are absent](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/07-profile.png)
+![Previously Profile from the first pass, at the same audited commit: mode, market/provider and import settings are absent](evidence/07-profile.png)
 
 This capture uses the loopback synthetic developer session described in the main audit. It is reused as same-commit visual evidence, not presented as a new production-account capture. DEBUG rows and absent fixture artwork are not launch defects.
 

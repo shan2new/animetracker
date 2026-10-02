@@ -3,7 +3,10 @@
 The mechanical steps for getting a build in front of testers, and the reasons behind the
 non-obvious ones. Written 3 Sep 2026 for the first beta (v1.0 build 1).
 
-**Bundle IDs** — app `com.anitrack.app`, widget `com.anitrack.app.widgets`. Team `YLPZXZS2F4`.
+**Bundle IDs** — app `com.cognipin.previously`, widget `com.cognipin.previously.widgets`. Team `YLPZXZS2F4`.
+These replaced the original IDs on 2 Oct 2026, so builds 1–6 belong to the old
+App Store Connect record. The new IDs need their own App IDs, provisioning profiles and App Store
+Connect record (§2) before build 7 can upload.
 **Display name** on the phone is `Previously.` (`CFBundleDisplayName`), independent of the App
 Store listing name.
 **Deployment target** is **iOS 18.0** (see the note at the top of `ios/project.yml` for why 18 and
@@ -98,7 +101,7 @@ In App Store Connect → Apps → **+** :
 | Platform | iOS |
 | Name | `Previously.` (fall back to a qualified variant if taken) |
 | Primary language | English (U.S.) |
-| Bundle ID | `com.anitrack.app` |
+| Bundle ID | `com.cognipin.previously` |
 | SKU | anything private, e.g. `previously-ios-1` |
 | User access | Full Access |
 
@@ -110,7 +113,7 @@ yet — archiving once with `-allowProvisioningUpdates` (step 3) registers it.
 ```bash
 cd ios && xcodegen generate
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
-  -scheme AniTrack -configuration Release -destination 'generic/platform=iOS' \
+  -scheme Previously -configuration Release -destination 'generic/platform=iOS' \
   -archivePath build/Previously.xcarchive -allowProvisioningUpdates archive
 ```
 

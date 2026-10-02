@@ -12,7 +12,7 @@ suite. The notes below are historical context, not current deployment instructio
 
 The user requested: **“Fix the bug and deploy then verify.”** They then requested
 handover to the Mac mini agent. Complete the server fix and deployment on the actual
-AniTrack/Previously backend, not a laptop development server.
+Previously backend, not a laptop development server.
 
 Repository: `git@github.com:shan2new/animetracker.git`.
 Production API: `https://anime.cognipin.com`.
@@ -100,7 +100,7 @@ Also assert the enrichment write does not include `cover`, `banner`, `source`, o
 1. Inspect the Mini's real checkout, branch, dirty state, deployed revision, and
    service supervisor. Follow its existing deployment process; keep a rollback
    path. `docs/beta-release.md` confirms this backend is self-hosted on the Mini.
-2. Deploy only the scoped server change and tests, then restart the AniTrack service.
+2. Deploy only the scoped server change and tests, then restart the Previously service.
    No migration is required. Do not restart unrelated apps/services.
 3. Check `/health` and run the existing production auth smoke test:
    `npm run auth:smoke -- https://anime.cognipin.com`.
@@ -120,8 +120,8 @@ Also assert the enrichment write does not include `cover`, `banner`, `source`, o
 ## Laptop simulator context, if verification returns here
 
 - UDID: `C2AED006-C1A7-49DF-B7B4-764B35373C11`, iOS 27 / iPhone 14 Pro.
-- Bundle: `com.anitrack.app`; already authenticated. Do not uninstall or sign out.
-- Existing signed app: `/tmp/animetracker-today-signed/Build/Products/Debug-iphonesimulator/AniTrack.app`.
+- Bundle: `com.cognipin.previously`; already authenticated. Do not uninstall or sign out.
+- Existing signed app: `/tmp/previously-today-signed/Build/Products/Debug-iphonesimulator/Previously.app`.
 - Launch for deterministic, non-writing visual fixtures:
   `-demoBusy 1 -todayDemo multiple -openTab schedule`.
   These rewrite episode/progress display data only; artwork is from the server.
@@ -135,8 +135,8 @@ Also assert the enrichment write does not include `cover`, `banner`, `source`, o
 ## Access caveat
 
 The laptop's `aura-prod` SSH alias is a forced, **read-only Aura** command interface,
-not an AniTrack deployment route. Do not attempt to bypass that restriction. The
-Mac mini agent should use its existing local AniTrack checkout and supervisor.
+not an Previously deployment route. Do not attempt to bypass that restriction. The
+Mac mini agent should use its existing local Previously checkout and supervisor.
 
 ## Completion report
 

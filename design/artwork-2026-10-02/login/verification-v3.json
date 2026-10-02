@@ -3,7 +3,7 @@
   "scope": "Cozy welcome background replacing inline illustration",
   "build": {
     "passed": true,
-    "scheme": "AniTrack",
+    "scheme": "Previously",
     "configuration": "Debug",
     "simulator": "iPhone 14 Pro / iOS 27.0",
     "durationSeconds": 17.3,

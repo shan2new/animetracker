@@ -9,8 +9,8 @@ import uuid
 evidence = Path(__file__).resolve().parent
 root = evidence.parents[3]
 server = root / 'server'
-name = 'anitrack_release_audit_tests_20260930_' + uuid.uuid4().hex[:8]
-assert re.fullmatch(r'anitrack_release_audit_tests_20260930_[a-f0-9]{8}', name)
+name = 'previously_release_audit_tests_20260930_' + uuid.uuid4().hex[:8]
+assert re.fullmatch(r'previously_release_audit_tests_20260930_[a-f0-9]{8}', name)
 
 def psql(query, variables=None):
     cmd = ['psql', '-h', '127.0.0.1', '-d', 'postgres', '-X', '-At', '-v', 'ON_ERROR_STOP=1']

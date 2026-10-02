@@ -27,7 +27,7 @@ blur, parallax or new animation.
    behavior were unchanged by this backdrop revision. Successful sign-in and recovery remain
    untested. No credentials were entered or OAuth started.
 
-Debug AniTrack build passed in 19.2 seconds, and `git diff --check` passed.
+Debug Previously build passed in 19.2 seconds, and `git diff --check` passed.
 [Build receipt](build-v4.log). The preview uses
 the project's existing development Clerk configuration and loopback app API. Native captures prove
 rendering; semantic touch navigation, small-device rendering, real-device validation and

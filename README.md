@@ -1,9 +1,9 @@
-# AniTrack
+# Previously
 
 An airing-first anime tracker built around **canonical franchises**, not fragmented seasons.
 
 AniList (like MyAnimeList) models every season, movie, OVA and special as a *separate*
-entry. AniTrack groups those back into one canonical anime — using AniList's relation graph
+entry. Previously groups those back into one canonical anime — using AniList's relation graph
 plus an LLM refinement step — so you subscribe **once** and every new season and episode
 surfaces under the show you already follow.
 
@@ -40,7 +40,7 @@ surfaces under the show you already follow.
 cd server
 cp .env.example .env          # set DATABASE_URL, Clerk + OpenRouter keys
 npm install
-createdb anitrack
+createdb previously
 npm run db:migrate
 npm run dev                   # http://localhost:8787
 # seed some trending franchises (optional):
@@ -60,8 +60,8 @@ deterministic relation-graph grouping. Add the key to enable LLM-refined groupin
 ```bash
 cd ios
 brew install xcodegen
-xcodegen generate            # produces AniTrack.xcodeproj
-open AniTrack.xcodeproj       # build in Xcode 26 (iOS 26 SDK)
+xcodegen generate            # produces Previously.xcodeproj
+open Previously.xcodeproj       # build in Xcode 26 (iOS 26 SDK)
 ```
 
 Set your signing team in Xcode. The Clerk publishable key and `API_BASE_URL` are configured

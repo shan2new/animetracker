@@ -399,7 +399,7 @@ iOS, measured on the simulator (`UIFont.preferredFont(forTextStyle:compatibleWit
 | caption | 12 | 14 | 16 | 18 | 22 | 26 | 32 | 37 | 43 |
 | caption2 | 11 | 13 | 15 | 17 | 20 | 24 | 29 | 34 | 40 |
 
-`AniTrackApp.swift` clamps the app at `.dynamicTypeSize(...DynamicTypeSize.accessibility2)` — the
+`PreviouslyApp.swift` clamps the app at `.dynamicTypeSize(...DynamicTypeSize.accessibility2)` — the
 **AX2** column.
 
 Android — and here is the finding that the **minSdk 26** floor makes load-bearing:
@@ -1069,7 +1069,7 @@ the JustWatch and trailer-provider links do. Same class of decision as #23 Share
 wants the same answer.
 
 **Q5 · What replaces the Live Activity, and what icon does it wear?**
-`dot.radiowaves.left.and.right` exists only in `AniTrackWidgets.swift` — Dynamic Island compact
+`dot.radiowaves.left.and.right` exists only in `PreviouslyWidgets.swift` — Dynamic Island compact
 leading, minimal, and lock-screen. Android's nearest equivalent in 2026 is a **Live Update /
 `ProgressStyle` notification** (Android 16+), which needs a **notification small icon**: white on
 transparent, single colour, 24 dp, no gradient. `sensors` at `wght 500` fill 0 would work, but this

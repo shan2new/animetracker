@@ -1,9 +1,9 @@
 {
-  "name": "anitrack",
+  "name": "previously",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "AniTrack — a calm, airing-first anime tracker powered by AniList.",
+  "description": "Previously — a calm, airing-first anime tracker powered by AniList.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

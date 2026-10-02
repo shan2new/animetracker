@@ -33,7 +33,7 @@ enum LaunchLockup {
                       width: markWidth, height: markHeight)
     }
 
-    /// The reader's text size, capped where the app caps it (`AniTrackApp`, AX2): the launch may
+    /// The reader's text size, capped where the app caps it (`PreviouslyApp`, AX2): the launch may
     /// not set its name larger than any text the app itself draws.
     static func typeSize(_ category: UIContentSizeCategory = UITraitCollection.current.preferredContentSizeCategory) -> DynamicTypeSize {
         min(DynamicTypeSize(category) ?? .large, .accessibility2)

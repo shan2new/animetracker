@@ -1,6 +1,6 @@
 # Previously App Store readiness audit
 
-**Second pass added:** read the [second-pass findings and coverage ledger](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/second-pass-audit.md) alongside this backlog. It adds 12 specific findings, a successful Release simulator build, broader real-DB verification and corrections to public availability/TMDB attribution. The feature and original release gates below remain open unless explicitly supported by new evidence.
+**Second pass added:** read the [second-pass findings and coverage ledger](second-pass-audit.md) alongside this backlog. It adds 12 specific findings, a successful Release simulator build, broader real-DB verification and corrections to public availability/TMDB attribution. The feature and original release gates below remain open unless explicitly supported by new evidence.
 
 Previously has a substantial tracking product already: anime and TV franchises, five library statuses, episode progress with undo and replay, Home, Schedule, a news feed, recommendations, trailers, streaming availability, social controls, account export, and an in-app deletion entry point. It is **not ready for a public App Store release yet**. The immediate gates are production authentication, reliable account erasure and account-local storage, final legal disclosures, public API availability, and verification of the submitted build. The requested content mode and onboarding are the next shared product foundations.
 
@@ -19,16 +19,16 @@ Audited on 30 September 2026 against commit `572cb857d73222f5a1b16a4025a24fe1566
 | Swift persistence probe | Compiled the actual `RewatchStore.swift` with presentation-only copy stubs; reset wrote an empty primary, retained two old sessions in backup, and backup recovery reloaded both | Synthetic temporary directory only; missing primary was explicitly induced. Cross-account UI and detached-write races were not exercised |
 | Dependency inventory | Read-only `npm audit --omit=dev`: 10 entries, four high and six moderate; installed/locked versions and selected maintainer advisories inspected | Advisory counts are not proof of exploitability; affected-path review and controlled updates remain pending. No dependency changes applied |
 | Public service | First pass: native-style health 200 then 530; generic user agent 403; local health 200 and anonymous library 401. Second pass at 07:30 UTC: public and local health both 200 | Availability changed during the audit; diagnostic requests are not a real authenticated iPhone session or sustained external uptime proof |
-| Local deployment | AniTrack launchd service and local port 8787 running; tunnel logs show QUIC connection and DNS failures | The local service being up does not establish public availability |
+| Local deployment | Previously launchd service and local port 8787 running; tunnel logs show QUIC connection and DNS failures | The local service being up does not establish public availability |
 | Legal pages | Live privacy page read in browser, with terms/deletion/support also checked earlier | Pages were available earlier; fresh browser navigation later failed during network problems |
 | Clerk | Current official documentation/changelog researched; local package lock resolves Clerk iOS 1.5.7 | Dashboard, production provider credentials, DNS verification, limits, and production identities were not inspected |
 | App Store Connect | Repository release configuration and documentation inspected | Submitted build status, tester access, current metadata, age rating, privacy answers, agreements, and review credentials remain unverified |
 
 Xcode 27's simulator host is **Device Hub**, installed at `/Applications/Xcode.app/Contents/Applications/DeviceHub.app`. An earlier statement that Simulator was absent was incorrect. The simulator booted and the app ran. The first unsigned audit build hit Clerk's keychain entitlement error; a normally signed simulator build resolved it. That diagnostic failure is not presented as an app release defect. [Apple Device Hub documentation](https://developer.apple.com/documentation/xcode/device-hub).
 
-Build and test logs, screenshots, and the loopback-only fixture server are in [the evidence directory](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence). The harness does not connect to a database or upstream service and refuses account deletion. Historical screenshots were not used as current proof.
+Build and test logs, screenshots, and the loopback-only fixture server are in [the evidence directory](evidence). The harness does not connect to a database or upstream service and refuses account deletion. Historical screenshots were not used as current proof.
 
-At completion the fixture server was stopped and the normally configured signed Debug build was reinstalled; its [signed-out screen](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/12-restored-normal-config.png) was captured. The restored bundle points to the public API and configured development Clerk key, rather than the loopback harness. Product/server source and production account data were not changed.
+At completion the fixture server was stopped and the normally configured signed Debug build was reinstalled; its [signed-out screen](evidence/12-restored-normal-config.png) was captured. The restored bundle points to the public API and configured development Clerk key, rather than the loopback harness. Product/server source and production account data were not changed.
 
 ## Native flow walkthrough
 
@@ -36,22 +36,22 @@ These are independent entry-state captures reached through debug routes, not a c
 
 | Step | Screen and evidence | General health and pending work |
 | --- | --- | --- |
-| 1 | [Signed-out entry](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/01-sign-in.png) | Clear identity and one sign-in action. No introduction to TV/anime scope, import, or personalization. The provider sheet itself was not exercised |
-| 2 | [Home with an empty library](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/02-home-empty.png) | Good single “Add a show” recovery. First value depends on manual setup; no onboarding or import entry. Large empty area is a product activation issue, not a broken render |
-| 3 | [Empty Schedule](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/03-schedule-empty.png) | Clear explanation and recovery. Repeats the setup burden across a second tab; filter is local to Schedule |
-| 4 | [Empty Following feed with synthetic trending](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/04-feed-empty.png) | Clear CTA and an alternative discovery route. “Nothing to watch yet” describes the library better than a news feed; mode-specific feed relevance remains pending |
-| 5 | [Empty Library](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/05-library-empty.png) | Healthy empty state. Needs import, and later a distinction between truly empty and “no titles in this mode” |
-| 6 | [Discover with synthetic titles](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/06-discover.png) | Search, trending, genres, and add affordances exist. Search copy explicitly combines anime and TV; filter is not an account preference. Placeholder rendering is legible; real artwork/loading was not validated |
-| 7 | [Profile](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/07-profile.png) | Saved/muted content, notification status, haptics, export, and legal links are discoverable. Content mode, market/providers, import, and account security controls are missing. DEBUG-only developer/demo rows are expected in this fixture build |
-| 8 | [Home with a populated synthetic library](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/08-home-populated.png) | New episode and next action render coherently. Needs cross-mode consistency. Missing fixture artwork intentionally leaves a large neutral hero; this is not evidence of production art failure |
-| 9 | [Show detail](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/09-detail.png) | Status, release information, progress and Posts/Episodes/Media/About exist. Real season grouping, provider links, source quality, trailers, and action behavior remain release checks |
-| 10 | [Episodes tab](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/11-episodes.png) | Episode rows and watched state render. Counting progress is not a model for arbitrary watched episodes or multiple dated watches; importer work must address this |
+| 1 | [Signed-out entry](evidence/01-sign-in.png) | Clear identity and one sign-in action. No introduction to TV/anime scope, import, or personalization. The provider sheet itself was not exercised |
+| 2 | [Home with an empty library](evidence/02-home-empty.png) | Good single “Add a show” recovery. First value depends on manual setup; no onboarding or import entry. Large empty area is a product activation issue, not a broken render |
+| 3 | [Empty Schedule](evidence/03-schedule-empty.png) | Clear explanation and recovery. Repeats the setup burden across a second tab; filter is local to Schedule |
+| 4 | [Empty Following feed with synthetic trending](evidence/04-feed-empty.png) | Clear CTA and an alternative discovery route. “Nothing to watch yet” describes the library better than a news feed; mode-specific feed relevance remains pending |
+| 5 | [Empty Library](evidence/05-library-empty.png) | Healthy empty state. Needs import, and later a distinction between truly empty and “no titles in this mode” |
+| 6 | [Discover with synthetic titles](evidence/06-discover.png) | Search, trending, genres, and add affordances exist. Search copy explicitly combines anime and TV; filter is not an account preference. Placeholder rendering is legible; real artwork/loading was not validated |
+| 7 | [Profile](evidence/07-profile.png) | Saved/muted content, notification status, haptics, export, and legal links are discoverable. Content mode, market/providers, import, and account security controls are missing. DEBUG-only developer/demo rows are expected in this fixture build |
+| 8 | [Home with a populated synthetic library](evidence/08-home-populated.png) | New episode and next action render coherently. Needs cross-mode consistency. Missing fixture artwork intentionally leaves a large neutral hero; this is not evidence of production art failure |
+| 9 | [Show detail](evidence/09-detail.png) | Status, release information, progress and Posts/Episodes/Media/About exist. Real season grouping, provider links, source quality, trailers, and action behavior remain release checks |
+| 10 | [Episodes tab](evidence/11-episodes.png) | Episode rows and watched state render. Counting progress is not a model for arbitrary watched episodes or multiple dated watches; importer work must address this |
 
-![Current first-run Home capture using an empty local fixture](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/02-home-empty.png)
+![Current first-run Home capture using an empty local fixture](evidence/02-home-empty.png)
 
-![Current Profile capture using a local developer session](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/07-profile.png)
+![Current Profile capture using a local developer session](evidence/07-profile.png)
 
-Accessibility cannot be certified from these captures. The app already contains accessibility labels and Reduce Motion branches, but globally caps Dynamic Type at `accessibility2` in [AniTrackApp.swift](/Users/shan2new/Projects/animetracker/ios/Sources/App/AniTrackApp.swift:73). Verify the largest system sizes through reflow, VoiceOver focus/order and announcements, contrast over real artwork, keyboard avoidance, and touch targets on a small iPhone. Icon-only bottom navigation also needs a tested accessible label/selected state and a clear first-use explanation.
+Accessibility cannot be certified from these captures. The app already contains accessibility labels and Reduce Motion branches, but globally caps Dynamic Type at `accessibility2` in [PreviouslyApp.swift](../../../ios/Sources/App/PreviouslyApp.swift:73). Verify the largest system sizes through reflow, VoiceOver focus/order and announcements, contrast over real artwork, keyboard avoidance, and touch targets on a small iPhone. Icon-only bottom navigation also needs a tested accessible label/selected state and a clear first-use explanation.
 
 ## Priorities
 
@@ -61,7 +61,7 @@ Accessibility cannot be certified from these captures. The app already contains 
 
 ### R1 Production Clerk and provider configuration
 
-**P0 — confirmed configuration gap.** The shared build settings in [project.yml](/Users/shan2new/Projects/animetracker/ios/project.yml:132) use a `pk_test_` key for Release as well as Debug. This is a publishable development key, not a leaked server secret. Production backend configuration has a JWT verification key but no `CLERK_SECRET_KEY`. No Apple sign-in entitlement or native callback configuration was found in the project source. The current `AuthView` delegates provider availability to Clerk; seeing its wrapper in code does not prove Google/Apple are configured.
+**P0 — confirmed configuration gap.** The shared build settings in [project.yml](../../../ios/project.yml:132) use a `pk_test_` key for Release as well as Debug. This is a publishable development key, not a leaked server secret. Production backend configuration has a JWT verification key but no `CLERK_SECRET_KEY`. No Apple sign-in entitlement or native callback configuration was found in the project source. The current `AuthView` delegates provider availability to Clerk; seeing its wrapper in code does not prove Google/Apple are configured.
 
 Required work:
 
@@ -85,9 +85,9 @@ Acceptance: backed-up, dry-run mapping; authenticated proof of old/new ownership
 
 ### R3 Complete account erasure durably
 
-**P0 — confirmed implementation and deployment gap.** [DELETE /me](/Users/shan2new/Projects/animetracker/server/src/routes/me.ts:257) correctly deletes application-owned records in a transaction. It then returns `{deleted:true}` even when Clerk deletion was skipped or failed. [erasure.ts](/Users/shan2new/Projects/animetracker/server/src/services/erasure.ts:92) skips the provider call without the secret; that secret is absent from the server environment loaded by the current launchd service. The anti-recreation hold is process memory for 15 minutes, so restart loses it. A surviving Clerk identity can later obtain a new token and be upserted again.
+**P0 — confirmed implementation and deployment gap.** [DELETE /me](../../../server/src/routes/me.ts:257) correctly deletes application-owned records in a transaction. It then returns `{deleted:true}` even when Clerk deletion was skipped or failed. [erasure.ts](../../../server/src/services/erasure.ts:92) skips the provider call without the secret; that secret is absent from the server environment loaded by the current launchd service. The anti-recreation hold is process memory for 15 minutes, so restart loses it. A surviving Clerk identity can later obtain a new token and be upserted again.
 
-The [real-DB probe results](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/real-db-probe-results.json) reproduce the application side: deletion returned 200/`deleted:true` with provider deletion skipped; seeded user/preferences/progress rows were gone; the same synthetic identity was initially refused with 401, then recreated under a new internal UUID after the memory hold was cleared. This does not claim a real Clerk identity was deleted or a real session survived a provider deletion.
+The [real-DB probe results](evidence/real-db-probe-results.json) reproduce the application side: deletion returned 200/`deleted:true` with provider deletion skipped; seeded user/preferences/progress rows were gone; the same synthetic identity was initially refused with 401, then recreated under a new internal UUID after the memory hold was cleared. This does not claim a real Clerk identity was deleted or a real session survived a provider deletion.
 
 Required work: durable erasure job/outbox and identity tombstone; idempotent retries and provider completion state; monitoring of unfinished erasure; protection against late writes after restart; signed, deduplicated Clerk deletion-event reconciliation for deletion initiated outside the app. Preserve the existing transaction and write-drain behavior.
 
@@ -97,7 +97,7 @@ Acceptance: deletion removes live application data and completes provider cleanu
 
 ### R4 Make deletion failures truthful and reconcilable
 
-**P0 — confirmed copy/state defect.** [AccountDeletion.swift](/Users/shan2new/Projects/animetracker/ios/Sources/Features/Profile/AccountDeletion.swift:27) says “Your account wasn't deleted” after a transport failure and “Nothing was changed” for refusal. A response can be lost after the server commits. That certainty is unsafe; `abortErasure()` can resume old writes when deletion actually happened.
+**P0 — confirmed copy/state defect.** [AccountDeletion.swift](../../../ios/Sources/Features/Profile/AccountDeletion.swift:27) says “Your account wasn't deleted” after a transport failure and “Nothing was changed” for refusal. A response can be lost after the server commits. That certainty is unsafe; `abortErasure()` can resume old writes when deletion actually happened.
 
 Required work: an idempotent request identifier and a reconciliation/status protocol that survives an ended session; represent pending/unknown separately from rejected/not-started/completed. Hold replay while the outcome is unknown and tell the user what is actually known. Design ownership checks so a status endpoint leaks no account information.
 
@@ -109,12 +109,12 @@ Acceptance: drop the response after commit, kill the app, reopen, and recover th
 
 | Finding | Evidence | Required correction |
 | --- | --- | --- |
-| A cleared rewatch store preserves the previous generation in a backup | [RewatchStore reset and persist](/Users/shan2new/Projects/animetracker/ios/Sources/App/RewatchStore.swift:132) writes empty sessions after copying the old file into `sessions.backup.json`; load falls back to that backup | Account-owned storage, serialized/cancellable writes, and an erasure operation that removes both generations |
-| A late library write can recreate a removed cache | [AppModel persistence](/Users/shan2new/Projects/animetracker/ios/Sources/App/AppModel.swift:400) uses an untracked detached writer; teardown removes a single unscoped file | Scope cache to owner, include owner in payload, serialize writes, and reject obsolete account epochs |
-| Recent titles/searches survive teardown | [Recent keys](/Users/shan2new/Projects/animetracker/ios/Sources/App/AppModel.swift:25), [teardown](/Users/shan2new/Projects/animetracker/ios/Sources/App/AppModel.swift:551) | Clear in-memory and persisted recents on account change/erasure, or store safely per owner |
-| Temporary exports have no explicit lifecycle cleanup | [LibraryExport](/Users/shan2new/Projects/animetracker/ios/Sources/Features/Profile/LibraryExport.swift:114) creates `export-UUID` directories | Remove app-owned temporary export files after transfer/expiry and on erasure; do not claim deletion of copies the user saved elsewhere |
+| A cleared rewatch store preserves the previous generation in a backup | [RewatchStore reset and persist](../../../ios/Sources/App/RewatchStore.swift:132) writes empty sessions after copying the old file into `sessions.backup.json`; load falls back to that backup | Account-owned storage, serialized/cancellable writes, and an erasure operation that removes both generations |
+| A late library write can recreate a removed cache | [AppModel persistence](../../../ios/Sources/App/AppModel.swift:400) uses an untracked detached writer; teardown removes a single unscoped file | Scope cache to owner, include owner in payload, serialize writes, and reject obsolete account epochs |
+| Recent titles/searches survive teardown | [Recent keys](../../../ios/Sources/App/AppModel.swift:25), [teardown](../../../ios/Sources/App/AppModel.swift:551) | Clear in-memory and persisted recents on account change/erasure, or store safely per owner |
+| Temporary exports have no explicit lifecycle cleanup | [LibraryExport](../../../ios/Sources/Features/Profile/LibraryExport.swift:114) creates `export-UUID` directories | Remove app-owned temporary export files after transfer/expiry and on erasure; do not claim deletion of copies the user saved elsewhere |
 
-The [actual-source Swift probe](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/rewatch-probe.log) confirmed reset leaves two old synthetic sessions in the backup and reloads them after an induced missing-primary recovery. This strengthens the backup-removal finding; it does not prove the separately identified detached-write race occurred during this audit.
+The [actual-source Swift probe](evidence/rewatch-probe.log) confirmed reset leaves two old synthetic sessions in the backup and reloads them after an induced missing-primary recovery. This strengthens the backup-removal finding; it does not prove the separately identified detached-write race occurred during this audit.
 
 Acceptance: account A → sign out → account B, with delayed writes and offline relaunch; B never sees A's titles/history. Full erasure leaves no app-owned account files, backup generations or queued writes. Inspect image/network caches and device backup inclusion as part of that check.
 
@@ -132,7 +132,7 @@ A permanent branded domain is desirable and already contemplated in source, but 
 
 **P0 — reliability proof pending after an observed interruption.** During the first pass's later check, the native-style request returned Cloudflare 530 while the local API remained healthy. Tunnel logs at approximately 04:36 UTC showed `no route to host` for edge QUIC connections and DNS lookup timeouts. The generic user agent's 403 is a separate ingress behavior, not proof of invalid credentials.
 
-The [first pass's final check](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/final-health-check.json), at 04:58 UTC, returned 530/Cloudflare 1033 publicly and 200 locally. The [second pass recheck](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/round-2-evidence/health-recheck.json), at 07:30 UTC / 13:00 IST, returned **200 for both**. The public route recovered without an audit deployment change. These are point-in-time checks from the Mac's network, not continuous or external-network availability proof.
+The [first pass's final check](evidence/final-health-check.json), at 04:58 UTC, returned 530/Cloudflare 1033 publicly and 200 locally. The [second pass recheck](round-2-evidence/health-recheck.json), at 07:30 UTC / 13:00 IST, returned **200 for both**. The public route recovered without an audit deployment change. These are point-in-time checks from the Mac's network, not continuous or external-network availability proof.
 
 Required work: verify sustained public access and recovery; investigate tunnel network/DNS behavior and WAF/native access; monitoring from outside the Mac; alerts for tunnel/public API/DB/freshness failures; documented restart and rollback; reliable hosting and power/network recovery. Do not weaken protection based only on a user-agent probe. The app already classifies infrastructure 403 separately from session-ending 401; preserve that.
 
@@ -142,9 +142,9 @@ Acceptance: signed app works on Wi-Fi and cellular, from launch markets and revi
 
 **Conditional P0 — substantial controls exist, operations are incomplete.** Reporting, blocking, filtering, rate limits, auto-hiding, community terms/profile gating, suspension and moderation CLI are implemented. Comments are currently default-off in production. Keep them off until the full operational path is verified.
 
-Two concrete gaps: `MODERATION_ALERT_WEBHOOK_URL` is absent, and current server stderr repeatedly records `stale report alert failed ... Received an instance of Date`. [staleOpenReports](/Users/shan2new/Projects/animetracker/server/src/services/moderation.ts:388) interpolates a raw `Date` into SQL; the postgres-js path needs a correctly encoded timestamp. The mock tests passing does not exercise that real parameter binding.
+Two concrete gaps: `MODERATION_ALERT_WEBHOOK_URL` is absent, and current server stderr repeatedly records `stale report alert failed ... Received an instance of Date`. [staleOpenReports](../../../server/src/services/moderation.ts:388) interpolates a raw `Date` into SQL; the postgres-js path needs a correctly encoded timestamp. The mock tests passing does not exercise that real parameter binding.
 
-The same error was [reproduced against the migrated isolated PostgreSQL database](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/real-db-probe-results.json), even with no reports. The repair needs a real-DB regression check, including stale and resolved reports; another mocked query assertion would miss this boundary.
+The same error was [reproduced against the migrated isolated PostgreSQL database](evidence/real-db-probe-results.json), even with no reports. The repair needs a real-DB regression check, including stale and resolved reports; another mocked query assertion would miss this boundary.
 
 Required work: repair and exercise the query against a dedicated real test database; route alerts to an authorized operator channel; prove first-report/auto-hide/stale-report visibility, response and closure; handle moderation dependency failures safely; test spam, evasion, brigading, blocked-user interactions, suspended deletion/export and terms upgrades. The ban loader can fail open when it has never loaded; public comment posting needs a deliberate safe failure policy.
 
@@ -162,7 +162,7 @@ Acceptance: install the exact candidate via TestFlight on a physical iPhone; ind
 
 ### R10 Review and patch the production dependency graph
 
-**P1 — release hardening with a concrete inventory.** [Read-only npm audit output](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/npm-audit.json) reports ten production dependency entries: four high and six moderate. High entries are Drizzle ORM, fast-uri, find-my-way and ip-address. These are dependency entries, not ten independently proven app vulnerabilities.
+**P1 — release hardening with a concrete inventory.** [Read-only npm audit output](evidence/npm-audit.json) reports ten production dependency entries: four high and six moderate. High entries are Drizzle ORM, fast-uri, find-my-way and ip-address. These are dependency entries, not ten independently proven app vulnerabilities.
 
 | Dependency/path | Current evidence | Action |
 | --- | --- | --- |
@@ -171,7 +171,7 @@ Acceptance: install the exact candidate via TestFlight on a physical iPhone; ind
 | Agent SDK → MCP/Express/Hono dependency subtree | ip-address, Hono, Hono's Node adapter and qs appear through the announcement-agent dependency tree, rather than the app's main Fastify request server | Assess actual agent transports and URL/proxy/body handling; update the upstream subtree. Windows-only Hono static-serving impact is not automatically applicable to this Mac deployment |
 | node-cron 3.0.3 → uuid 8.3.2 | Transitive moderate advisory; a proposed major cron upgrade changes runtime APIs | Upgrade deliberately and verify scheduling/catch-up; do not run a blanket forced audit fix |
 
-The [version inventory](/Users/shan2new/Projects/animetracker/docs/audits/2026-09-30/evidence/dependency-versions.json) also shows Clerk backend 1.34.0, while the registry currently reports 3.21.0. That version gap is distinct from the currently resolved iOS 1.5.7. Review Clerk's applicable upgrade guides and test JWT verification, deletion/ban calls and webhooks before a backend major upgrade; a newer version alone is not evidence of an exploitable auth defect. [Clerk Core 3 upgrade guide](https://clerk.com/docs/guides/development/upgrading/upgrade-guides/core-3).
+The [version inventory](evidence/dependency-versions.json) also shows Clerk backend 1.34.0, while the registry currently reports 3.21.0. That version gap is distinct from the currently resolved iOS 1.5.7. Review Clerk's applicable upgrade guides and test JWT verification, deletion/ban calls and webhooks before a backend major upgrade; a newer version alone is not evidence of an exploitable auth defect. [Clerk Core 3 upgrade guide](https://clerk.com/docs/guides/development/upgrading/upgrade-guides/core-3).
 
 Acceptance: documented affected-path disposition; patched or explicitly justified remaining entries; clean lockfile/reproducible deployment; typecheck, relevant route/real-DB checks and scheduled-job checks pass. No dependencies were changed during this audit.
 
@@ -179,7 +179,7 @@ Acceptance: documented affected-path disposition; patched or explicitly justifie
 
 ### F1 A persisted TV Anime Both mode
 
-**P1 — absent as an account setting.** [AppModel.mediaFilter](/Users/shan2new/Projects/animetracker/ios/Sources/App/AppModel.swift:235) is explicitly a browsing/search filter and resets to All on teardown. Schedule uses an independent local filter. Neither is a cross-app persisted user mode. [user_preferences](/Users/shan2new/Projects/animetracker/server/src/db/schema.ts:222) currently stores country, language and provider IDs, with no content mode or onboarding state.
+**P1 — absent as an account setting.** [AppModel.mediaFilter](../../../ios/Sources/App/AppModel.swift:235) is explicitly a browsing/search filter and resets to All on teardown. Schedule uses an independent local filter. Neither is a cross-app persisted user mode. [user_preferences](../../../server/src/db/schema.ts:222) currently stores country, language and provider IDs, with no content mode or onboarding state.
 
 Add `contentMode = anime | tv | both` to server preferences, API models and account-owned local state. Keep transient screen filters as narrower choices within that mode. For migration, default existing users to Both; ask new users during onboarding. Mode describes interest, not deletion of subscriptions.
 
@@ -198,9 +198,9 @@ Recommended behavior: primary content and counts follow the selected mode; prese
 | Backend/cache | Preference contract/schema, query scope, ranker inputs, cache keys, expiry and response generations; invalidate old-mode requests and disk snapshots |
 | Export/import | Whole-account export; preview hidden imported titles and preserve them regardless of mode |
 
-The backend already accepts source-scoped search/trending and genres in parts of the API. [APIClient.search](/Users/shan2new/Projects/animetracker/ios/Sources/Networking/APIClient.swift:326) does not send source today. Extend existing boundaries rather than adding unrelated parallel catalogues. Store product preferences in the app database; Clerk should remain responsible for identity/security.
+The backend already accepts source-scoped search/trending and genres in parts of the API. [APIClient.search](../../../ios/Sources/Networking/APIClient.swift:326) does not send source today. Extend existing boundaries rather than adding unrelated parallel catalogues. Store product preferences in the app database; Clerk should remain responsible for identity/security.
 
-Reuse the existing [Japanese-animation boundary](/Users/shan2new/Projects/animetracker/server/src/tmdb/mapping.ts:134), which suppresses TMDB anime twins in favor of AniList and also guards full-show materialization. Content mode must not be derived from media format `TV` alone: an anime series is still Anime, and Western animation can still belong to the general TV catalogue. Verify the existing boundary for imported and deep-linked titles as well as search.
+Reuse the existing [Japanese-animation boundary](../../../server/src/tmdb/mapping.ts:134), which suppresses TMDB anime twins in favor of AniList and also guards full-show materialization. Content mode must not be derived from media format `TV` alone: an anime series is still Anime, and Western animation can still belong to the general TV catalogue. Verify the existing boundary for imported and deep-linked titles as well as search.
 
 Acceptance: switch Anime → TV → Both in every tab, reload/relaunch and sign in on another device; content, counts, search and alerts remain consistent, while hidden titles/progress remain recoverable. A mode-filtered empty state must not imply an empty account.
 
@@ -223,7 +223,7 @@ Acceptance: first meaningful title/progress appears without exploring multiple t
 
 ### F3 Country and streaming-provider settings
 
-**P1 — backend exists, native controls are missing.** `/me/preferences` and provider prioritization exist; the native client does not expose that account preference contract. [AppRegion.current](/Users/shan2new/Projects/animetracker/ios/Sources/Models/Models+Enrichment.swift:760) uses device region, with US fallback. That can show availability/rating information for the wrong market.
+**P1 — backend exists, native controls are missing.** `/me/preferences` and provider prioritization exist; the native client does not expose that account preference contract. [AppRegion.current](../../../ios/Sources/Models/Models+Enrichment.swift:760) uses device region, with US fallback. That can show availability/rating information for the wrong market.
 
 Add Settings/onboarding market and providers; fetch/save/retry preferences; prefer the chosen market over locale for catalogue availability and age labels; account-scope/invalidate country caches. Explain “no availability found” versus a failed lookup. A `language` database field does not establish translated UI, so localize only when ready and do not imply existing localization.
 
@@ -235,7 +235,7 @@ Acceptance: changing country affects availability and ratings consistently; unav
 
 Existing open-source parsers demonstrate saved export formats with TheTVDB identifiers for shows/episodes and title/year for movies, plus watch/check-in data. Use their schemas as implementation research and review any reused code/licenses; their instructions for requesting a fresh export predate shutdown. [TV Time Time Machine](https://github.com/SteadfastKnight/tvtime-time-machine), [TV Time to SIMKL converter](https://github.com/CaptainRatax/tvtime-to-SIMKL-import-file-convertor).
 
-The major blocker is our data model. [progress](/Users/shan2new/Projects/animetracker/server/src/db/schema.ts:182) stores one episode count per user/media, not an arbitrary watched set with original watch dates. Watching episodes 1 and 3 cannot safely become count 2; that would incorrectly mark episode 2 and omit 3. Local `WatchSession` entries represent whole/part rewatch sessions, not individual imported episode events.
+The major blocker is our data model. [progress](../../../server/src/db/schema.ts:182) stores one episode count per user/media, not an arbitrary watched set with original watch dates. Watching episodes 1 and 3 cannot safely become count 2; that would incorrectly mark episode 2 and omit 3. Local `WatchSession` entries represent whole/part rewatch sessions, not individual imported episode events.
 
 Required importer stages:
 
@@ -290,7 +290,7 @@ Acceptance: representative catalogue checklist and freshness alerts; no false ex
 | E7 Accessibility and performance | P1 | Existing accessibility/reduced-motion work, globally capped large text; fresh full accessibility/performance proof absent | Small iPhone + iOS 18/current iOS, largest text, VoiceOver, contrast, Reduce Motion/Transparency; measure cold launch, scrolling, image memory and hitches on device |
 | E8 Security/session lifecycle | P1 | Token refresh/infrastructure classification exist; sensitive app actions accept ordinary valid sessions | Fresh-auth enforcement for deletion/account reassociation, server-side ownership checks, signed webhook replay protection, revocation/account-linking checks; review log redaction |
 | E9 Operational support | P1 | Public support email exists; fresh moderation alerts and outage visibility incomplete | Tested support path, incident and account-recovery runbooks, authorized operator coverage, meaningful error diagnostics with no token/OTP leakage |
-| E10 Documentation and branding | P2, P0 for misleading store copy | Internal AniTrack vs display Previously; older READMEs/readiness notes describe older tabs/deployment/deletion/export | One current release checklist and accurate store/site feature text; distinguish shipped code from pending proof |
+| E10 Documentation and branding | P2, P0 for misleading store copy | Internal Previously vs display Previously; older READMEs/readiness notes describe older tabs/deployment/deletion/export | One current release checklist and accurate store/site feature text; distinguish shipped code from pending proof |
 
 Do not add tests that merely restate implementation. Prioritize live storage/SQL, identity transitions, lost responses, importer fidelity and actual device behavior—the boundaries the current tests do not establish.
 

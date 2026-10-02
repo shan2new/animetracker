@@ -13,7 +13,7 @@
 
               adb shell am broadcast \
                 -a androidx.glance.appwidget.action.DEBUG_UPDATE \
-                -n com.anitrack.app/.widget.UpNextWidgetReceiver
+                -n com.cognipin.previously/.widget.UpNextWidgetReceiver
 
           The receiver ignores the action unless the application is flagged debuggable, so this
           filter is belt AND braces — but it lives in the debug manifest anyway, because a release

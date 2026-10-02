@@ -40,7 +40,7 @@ Returning and Announced are release facts, not extra personal watch statuses. Ge
 
 ## Screenshot provenance
 
-Captured on 6 September 2026 from the already-installed `com.anitrack.app`, displayed as Previously., version/build 1.0 / 1.0, on an iPhone 14 Pro simulator running iOS 27.0. The installed executable was dated 5 September at 23:54; its exact commit is unknown. Source inspection used the current local app checkout, including its in-progress changes. No rebuild, install, account edit or progress mutation was performed for these captures.
+Captured on 6 September 2026 from the already-installed `com.cognipin.previously`, displayed as Previously., version/build 1.0 / 1.0, on an iPhone 14 Pro simulator running iOS 27.0. The installed executable was dated 5 September at 23:54; its exact commit is unknown. Source inspection used the current local app checkout, including its in-progress changes. No rebuild, install, account edit or progress mutation was performed for these captures.
 
 | Landing asset | Original capture | Content |
 | --- | --- | --- |

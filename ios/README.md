@@ -1,8 +1,8 @@
-# AniTrack (iOS)
+# Previously (iOS)
 
-A native SwiftUI rewrite of the AniTrack web app — an airing-first, franchise-centric anime
+A native SwiftUI rewrite of the Previously web app — an airing-first, franchise-centric anime
 tracker. Built for **iOS 26** with Liquid Glass chrome, Swift 6, the Observation framework, and
-the Clerk iOS SDK for auth. Talks to the AniTrack backend (see `../docs/api-contract.md`).
+the Clerk iOS SDK for auth. Talks to the Previously backend (see `../docs/api-contract.md`).
 
 ## Prerequisites
 
@@ -19,11 +19,11 @@ From this directory:
 
 ```sh
 xcodegen generate
-open AniTrack.xcodeproj
+open Previously.xcodeproj
 ```
 
 XcodeGen reads `project.yml`, resolves the Clerk SwiftPM package, and produces
-`AniTrack.xcodeproj`. (The `.xcodeproj` is generated — don't edit it by hand; re-run
+`Previously.xcodeproj`. (The `.xcodeproj` is generated — don't edit it by hand; re-run
 `xcodegen generate` after changing `project.yml`.)
 
 ## Configure
@@ -31,7 +31,7 @@ XcodeGen reads `project.yml`, resolves the Clerk SwiftPM package, and produces
 You must fill these in before a real build:
 
 1. **Bundle identifier & signing** — `project.yml` sets a placeholder bundle id
-   `com.anitrack.app`. In Xcode, select the `AniTrack` target → Signing & Capabilities, pick your
+   `com.cognipin.previously`. In Xcode, select the `Previously` target → Signing & Capabilities, pick your
    Team, and adjust the bundle id if needed. (Or set `DEVELOPMENT_TEAM` in `project.yml`.)
 
 2. **API base URL** — `API_BASE_URL` in `project.yml` (build settings) defaults to
@@ -56,7 +56,7 @@ Tip: prefer keeping the Clerk key and API base URL out of source control by over
 
 ## Build & run
 
-Select the `AniTrack` scheme and an iOS 26 simulator (or device), then Build & Run (⌘R).
+Select the `Previously` scheme and an iOS 26 simulator (or device), then Build & Run (⌘R).
 
 ## Architecture
 

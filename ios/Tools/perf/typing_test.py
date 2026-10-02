@@ -7,7 +7,7 @@ import os, sys, time, json, subprocess, signal, shutil
 from PIL import Image, ImageChops, ImageStat
 
 P = os.environ.get('PERF_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'build', 'perf'))
-U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.anitrack.app'
+U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.cognipin.previously'
 IDB = os.environ.get('IDB', os.path.expanduser('~/Library/Python/3.9/bin/idb'))
 IOS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # idb needs SimulatorKit at <Xcode>/Contents/Developer/Library/PrivateFrameworks — the shadow bundle
@@ -81,5 +81,5 @@ if names:
     import re
     print(f'app frames on the stack during typing stalls ({n} samples):')
     for f, c in incl.most_common(28):
-        d = re.sub(r'\(.*?\)', '()', dem.get(f, f)); d = d.replace('AniTrack.', '')
+        d = re.sub(r'\(.*?\)', '()', dem.get(f, f)); d = d.replace('Previously.', '')
         print(f'  {100 * c / n:5.1f}%  {d[:150]}')

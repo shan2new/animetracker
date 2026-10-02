@@ -1,6 +1,6 @@
 # Networking, JSON and offline cache on Android
 
-Research note for the Android port of AniTrack / "Previously." — **written 2026-09-04**, versions
+Research note for the Android port of "Previously." — **written 2026-09-04**, versions
 verified against Maven Central and Google Maven `maven-metadata.xml` on that date.
 
 Scope: the transport + serialization + on-disk-snapshot layer that replaces
@@ -762,7 +762,7 @@ import kotlinx.coroutines.*
 import kotlin.random.Random
 
 class ApiClient(
-    private val service: AniTrackService,      // the Retrofit interface
+    private val service: PreviouslyService,      // the Retrofit interface
     private val tokens: TokenProvider,
     private val refresher: TokenRefresher,
 ) {

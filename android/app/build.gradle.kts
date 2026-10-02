@@ -9,11 +9,11 @@ plugins {
 }
 
 android {
-    namespace = "com.anitrack.app"
+    namespace = "com.cognipin.previously"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.anitrack.app"
+        applicationId = "com.cognipin.previously"
         // minSdk 26 — see docs/android-port/research/minsdk-decision.md.
         // Pre-31 devices take the no-blur reduce-transparency path; `Modifier.blur` is a SILENT
         // no-op below 31, so chrome must branch explicitly, never rely on graceful degradation.
@@ -163,7 +163,7 @@ dependencies {
     // docs/android-port/research/clerk-android.md and product-decisions.md §7.
     //
     // The SDK's own library manifest already declares INTERNET, the SSO activities and the
-    // `clerk://com.anitrack.app.{callback,oauth}` intent filters, so the app manifest needs nothing
+    // `clerk://com.cognipin.previously.{callback,oauth}` intent filters, so the app manifest needs nothing
     // for the OAuth round-trip.
     implementation(libs.clerk.api)
     implementation(libs.clerk.ui)

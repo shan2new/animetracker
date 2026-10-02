@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate AniTrack logo experiments via OpenRouter (gpt-5-image-mini).
+# Generate Previously logo experiments via OpenRouter (gpt-5-image-mini).
 # Requires: OPENROUTER_API_KEY in env. Writes PNGs into this folder.
 set -uo pipefail
 cd "$(dirname "$0")"

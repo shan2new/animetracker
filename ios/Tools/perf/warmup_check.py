@@ -11,7 +11,7 @@ import os, sys, time, json, subprocess
 from PIL import Image, ImageStat
 
 P = os.environ.get('PERF_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'build', 'perf'))
-U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.anitrack.app'
+U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.cognipin.previously'
 ENV_SIM = {k: v for k, v in os.environ.items() if k != 'DEVELOPER_DIR'}
 tag = sys.argv[1]
 tab = sys.argv[sys.argv.index('--tab') + 1] if '--tab' in sys.argv else None

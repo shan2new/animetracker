@@ -35,7 +35,7 @@ to @2x/@3x PNGs, with no color grade or semantic edits. Final asset:
 `expanded/package-artwork.py` packages Schedule and Saved in the same 128 × 100-point slot
 (324,305 additional image bytes across @2x/@3x).
 
-The v2 Debug AniTrack build passed on iPhone 14 Pro / iOS 27.0; `scout/15-library-flap-v2.jpg`
+The v2 Debug Previously build passed on iPhone 14 Pro / iOS 27.0; `scout/15-library-flap-v2.jpg`
 is its actual native rendering. The earlier v1 captures checked the unchanged accessibility
 fallback and populated-library layout; those checks were not repeated for this asset-only revision. The review
 boards arrange exact native screenshots without repainting the UI; sources are retained.

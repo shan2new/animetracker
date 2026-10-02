@@ -21,7 +21,7 @@ const app = await buildServer()
 try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' })
   startCron()
-  app.log.info(`AniTrack server listening on :${env.PORT} (APP_ENV=${env.APP_ENV})`)
+  app.log.info(`Previously server listening on :${env.PORT} (APP_ENV=${env.APP_ENV})`)
   // Which side of the comments launch switch this deploy is on (off unless the host's .env says 1).
   app.log.info(socialConfigSummary())
 } catch (err) {

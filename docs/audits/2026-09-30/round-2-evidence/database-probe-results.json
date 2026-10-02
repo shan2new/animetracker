@@ -1,6 +1,6 @@
 {
   "boundary": "Real SQL/routes, disposable DB, dev identities, no real OAuth or upstream traffic",
-  "database": "anitrack_release_audit_tests_20260930_dab0de7b",
+  "database": "previously_release_audit_tests_20260930_dab0de7b",
   "invalidInput": [
     {
       "method": "PUT",

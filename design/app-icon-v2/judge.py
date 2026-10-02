@@ -12,7 +12,7 @@ import os
 OUT = HERE / os.environ.get("ICON_OUT", "out")
 AURA = Path("/Users/shantanusinha/Desktop/workspace/aura-assistant/design/icon/AppIcon-1024.png")
 AURA_DARK = Path("/Users/shantanusinha/Desktop/workspace/aura-assistant/ios/Aura/AuraPair.icon/Assets/layer-nocturne-dark.png")
-CURRENT = Path("/private/tmp/claude-501/-Users-shantanusinha-Desktop-workspace-animetracker/b51d53e3-d154-4660-9777-ec1fac686589/scratchpad/ref/current-icon.png")
+CURRENT = Path(os.environ.get("CURRENT_ICON", HERE / "ref" / "current-icon.png"))
 
 
 def squircle_mask(size, n=5.0):

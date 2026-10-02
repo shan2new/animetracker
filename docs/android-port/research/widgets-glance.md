@@ -9,7 +9,7 @@ repo. Links and dates are in §14.
 can draw, how it gets art and data, when it refreshes, how it stays on the app's own dark palette
 instead of the user's wallpaper, and how a tap lands on the right show. It also settles the
 *separate* question of what happens to the iOS **Live Activity**, because that is what
-`ios/Widgets/AniTrackWidgets.swift` actually contains today (see §2).
+`ios/Widgets/PreviouslyWidgets.swift` actually contains today (see §2).
 
 Companion notes: `compose-architecture.md` (toolchain, state holder, Navigation 3),
 `../spec/design-tokens.md` (the palette), `../spec/today.md` (the hero this widget is a compression of),
@@ -43,11 +43,11 @@ rendering path is timing you want.
 
 ## 2. What is actually being ported (read this before designing anything)
 
-`ios/Widgets/AniTrackWidgets.swift` is 122 lines and its `WidgetBundle` contains **one** entry:
+`ios/Widgets/PreviouslyWidgets.swift` is 122 lines and its `WidgetBundle` contains **one** entry:
 
 ```swift
 @main
-struct AniTrackWidgetBundle: WidgetBundle {
+struct PreviouslyWidgetBundle: WidgetBundle {
     var body: some Widget {
         AiringLiveActivity()          // ← the only member
     }
@@ -1002,9 +1002,9 @@ All fetched **2026-09-04** unless a page states its own "last updated" date.
 - *From RemoteViews to RemoteCompose* (Medium, Luca Fioravanti) — context on the Android 16 rendering shift; **its "Android 16" framing conflicts with the `RemoteViews` reference, which puts `DrawInstructions` at API 35 (Android 15)**. Trust the reference.
 
 **In-repo**
-- `/Users/shantanusinha/Desktop/workspace/animetracker/ios/Widgets/AniTrackWidgets.swift` — the Live Activity, and the "no Outfit in the extension" precedent
-- `/Users/shantanusinha/Desktop/workspace/animetracker/CLAUDE.md` — amber rule, copy rules, freshness ladder, write rules, offline library copy
-- `/Users/shantanusinha/Desktop/workspace/animetracker/docs/android-port/TOOLCHAIN.md` — emulator geometry (1280 × 2856 px, 480 dpi) used for the §5.1 budget arithmetic
-- `/Users/shantanusinha/Desktop/workspace/animetracker/docs/android-port/research/compose-architecture.md` — minSdk 31 / targetSdk 36 / compileSdk 37, AGP 9.4.0, Compose BOM 2026.08.00, "do not adopt `MaterialTheme`"
-- `/Users/shantanusinha/Desktop/workspace/animetracker/docs/android-port/spec/design-tokens.md` — the hex values in §8.2
-- `/Users/shantanusinha/Desktop/workspace/animetracker/docs/android-port/spec/appmodel.md` §10.3 — `pendingOpen`, the route §9.2 reuses
+- `ios/Widgets/PreviouslyWidgets.swift` — the Live Activity, and the "no Outfit in the extension" precedent
+- `CLAUDE.md` — amber rule, copy rules, freshness ladder, write rules, offline library copy
+- `docs/android-port/TOOLCHAIN.md` — emulator geometry (1280 × 2856 px, 480 dpi) used for the §5.1 budget arithmetic
+- `docs/android-port/research/compose-architecture.md` — minSdk 31 / targetSdk 36 / compileSdk 37, AGP 9.4.0, Compose BOM 2026.08.00, "do not adopt `MaterialTheme`"
+- `docs/android-port/spec/design-tokens.md` — the hex values in §8.2
+- `docs/android-port/spec/appmodel.md` §10.3 — `pendingOpen`, the route §9.2 reuses

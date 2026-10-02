@@ -2255,7 +2255,7 @@ task {
 
 | Launch argument | Effect |
 |---|---|
-| `-openDetail <franchiseId>` | `AniTrackApp` reads `UserDefaults["openDetail"]` → `AppModel.pendingOpen` → `MainTabView` selects **Today** and replaces its path with `[DetailRoute(id:, zoomID: "alert/{id}")]`. This is the same route a tapped episode alert takes. |
+| `-openDetail <franchiseId>` | `PreviouslyApp` reads `UserDefaults["openDetail"]` → `AppModel.pendingOpen` → `MainTabView` selects **Today** and replaces its path with `[DetailRoute(id:, zoomID: "alert/{id}")]`. This is the same route a tapped episode alert takes. |
 | `-detailAnchor trailers\|people\|related\|watch` | 2.5 s after appearance, scrolls `"anchor-{name}"` to the top |
 | `-detailTrailer 1` | 2.5 s after appearance, opens the first trailer's `VideoSheet` |
 | `-detailOpenRelated N` | 2.5 s after appearance, invokes `openRelated(f.related[N])` (bounds-checked) |

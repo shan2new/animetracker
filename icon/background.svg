@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AniTrack icon — BACKGROUND layer. 1024x1024, full-bleed. No pre-baked rounded corners; the system mask handles rounding. -->
+<!-- Previously icon — BACKGROUND layer. 1024x1024, full-bleed. No pre-baked rounded corners; the system mask handles rounding. -->
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <!-- Near-black base with a subtle vertical lift for depth -->

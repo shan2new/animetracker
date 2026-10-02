@@ -390,7 +390,7 @@ struct MainTabView: View {
                 selectedTab = .today
                 switch route {
                 case .show(let id):
-                    // Delivered through `pendingOpen` (AniTrackApp); handled here for completeness.
+                    // Delivered through `pendingOpen` (PreviouslyApp); handled here for completeness.
                     paths[.today] = NavigationPath([DetailRoute(id: id, zoomID: "alert/\(id)")])
                 case .post(let postId, let commentId):
                     paths[.today] = NavigationPath([FeedRoute.post(id: postId, focusCommentId: commentId)])

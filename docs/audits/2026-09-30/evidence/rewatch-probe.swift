@@ -12,7 +12,7 @@ enum Copy {
 
 @main struct RewatchAuditProbe {
     @MainActor static func main() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("anitrack-release-audit-rewatch-" + UUID().uuidString)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("previously-release-audit-rewatch-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let primary = directory.appendingPathComponent("sessions.json")
         let backup = directory.appendingPathComponent("sessions.backup.json")

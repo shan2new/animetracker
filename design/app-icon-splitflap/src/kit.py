@@ -1,10 +1,11 @@
 """Shared drawing kit: signed distances at 1024, colours, the iOS tile."""
 import math
+import os
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 S = 1024
 Y, X = np.mgrid[0:S, 0:S].astype(np.float64) + 0.5
-FONT = "/Users/shantanusinha/Desktop/workspace/animetracker/ios/Resources/Fonts/"
+FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "ios", "Resources", "Fonts") + "/"
 
 def aa(d): return np.clip(0.5 - d, 0, 1)
 def hexc(h): return np.array([(h >> 16) & 255, (h >> 8) & 255, h & 255]) / 255.0

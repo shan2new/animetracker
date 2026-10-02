@@ -1,4 +1,4 @@
-# OpenRouter — generate the AniTrack icon raster
+# OpenRouter — generate the Previously icon raster
 
 This is ready to run the moment an `OPENROUTER_API_KEY` is available. It produces a
 1024×1024 raster following the same concept as the hand-authored SVG layers, to use as
@@ -18,7 +18,7 @@ Verify the live id with: `curl https://openrouter.ai/api/v1/models | jq '.data[]
 
 ## The image prompt (paste as the user message)
 
-> A premium minimalist iOS app icon for "AniTrack", an airing-first anime tracker.
+> A premium minimalist iOS app icon for "Previously", an airing-first anime tracker.
 > Centered composition on a 1024x1024 square, full-bleed, NO rounded corners and NO
 > drop shadow around the outer square (the OS adds the rounded-rect mask itself).
 > Subject: a bold, chunky rounded **play triangle** in warm orange (#F0A24E, top-lit to
@@ -45,9 +45,9 @@ curl -sS "https://openrouter.ai/api/v1/chat/completions" \
     "modalities": ["image", "text"],
     "image_config": { "aspect_ratio": "1:1" },
     "messages": [
-      { "role": "user", "content": "A premium minimalist iOS app icon for AniTrack, an airing-first anime tracker. Centered on a 1024x1024 square, full-bleed, NO rounded corners and NO outer shadow (the OS adds the rounded mask). Subject: a bold chunky rounded play triangle in warm orange (#F0A24E, top-lit to #FFC07A, shaded to #E08A38) on a translucent dark glass disc (#20202A to #131318) with a bright specular highlight along its top rim. Two faint concentric warm-orange broadcast pulse rings radiate around the disc. A small glowing new-episode notification dot at top-right of the disc, warm orange with a tiny white specular highlight and thin dark halo. Background: near-black vertical gradient (#16161B to #0B0B0E) with a soft warm radial glow behind the disc. Style: Apple iOS 26 Liquid Glass, glassy translucency, clean specular highlights, no text, no thin lines, no clutter, high contrast, square aspect ratio." }
+      { "role": "user", "content": "A premium minimalist iOS app icon for Previously, an airing-first anime tracker. Centered on a 1024x1024 square, full-bleed, NO rounded corners and NO outer shadow (the OS adds the rounded mask). Subject: a bold chunky rounded play triangle in warm orange (#F0A24E, top-lit to #FFC07A, shaded to #E08A38) on a translucent dark glass disc (#20202A to #131318) with a bright specular highlight along its top rim. Two faint concentric warm-orange broadcast pulse rings radiate around the disc. A small glowing new-episode notification dot at top-right of the disc, warm orange with a tiny white specular highlight and thin dark halo. Background: near-black vertical gradient (#16161B to #0B0B0E) with a soft warm radial glow behind the disc. Style: Apple iOS 26 Liquid Glass, glassy translucency, clean specular highlights, no text, no thin lines, no clutter, high contrast, square aspect ratio." }
     ]
-  }' > /tmp/anitrack-icon-response.json
+  }' > /tmp/previously-icon-response.json
 ```
 
 ## Extract the PNG from the response
@@ -56,10 +56,10 @@ The image comes back as a base64 data URL in `.choices[0].message.images[0].imag
 
 ```bash
 # strip the "data:image/png;base64," prefix, decode to icon-1024.png
-jq -r '.choices[0].message.images[0].image_url.url' /tmp/anitrack-icon-response.json \
+jq -r '.choices[0].message.images[0].image_url.url' /tmp/previously-icon-response.json \
   | sed 's/^data:image\/[a-zA-Z]*;base64,//' \
   | base64 --decode > "$(dirname "$0")/icon-1024.png" 2>/dev/null \
-  || { jq -r '.choices[0].message.images[0].image_url.url' /tmp/anitrack-icon-response.json \
+  || { jq -r '.choices[0].message.images[0].image_url.url' /tmp/previously-icon-response.json \
         | sed 's/^data:image\/[a-zA-Z]*;base64,//' | base64 --decode > icon-1024.png; }
 
 # Verify it is exactly 1024x1024; if the model returned another size, resize:

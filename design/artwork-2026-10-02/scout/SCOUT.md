@@ -73,7 +73,7 @@ TestFlight upload or real-device check was performed.
 [exact prompt](../quiet-artwork-prompt-v2.json). Built-in Image Gen was used; Sunburst selection
 is not exposed by that tool.
 
-Build the existing AniTrack project/scheme with loopback API and blank Clerk overrides. Launch
-`-openTab library -anitrack.devClerkId artwork-preview-local`. The adapter defaults to empty
+Build the existing Previously project/scheme with loopback API and blank Clerk overrides. Launch
+`-openTab library -previously.devClerkId artwork-preview-local`. The adapter defaults to empty
 responses. Local `preview-mode.txt` containing `populated` selects the ignored real-library
 snapshot. Populated previews use actual records and progress.

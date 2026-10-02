@@ -1,6 +1,6 @@
 {
-  "archivePath": "/Users/shan2new/Library/Developer/Xcode/Archives/2026-10-02/AniTrack 02-10-26, 11.53\u202fAM.xcarchive",
-  "bundleIdentifier": "com.anitrack.app",
+  "archivePath": "/Users/shan2new/Library/Developer/Xcode/Archives/2026-10-02/Previously 02-10-26, 11.53\u202fAM.xcarchive",
+  "bundleIdentifier": "com.cognipin.previously",
   "displayName": "Previously.",
   "version": "1.0",
   "build": "6",
@@ -31,7 +31,7 @@
     "deliveryUUID": "54df8f93-f8ae-4e7e-a44d-44c32724403e",
     "errorCount": 0,
     "log": "release-upload-success.txt",
-    "nativeUI": "App upload complete: AniTrack 1.0 (6) uploaded; Organizer Uploaded to Apple",
+    "nativeUI": "App upload complete: Previously 1.0 (6) uploaded; Organizer Uploaded to Apple",
     "priorCLIUploadAttempt": {
       "attempted": true,
       "completed": false,

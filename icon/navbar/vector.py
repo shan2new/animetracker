@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AniTrack tab-bar glyphs, sourced from the Hugeicons free set (stroke / rounded,
+"""Previously tab-bar glyphs, sourced from the Hugeicons free set (stroke / rounded,
 24x24 viewBox) and rendered crisp via rsvg-convert into transparent TEMPLATE imagesets
 (@1x/@2x/@3x). The app's own bar (`AppTabBar`, X's anatomy — 25 Sep) tints them with one ink.
 

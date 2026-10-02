@@ -7,7 +7,7 @@
 set -u
 # idb needs SimulatorKit under a developer dir (simkit_shadow.sh builds the shadow bundle); xcrun is fine with it too.
 export DEVELOPER_DIR="${IDB_DEVELOPER_DIR:-$(cd "$(dirname "$0")/../.." && pwd)/build/Xcode-shadow.app/Contents/Developer}"
-IDB="${IDB:-$HOME/Library/Python/3.9/bin/idb}"; U="${PERF_UDID:-C2AED006-C1A7-49DF-B7B4-764B35373C11}"; B=com.anitrack.app; D="$1"; mkdir -p "$D"
+IDB="${IDB:-$HOME/Library/Python/3.9/bin/idb}"; U="${PERF_UDID:-C2AED006-C1A7-49DF-B7B4-764B35373C11}"; B=com.cognipin.previously; D="$1"; mkdir -p "$D"
 SL=03ded211-224c-4e83-9815-5a7fec3caacc; GOT=c101456a-89e6-45e4-8842-4e4b07894b32; AOT=578f9465-c44c-4ac6-a622-7b78082149aa; WED=1820ef11-5175-4155-b2c6-544469358e2c; REZ=faa8903d-3b27-4c26-8924-7e89f937b370
 shot() { xcrun simctl io $U screenshot "$D/$1.png" >/dev/null 2>&1; echo "shot $1"; }
 launch() { xcrun simctl terminate $U $B 2>/dev/null; sleep 0.5; xcrun simctl launch $U $B "$@" >/dev/null 2>&1; }

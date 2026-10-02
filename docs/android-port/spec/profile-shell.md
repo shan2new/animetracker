@@ -1,13 +1,13 @@
 # Profile sheet, app shell, splash, notifications, widget, Live Activity
 
 This is the behavioural specification for the *frame* of **Previously.** — everything that is not a
-content screen. It covers the process boot order (`AniTrackApp`), the authentication gate and
+content screen. It covers the process boot order (`PreviouslyApp`), the authentication gate and
 cold-launch ident (`RootView` + `LaunchIdent`), the four-tab shell with its per-tab navigation
 stacks and its deliberately three-layer tint architecture (`MainTabView`), the Profile modal — an
 *account sheet* in the App Store's reading order, not a dashboard (`ProfileView`, `LibraryExport`,
 `AccountDeletion`), the local episode-alert scheduler (`EpisodeNotifications`), and the two ambient
 surfaces the app owns outside its own window: the airing Live Activity (`AiringLiveActivityManager`)
-and the widget extension that renders it (`Widgets/AniTrackWidgets.swift`). Three rules from
+and the widget extension that renders it (`Widgets/PreviouslyWidgets.swift`). Three rules from
 `CLAUDE.md` govern almost every decision below and must survive the port verbatim: **amber
 (`ThemeColor.accent`) is never an action colour** — it means a fact or a state, and every tappable
 bare word or glyph uses `ThemeColor.interactive`; **every haptic goes through
@@ -22,7 +22,7 @@ decisions were arrived at by measurement and reverting one re-introduces a named
 
 | File | Contents |
 | --- | --- |
-| `ios/Sources/App/AniTrackApp.swift` | `@main` scene, boot order, tab-bar font proxy, global environment |
+| `ios/Sources/App/PreviouslyApp.swift` | `@main` scene, boot order, tab-bar font proxy, global environment |
 | `ios/Sources/App/RootView.swift` | Splash/auth gate, `AppTab`, `MainTabView`, `detailDestinations` |
 | `ios/Sources/App/LaunchIdent.swift` | The launch ident: the icon's ribbon arriving and taking its place, a pure function of live time |
 | `ios/Sources/App/LaunchHandoff.swift` | The launch's hand-off state (phase, auth answer, the destination mark's frame) |
@@ -33,7 +33,7 @@ decisions were arrived at by measurement and reverting one re-introduces a named
 | `ios/Sources/Notifications/EpisodeNotifications.swift` | Local alert scheduling + foreground presenter + tap route |
 | `ios/Sources/Notifications/AiringLiveActivityManager.swift` | Live Activity lifecycle |
 | `ios/Shared/AiringActivityAttributes.swift` | The app↔widget ActivityKit contract (member of **both** targets) |
-| `ios/Widgets/AniTrackWidgets.swift` | Lock-screen + Dynamic Island rendering |
+| `ios/Widgets/PreviouslyWidgets.swift` | Lock-screen + Dynamic Island rendering |
 | `ios/Sources/Auth/SignInView.swift` | First-run screen (summarised — it is the gate's other branch) |
 
 Referenced but specified elsewhere: `design-tokens.md` (`ThemeColor`/`ThemeSpace`/`ThemeMetrics`/
@@ -46,7 +46,7 @@ Referenced but specified elsewhere: `design-tokens.md` (`ThemeColor`/`ThemeSpace
 
 ## 1. Process boot order
 
-`AniTrackApp.init()` runs **before any view exists** and its statement order is load-bearing.
+`PreviouslyApp.init()` runs **before any view exists** and its statement order is load-bearing.
 
 | # | Statement | Why it must happen here |
 | --- | --- | --- |
@@ -282,7 +282,7 @@ fires **only on an actual tab change**, never on a pop-to-root.
 
 | Layer | Tint | Reason |
 | --- | --- | --- |
-| App root (`AniTrackApp`) | `ThemeColor.interactive` | System chrome draws in ink |
+| App root (`PreviouslyApp`) | `ThemeColor.interactive` | System chrome draws in ink |
 | `TabView` | `ThemeColor.accent` | *"The bar's selected item is state, so it alone is amber"* |
 | Each tab's `NavigationStack` | `ThemeColor.interactive` | *"every stack inside re-tints to ink … so the amber never reaches a back button or an alert"* |
 
@@ -364,7 +364,7 @@ build has no freshness source wired", never a silent claim of freshness. `startM
 }
 ```
 
-`initial: true` so a value set during `AniTrackApp.init` (a cold launch from a notification tap, or
+`initial: true` so a value set during `PreviouslyApp.init` (a cold launch from a notification tap, or
 `-openDetail`) is consumed on the first render. The Today path is **replaced**, not appended —
 *"opens its show — on Today, above whatever was there."*
 
@@ -1414,10 +1414,10 @@ struct AiringActivityAttributes: ActivityAttributes {
 
 ---
 
-## 9. Widget extension (`AniTrackWidgets`)
+## 9. Widget extension (`PreviouslyWidgets`)
 
 A `WidgetBundle` containing exactly one widget, `AiringLiveActivity`. There is **no home-screen widget**
-in this build. Bundle id `com.anitrack.app.widgets`, `NSExtensionPointIdentifier
+in this build. Bundle id `com.cognipin.previously.widgets`, `NSExtensionPointIdentifier
 com.apple.widgetkit-extension`, display name `"Previously."`.
 
 *"Design system note: extensions don't bundle the Outfit fonts or Theme — colors are inlined
@@ -1484,7 +1484,7 @@ All are read via `UserDefaults.standard` (so `-key value` on the launch command 
 
 | Argument | Read in | Effect |
 | --- | --- | --- |
-| `-openDetail <franchiseId>` | `AniTrackApp.init` | Sets `pendingOpen` → lands on that show page via the alert-tap route |
+| `-openDetail <franchiseId>` | `PreviouslyApp.init` | Sets `pendingOpen` → lands on that show page via the alert-tap route |
 | `-openTab today\|schedule\|library\|discover\|search` | `MainTabView.launchTab` | Chooses the initially selected tab (default `today`) |
 | `-openProfile 1` | `TodayView.onAppear` | Opens the Profile sheet |
 | `-openAllTitles 1` | `LibraryView` | One-shot: opens All titles |
@@ -1531,7 +1531,7 @@ All are read via `UserDefaults.standard` (so `-key value` on the launch command 
 | Auth bootstrap wait | ≤ 3 s, polling every 80 ms | `AuthManager.bootstrap` |
 | Alerts per show / total cap | 3 / 48 | `EpisodeNotifications` |
 | Live Activity window | lead 60 min, linger 15 min | `AiringLiveActivityManager` |
-| Widget accent / backdrop | `#F0A24E` / `#0B0B0E` (0.9 alpha tint) | `AniTrackWidgets` |
+| Widget accent / backdrop | `#F0A24E` / `#0B0B0E` (0.9 alpha tint) | `PreviouslyWidgets` |
 | Deletion request timeout | 20 s | `AccountDeletion` |
 
 ---

@@ -1,6 +1,6 @@
-# AniTrack App Icon
+# Previously App Icon
 
-Everything needed to ship the AniTrack iOS app icon, following Apple's **iOS 26 Liquid
+Everything needed to ship the Previously iOS app icon, following Apple's **iOS 26 Liquid
 Glass** layered-icon guidelines. Self-contained in this folder.
 
 ## What's here

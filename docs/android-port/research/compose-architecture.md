@@ -504,7 +504,7 @@ this seriously and that the seams are still being sanded.
   2026 (JetBrains' stated goal is to make it the standard "by 2026"; it is enabled by default since
   Kotlin 2.2.20 but not stable). Absent it you are back to Objective-C interop shapes in Swift.
   And the iOS project is XcodeGen-generated with `project.yml` + a "never hand-edit
-  `AniTrack.xcodeproj`" rule — bolting a Gradle-produced framework onto that build is a new class of
+  `Previously.xcodeproj`" rule — bolting a Gradle-produced framework onto that build is a new class of
   build breakage in a repo that already has documented archive/Metal gotchas.
 
 ### Decision
@@ -824,7 +824,7 @@ class MainActivity : ComponentActivity() {
 6. **Golden-fixture corpus — who owns it?** §8's drift mitigation only works if the iOS side
    actually runs it in CI. If nobody will own the Swift half, the honest options are (a) accept
    drift, or (b) reopen the KMP `:model` question.
-7. **Widgets.** The iOS app has `AniTrackWidgets.swift`. Glance is the Android answer, has its own
+7. **Widgets.** The iOS app has `PreviouslyWidgets.swift`. Glance is the Android answer, has its own
    versioning and its own state story, and is not covered here.
 
 ---

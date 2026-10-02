@@ -157,8 +157,8 @@ actor TokenRefresher {
     private static let reuseWindow: TimeInterval = 3
 
     /// Same subsystem/category as `APIClient.log`, so `auth.refresh` lines interleave with the
-    /// request lines in one `log stream --predicate 'subsystem == "com.anitrack.app"'`.
-    private static let log = Logger(subsystem: "com.anitrack.app", category: "api")
+    /// request lines in one `log stream --predicate 'subsystem == "com.cognipin.previously"'`.
+    private static let log = Logger(subsystem: "com.cognipin.previously", category: "api")
 
     private var inFlight: Task<TokenRefreshOutcome, Never>?
     private var lastToken: String?
@@ -669,9 +669,9 @@ final class APIClient: @unchecked Sendable {
     }
 
     // Failure diagnostics land in the unified log (`log stream --predicate 'subsystem ==
-    // "com.anitrack.app"'`) so "the app says unreachable" is attributable to a concrete cause —
+    // "com.cognipin.previously"'`) so "the app says unreachable" is attributable to a concrete cause —
     // and so single-flight refresh and retry are verifiable without a UI.
-    private static let log = Logger(subsystem: "com.anitrack.app", category: "api")
+    private static let log = Logger(subsystem: "com.cognipin.previously", category: "api")
 
     /// A request decoded as `Response`: `sendRaw`'s state machine, then the body. An empty 2xx is a
     /// `NoContent` (or an `IgnoredResponse`) for the callers that expect no body.

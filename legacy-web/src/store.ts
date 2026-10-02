@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LibraryEntry, WatchStatus } from './types'
 
 // v2: abandons any seeded library persisted by an earlier build.
-const LIB_KEY = 'anitrack.library.v2'
-const OPENED_KEY = 'anitrack.lastOpenedAt.v1'
+const LIB_KEY = 'previously.library.v2'
+const OPENED_KEY = 'previously.lastOpenedAt.v1'
 const VALID_STATUS: WatchStatus[] = ['watching', 'completed', 'planned']
 
 // localStorage can throw on *access* (private mode, disabled storage, SecurityError),

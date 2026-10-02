@@ -16,7 +16,7 @@ import os, json, subprocess, sys, threading, time, shutil, re
 
 P = os.environ.get('PERF_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'build', 'perf'))
 U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11')
-B = 'com.anitrack.app'
+B = 'com.cognipin.previously'
 IDB = os.environ.get('IDB', os.path.expanduser('~/Library/Python/3.9/bin/idb'))
 GOT = 'c101456a-89e6-45e4-8842-4e4b07894b32'
 IOS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,7 +76,7 @@ def swipe(x1, y1, x2, y2, dur=0.25): idb('swipe', str(x1), str(y1), str(x2), str
 def text(s): idb('text', s)
 
 def app_pid():
-    r = sh('pgrep', '-f', 'AniTrack.app/AniTrack')
+    r = sh('pgrep', '-f', 'Previously.app/Previously')
     pids = [int(x) for x in r.stdout.split()]
     return pids[0] if pids else None
 

@@ -18,7 +18,7 @@ const schema = z.object({
 
   PORT: z.coerce.number().default(8787),
   CORS_ORIGIN: z.string().default('*'),
-  DATABASE_URL: z.string().default('postgres://localhost:5432/anitrack'),
+  DATABASE_URL: z.string().default('postgres://localhost:5432/previously'),
 
   CLERK_JWT_KEY: z.string().optional(),
   CLERK_SECRET_KEY: z.string().optional(),

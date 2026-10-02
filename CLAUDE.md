@@ -28,8 +28,8 @@ npm run moderation -- list   # the report queue; `-- help` for show/hide/restore
 ```
 
 iOS has no CLI test/build flow here — after editing `project.yml` run `cd ios && xcodegen generate`,
-then build in Xcode (or `xcodebuild -scheme AniTrack` — a shared scheme exists for CLI builds).
-**Never hand-edit `AniTrack.xcodeproj`** (gitignored, regenerated).
+then build in Xcode (or `xcodebuild -scheme Previously` — a shared scheme exists for CLI builds).
+**Never hand-edit `Previously.xcodeproj`** (gitignored, regenerated).
 
 ## Two sources: AniList (anime) + TMDB (general TV)
 
@@ -837,7 +837,7 @@ to `news:` with every social row, in one transaction, when research adopts the p
   `.toolbarBackground(.hidden)` — so the modifier draws the title as the PRINCIPAL item in Outfit
   (`bodyEmphasis`, iOS 26's glass capsule dropped) and keeps `.navigationTitle` for VoiceOver and back
   buttons. Detail and the post page fill the principal slot themselves. The tab items still get
-  Outfit through `AniTrackApp.applyBrandFont` (UIKit's proxy works there).
+  Outfit through `PreviouslyApp.applyBrandFont` (UIKit's proxy works there).
 - Shared design system lives in `Sources/DesignSystem/` — reuse it, never re-invent:
   `ThemeTokens.swift` (`ThemeColor` / `ThemeSpace` / `ThemeRadius` / `ThemeType` + `.type(_:)` /
   `ThemeMotion` + `pick(_:reduceMotion:)` / `FeedbackCoordinator` — **every haptic goes through it,
@@ -1460,7 +1460,7 @@ to `news:` with every social row, in one transaction, when research adopts the p
   `CADisplayLink` hitch logger (every frame gap ≥ 34 ms → `Documents/perf.jsonl`, with the screen
   from the `.perfScreen("…")` hooks in `RootView`) and a watchdog thread that samples the MAIN
   THREAD'S STACK while it is stalled (suspend, copy the frame-pointer chain into a preallocated
-  buffer, resume, then `dladdr` — the app's code lives in `AniTrack.debug.dylib`). The scripted
+  buffer, resume, then `dladdr` — the app's code lives in `Previously.debug.dylib`). The scripted
   flow, the scorer, the stack aggregator and the A/B switches (`-perfNoShelfMask 1`,
   `-perfNoMaterial 1`, `-perfNoDrift 1`) live in `ios/Tools/perf/` (README
   there). Rules that came out of the pass, each one measured:
@@ -1606,17 +1606,17 @@ to `news:` with every social row, in one transaction, when research adopts the p
 Code moves via git. The data does not — take a dump and restore it on the new host (e.g. Mac mini):
 
 ```bash
-# On the current machine (Postgres 16, db name `anitrack`):
-pg_dump anitrack -Fc --no-owner --no-privileges -f anitrack.dump   # custom format (recommended)
-# or plain SQL: pg_dump anitrack --no-owner --no-privileges -f anitrack.sql
+# On the current machine (Postgres 16, db name `previously`):
+pg_dump previously -Fc --no-owner --no-privileges -f previously.dump   # custom format (recommended)
+# or plain SQL: pg_dump previously --no-owner --no-privileges -f previously.sql
 
 # On the Mac mini (after installing Postgres + cloning the repo):
-createdb anitrack
-pg_restore --no-owner --no-privileges -d anitrack anitrack.dump    # or: psql anitrack < anitrack.sql
+createdb previously
+pg_restore --no-owner --no-privileges -d previously previously.dump    # or: psql previously < previously.sql
 ```
 
 The dump includes the `drizzle.__drizzle_migrations` bookkeeping table, so a restored DB is already
 at the current migration — `npm run db:migrate` against it is a no-op (don't `createdb` + migrate
 *instead* of restoring, or you'll get an empty schema with none of the data).
 Then set `server/.env` (`DATABASE_URL`, Clerk + OpenRouter/Cerebras keys) and `npm run dev`.
-A dump taken on 2026-06-24 lives at `../anitrack-2026-06-24.{dump,sql}` (one level above the repo).
+A plain-SQL dump taken on 2026-06-24 lives at the repo root as `previously-2026-06-24.sql` (gitignored).

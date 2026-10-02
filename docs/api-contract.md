@@ -1,4 +1,4 @@
-# AniTrack API contract (v1)
+# Previously API contract (v1)
 
 The Node backend (`server/`) and the iOS app (`ios/`) both build against this. Base URL is
 configurable; default dev `http://localhost:8787`. All times are **ms since epoch** (Int64).
@@ -71,7 +71,7 @@ not a clean-art signal. Clients must not overlay another title onto an unclassif
 
 ### FranchiseVideo
 
-Catalogue-curated external video metadata. AniTrack does not proxy or host video bytes. `url` may
+Catalogue-curated external video metadata. Previously does not proxy or host video bytes. `url` may
 be opened directly when the provider is supported; `site` + `id` are the durable fallback. A video
 can belong to the whole franchise or one exact season/movie. `featuredVideo` is selected by the
 backend, preferring an upcoming/current part before video type, then official status and recency.
@@ -1257,8 +1257,8 @@ interface HandleAvailability { handle: string; available: boolean; reason: null 
 
 - **Handle** (picked at the first reply; `PUT /me/profile { handle, displayName }`): trimmed, one
   leading `@` dropped, lowercased; 3–20 characters of `[a-z0-9_.]`; no leading, trailing or doubled
-  `.`; at least one letter; not reserved (admin, moderator, official, support, previously, anitrack,
-  and the rest of the server's list, plus the prefixes `previously`, `anitrack`, `official`, `admin`,
+  `.`; at least one letter; not reserved (admin, moderator, official, support, previously,
+  and the rest of the server's list, plus the prefixes `previously`, `official`, `admin`,
   `support`, `mod.`, `mod_`); no blocked term. A handle is ONE token, so a blocked term of four or
   more letters is refused ANYWHERE in it with `.`/`_` removed ("xslurx", "slur123"), after a short
   reviewed list of ordinary words that merely contain one ("grape", "peacock", "analog") is cut out;
@@ -1268,7 +1268,7 @@ interface HandleAvailability { handle: string; available: boolean; reason: null 
   emails out), no link, at least one letter, no blocked term (names also refuse general profanity,
   which comments allow), and not **reserved**: no word of the name (a plural and leet spellings
   too), nor the whole name with its separators removed, may be the app, its staff or a system voice
-  (previously, anitrack, admin, administrator, moderator, mod, official, support, staff, team,
+  (previously, admin, administrator, moderator, mod, official, support, staff, team,
   system, security) or a brand whose news or data the app carries (anilist, tmdb, justwatch,
   myanimelist, crunchyroll, funimation, hidive, netflix, aniplex) — "Previously Support" and
   "Crunchyroll" would read as the official voice beside every reply. `DisplayNameRejection` =

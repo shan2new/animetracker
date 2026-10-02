@@ -18,7 +18,7 @@ import os, sys, time, json, subprocess, signal, shutil, collections, re
 from PIL import Image, ImageChops, ImageStat
 
 P = os.environ.get('PERF_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'build', 'perf'))
-U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.anitrack.app'
+U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.cognipin.previously'
 IDB = os.environ.get('IDB', os.path.expanduser('~/Library/Python/3.9/bin/idb'))
 IOS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # idb needs SimulatorKit at <Xcode>/Contents/Developer/Library/PrivateFrameworks — the shadow bundle
@@ -165,7 +165,7 @@ if names:
     r = subprocess.run(['xcrun', 'swift-demangle', '--compact'], input='\n'.join(names), capture_output=True, text=True,
                        env=dict(os.environ, DEVELOPER_DIR='/Applications/Xcode-beta.app/Contents/Developer'))
     dem = dict(zip(names, r.stdout.splitlines()))
-def short(f): return re.sub(r'\(.*?\)', '()', dem.get(f, f)).replace('AniTrack.', '')[:90]
+def short(f): return re.sub(r'\(.*?\)', '()', dem.get(f, f)).replace('Previously.', '')[:90]
 report = []
 def out(s): print(s); report.append(s)
 first_presented = None

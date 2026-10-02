@@ -13,7 +13,7 @@
     "warnings": 6,
     "newWarnings": 0,
     "receipt": "build.log",
-    "scheme": "AniTrack",
+    "scheme": "Previously",
     "configuration": "Debug",
     "overrides": [
       "API_BASE_URL=http://localhost:18789",

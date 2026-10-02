@@ -1,6 +1,6 @@
 import Foundation
 
-// Codable models matching the AniTrack API contract (docs/api-contract.md) exactly.
+// Codable models matching the Previously API contract (docs/api-contract.md) exactly.
 // All times are milliseconds since epoch (Int64), nullable where the contract says so.
 
 // MARK: - Enums

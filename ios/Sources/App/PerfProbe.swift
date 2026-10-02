@@ -349,8 +349,8 @@ enum StallSampler {
             let pc = pcs[i]
             guard let p = UnsafeRawPointer(bitPattern: pc), dladdr(p, &info) != 0 else { out.append("?"); continue }
             let image = info.dli_fname.map { String(cString: $0) }.map { ($0 as NSString).lastPathComponent } ?? "?"
-            // The app's code lives in `AniTrack.debug.dylib` under Xcode's debug-dylib builds.
-            if image.hasPrefix("AniTrack"), let s = info.dli_sname {
+            // The app's code lives in `Previously.debug.dylib` under Xcode's debug-dylib builds.
+            if image.hasPrefix("Previously"), let s = info.dli_sname {
                 out.append(String(cString: s))
             } else {
                 let sym = info.dli_sname.map { String(cString: $0) } ?? ""

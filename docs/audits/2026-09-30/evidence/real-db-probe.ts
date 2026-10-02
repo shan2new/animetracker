@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 
 const target = new URL(process.env.DATABASE_URL ?? '')
 assert.equal(target.hostname, '127.0.0.1')
-assert.match(target.pathname, /^\/anitrack_release_audit_tests_20260930_[a-f0-9]{8}$/)
+assert.match(target.pathname, /^\/previously_release_audit_tests_20260930_[a-f0-9]{8}$/)
 assert.equal(process.env.APP_ENV, 'test')
 assert.equal(process.env.DEV_AUTH_BYPASS, '1')
 assert.equal(process.env.CLERK_SECRET_KEY, '')

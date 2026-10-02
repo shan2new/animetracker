@@ -4,7 +4,7 @@ cancel — filmed at 30 fps with the stall sampler on. Usage: focus_test.py <tag
 Scores hitches and stalls per phase and lists each stall's frames."""
 import os, sys, time, json, subprocess, signal, shutil, re, collections
 P = os.environ.get('PERF_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'build', 'perf'))
-U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.anitrack.app'
+U = os.environ.get('PERF_UDID', 'C2AED006-C1A7-49DF-B7B4-764B35373C11'); B = 'com.cognipin.previously'
 IDB = os.environ.get('IDB', os.path.expanduser('~/Library/Python/3.9/bin/idb'))
 IOS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # idb needs SimulatorKit at <Xcode>/Contents/Developer/Library/PrivateFrameworks — the shadow bundle
@@ -57,7 +57,7 @@ for ph in phases:
             seen = set()
             for f in smp['frames']:
                 if is_app(f) and 'main' not in f and f not in seen: seen.add(f); incl[f] += 1
-        def short(f): return re.sub(r'\(.*?\)', '()', dem.get(f, f)).replace('AniTrack.', '')[:70]
+        def short(f): return re.sub(r'\(.*?\)', '()', dem.get(f, f)).replace('Previously.', '')[:70]
         top = [short(f) + f" ({c})" for f, c in incl.most_common(5)]
         leaves = collections.Counter(smp['frames'][0][:40] for smp in s['samples']).most_common(3)
         print(f"    stall {s['ms']} ms: {leaves}")

@@ -49,7 +49,7 @@ production API, configured Clerk key, all four selected assets and valid code si
 The existing Clerk key is a development key, matching the previous beta configuration.
 
 The user restored Apple account access and completed the native distribution flow.
-Xcode confirms `AniTrack 1.0 (6) uploaded` and `Uploaded to Apple`. The distribution log
+Xcode confirms `Previously 1.0 (6) uploaded` and `Uploaded to Apple`. The distribution log
 records `UPLOAD SUCCEEDED with no errors` at 12:03 PM IST on 2 October 2026, with delivery UUID
 `54df8f93-f8ae-4e7e-a44d-44c32724403e`. The upload reported that the package is processing.
 No duplicate CLI upload was attempted after this success.

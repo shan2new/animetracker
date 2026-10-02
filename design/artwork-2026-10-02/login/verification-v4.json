@@ -3,7 +3,7 @@
   "scope": "Compact welcome branding and removal of the slogan over the cozy room backdrop",
   "build": {
     "passed": true,
-    "scheme": "AniTrack",
+    "scheme": "Previously",
     "configuration": "Debug",
     "simulator": "iPhone 14 Pro / iOS 27.0",
     "durationSeconds": 19.2,

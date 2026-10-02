@@ -65,7 +65,7 @@ export interface ArtworkGallery {
 
 export type VideoKind = 'trailer' | 'teaser' | 'announcement' | 'featurette' | 'clip' | 'other'
 
-/** A catalogue-curated video. AniTrack stores provider ids/links; it never hosts the video. */
+/** A catalogue-curated video. Previously stores provider ids/links; it never hosts the video. */
 export interface CatalogVideo {
   id: string
   site: string

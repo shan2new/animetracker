@@ -92,7 +92,7 @@ final result: passed
 
 ## Full-view comparison evidence
 
-The references were used for three product rules: artwork owns series identity, state and playback facts stay inside the artwork, and horizontal rails keep a sparse account visually alive. AniTrack keeps its own full-screen single-release hero, centered fact lockup, bottom-right watched toggle, large 2–3 release deck, wordmark, and floating four-tab navigation.
+The references were used for three product rules: artwork owns series identity, state and playback facts stay inside the artwork, and horizontal rails keep a sparse account visually alive. Previously keeps its own full-screen single-release hero, centered fact lockup, bottom-right watched toggle, large 2–3 release deck, wordmark, and floating four-tab navigation.
 
 - Logo-backed catalog entries render their actual logo over textless art.
 - Entries without a logo asset use the selected titled poster and do not duplicate the name in type.
@@ -157,7 +157,7 @@ final result: passed
 - Clean remaining-state and larger-text checks were blocked by that system alert. Permission was
   left unanswered. The reviewer terminated the unrelated Aura simulator process once before being
   instructed to stop recovery attempts; the alert persisted. No permission or app data changed.
-- Content size was confirmed restored to `medium`; AniTrack was left on multiple releases.
+- Content size was confirmed restored to `medium`; Previously was left on multiple releases.
 - DEBUG fixtures represent visual states only. Mark/unmark persistence and navigation were not
   exercised, and no account progress was changed.
 
@@ -435,7 +435,7 @@ issues remain. This is not a full visual/accessibility pass.
   reported 24 artwork identity, 22 announcement and 28 isolated/mock progress assertions.
   Signed simulator builds and `git diff --check` passed. No account writes or Git push.
 - Backend changes are local only, not deployed. The laptop has no configured TMDB token
-  or authorized AniTrack deployment route to the Mac mini. The live payloads inspected for
+  or authorized Previously deployment route to the Mac mini. The live payloads inspected for
   Percy and Seven contain no clean portraits; upstream availability has not been established.
   The client fallback works with those actual payloads without claiming that new clean
   artwork has been fetched or that the cancelled earlier deployment was resumed.
@@ -480,7 +480,7 @@ issues remain. This is not a full visual/accessibility pass.
   returned state was `Uploaded package is processing`. This is upload proof, not proof of
   completed TestFlight processing or availability to testers.
 - Successful distribution logs:
-  `/var/folders/5r/t6767z_96m5990yczng8_rj80000gn/T/AniTrack_2026-09-20_10-06-55.850.xcdistributionlogs`.
+  `/var/folders/5r/t6767z_96m5990yczng8_rj80000gn/T/Previously_2026-09-20_10-06-55.850.xcdistributionlogs`.
 - App Store Connect browser is at the sign-in page. Requested user sign-in to inspect the
   existing tester group and complete/verify distribution. No groups, testers, public links,
   App Store release settings, backend deployment or legal agreements were changed.

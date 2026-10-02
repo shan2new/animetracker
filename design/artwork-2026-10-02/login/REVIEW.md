@@ -33,7 +33,7 @@ plus the line **A little home for your shows.** The app keeps its near-black can
 - The installed Clerk package resolves to 1.5.7. Its public custom-logo slot is used locally;
   dashboard settings and auth methods were not changed. The public sheet's native capture shows
   email and Google, in the project's configured development Clerk environment.
-- Final Debug AniTrack build passed on iPhone 14 Pro / iOS 27.0 in 31.6 seconds. Seven warnings
+- Final Debug Previously build passed on iPhone 14 Pro / iOS 27.0 in 31.6 seconds. Seven warnings
   were in unchanged FeedHeader, Home, Library, Discover and detail code; no new auth warnings.
   [Build receipt](build-v2.log). `git diff --check` passed.
 - Native screenshots prove rendering. The semantic Sign in tap reported success without changing
@@ -49,6 +49,6 @@ Built-in Image Gen was used; model selection is not exposed, so Sunburst was not
 PNGs (591,241 image bytes). The rejected v1 source, prompt and captures are preserved; its imageset
 is removed from the active catalogue and retained under `retired-v1/`.
 
-Reproduce the welcome with `-signInCaptureSheet 0 -anitrack.devClerkId ""` on a configured-Clerk
+Reproduce the welcome with `-signInCaptureSheet 0 -previously.devClerkId ""` on a configured-Clerk
 Debug build. Use `-UIPreferredContentSizeCategoryName UICTContentSizeCategoryAccessibilityXXXL`
 for the larger-text check. These previews do not prove successful authentication.

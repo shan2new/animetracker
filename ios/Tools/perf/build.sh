@@ -13,7 +13,7 @@ export DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer
 EXTRA=()
 if [ "$CONFIG" = "Release" ]; then EXTRA=('OTHER_SWIFT_FLAGS=$(inherited) -D PERFPROBE'); fi
 if [ "$CONFIG" = "opt" ]; then CONFIG=Debug; EXTRA=("SWIFT_OPTIMIZATION_LEVEL=-O" "SWIFT_COMPILATION_MODE=wholemodule" "GCC_OPTIMIZATION_LEVEL=s"); fi
-xcodebuild -project AniTrack.xcodeproj -scheme AniTrack -configuration "$CONFIG" \
+xcodebuild -project Previously.xcodeproj -scheme Previously -configuration "$CONFIG" \
   -destination "platform=iOS Simulator,id=$U" -derivedDataPath build/DerivedData \
   ${EXTRA[@]+"${EXTRA[@]}"} \
   "API_BASE_URL=https://anime.cognipin.com" \
@@ -22,4 +22,4 @@ xcodebuild -project AniTrack.xcodeproj -scheme AniTrack -configuration "$CONFIG"
 rc=$?
 grep -E "error:|BUILD (SUCCEEDED|FAILED)" "$P/build-$TAG.log" | grep -v "^warning" | tail -8
 if [ $rc -ne 0 ]; then echo "xcodebuild exit $rc"; exit $rc; fi
-xcrun simctl install $U "build/DerivedData/Build/Products/$CONFIG-iphonesimulator/AniTrack.app" && echo "installed $TAG ($CONFIG)"
+xcrun simctl install $U "build/DerivedData/Build/Products/$CONFIG-iphonesimulator/Previously.app" && echo "installed $TAG ($CONFIG)"

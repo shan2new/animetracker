@@ -62,7 +62,7 @@ The strongest next candidate is Activity; Home caught-up and clear Schedule come
 
 ## Verification and reproduction
 
-The Debug AniTrack build passed on iPhone 14 Pro / iOS 27.0 (27.2 seconds; six existing warnings).
+The Debug Previously build passed on iPhone 14 Pro / iOS 27.0 (27.2 seconds; six existing warnings).
 [Build receipt](build.log), [verification record](verification.json). `git diff --check` passed.
 [Larger-text Schedule](05-schedule-accessibility.jpg) retains readable copy and an onscreen action,
 with artwork omitted. This used the accessibility XXXL launch preference; the app's existing
@@ -75,7 +75,7 @@ The adapter's Saved route was corrected from `/me/saves` to `/me/saved`; the ear
 `00-saved-preview-error.jpg` is adapter-failure evidence and is excluded from the scout boards.
 
 Capture routes: `-openTab library`, `-openTab schedule`, and `-openTab feed -openSaved 1`, with
-`-anitrack.devClerkId artwork-preview-local`. Build overrides:
+`-previously.devClerkId artwork-preview-local`. Build overrides:
 `API_BASE_URL=http://localhost:18789`, `CLERK_PUBLISHABLE_KEY=`. No production settings changed.
 Native captures prove rendering. Touch navigation, real-device validation and distribution remain
 unverified. No TestFlight upload, commit or push was performed.

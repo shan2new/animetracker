@@ -1,11 +1,11 @@
 # Networking, Configuration, Auth & Sign-in
 
-This document specifies the transport and identity layer of **Previously.** (bundle `com.anitrack.app`,
-Swift target name `AniTrack`) precisely enough to rebuild it in Kotlin/Compose without reading the Swift.
+This document specifies the transport and identity layer of **Previously.** (bundle `com.cognipin.previously`,
+Swift target name `Previously`) precisely enough to rebuild it in Kotlin/Compose without reading the Swift.
 It covers five source files — `Sources/Networking/APIClient.swift`, `Sources/Networking/AppConfig.swift`,
 `Sources/Auth/AuthManager.swift`, `Sources/Auth/SignInView.swift`,
 `Sources/Features/Profile/AccountDeletion.swift` — plus the call sites that give them meaning
-(`App/AniTrackApp.swift`, `App/RootView.swift`, `App/AppModel.swift`, `Features/Profile/ProfileView.swift`,
+(`App/PreviouslyApp.swift`, `App/RootView.swift`, `App/AppModel.swift`, `Features/Profile/ProfileView.swift`,
 `project.yml`, `Resources/Info.plist`) and reconciles all of it against `docs/api-contract.md` and the
 Fastify routes that serve it. The single most important idea in this layer is a **three-way split of
 "the request failed"**: *the session is dead* (sign the user out), *the infrastructure is in the way*
@@ -38,7 +38,7 @@ it repeatedly.
 ### 2.1 The chain
 
 ```
-project.yml  targets.AniTrack.settings.base.<VAR>
+project.yml  targets.Previously.settings.base.<VAR>
       ↓ (Xcode build setting)
 Resources/Info.plist  <key>X</key><string>$(VAR)</string>
       ↓ (substituted at build time)
@@ -315,8 +315,8 @@ catches the proxies that serve an interstitial as `text/plain`." An empty body i
 
 ### 4.7 Logging contract
 
-Subsystem `com.anitrack.app`, category `api` (both `APIClient` and `TokenRefresher`, deliberately — so
-`log stream --predicate 'subsystem == "com.anitrack.app"'` interleaves them). Everything is emitted at
+Subsystem `com.cognipin.previously`, category `api` (both `APIClient` and `TokenRefresher`, deliberately — so
+`log stream --predicate 'subsystem == "com.cognipin.previously"'` interleaves them). Everything is emitted at
 `.error` level so it survives the default log filter. Lines a port should reproduce:
 
 - `retry scheduled <METHOD> <path> attempt=<n> delay=<d.dd> status=<code|0>` (method/path marked `.public`)
@@ -490,7 +490,7 @@ request** (`var refreshed = false`).
 
 ## 8. `AuthManager`
 
-`@MainActor @Observable final class AuthManager: TokenProvider`. It is constructed in `AniTrackApp.init()`,
+`@MainActor @Observable final class AuthManager: TokenProvider`. It is constructed in `PreviouslyApp.init()`,
 injected into the environment, and passed to `APIClient(tokenProvider:)`.
 
 ### 8.1 Modes
@@ -502,12 +502,12 @@ enum Mode: Equatable { case clerk; case dev(clerkId: String) }
 Initialiser:
 
 - `AppConfig.isClerkConfigured` → `.clerk`
-- else → `.dev(clerkId: UserDefaults.standard.string(forKey: "anitrack.devClerkId") ?? "")`
+- else → `.dev(clerkId: UserDefaults.standard.string(forKey: "previously.devClerkId") ?? "")`
 
 Observable state: `mode`, `isSignedIn: Bool` (starts `false`), `lastError: String?`, `bootstrapped: Bool`
 (starts `false`).
 
-### 8.2 App start-up order (`AniTrackApp.init`)
+### 8.2 App start-up order (`PreviouslyApp.init`)
 
 1. `applyBrandFont()` (UIKit tab-bar appearance proxy — Outfit at 10 pt medium/semibold).
 2. `AppAppearance.install()`.
@@ -575,7 +575,7 @@ Then: `auth.isSignedIn ? MainTabView() : SignInView()`, each with `.transition(.
 
 1. Trim whitespace/newlines.
 2. Empty → `lastError = "Enter a dev user id."`, return (no state change).
-3. Persist to `UserDefaults` key **`anitrack.devClerkId`**.
+3. Persist to `UserDefaults` key **`previously.devClerkId`**.
 4. `mode = .dev(clerkId: trimmed)`, `isSignedIn = true`, `lastError = nil`.
 
 Token form is `"dev:" + clerkId` (§8.9). The server accepts it only when `APP_ENV != production` **and**
@@ -593,7 +593,7 @@ and **refuses to boot** if it has `DEV_AUTH_BYPASS` set or has neither `CLERK_JW
 | Mode | Behaviour | Return |
 |---|---|---|
 | `.clerk` | `lastError = nil`; `try? await Clerk.shared.auth.signOut()` (**errors swallowed**); `refreshClerkSignInState()` | `!isSignedIn` — i.e. `false` if Clerk could not end the session (typically offline) |
-| `.dev` | remove `anitrack.devClerkId`; `mode = isClerkConfigured ? .clerk : .dev(clerkId: "")`; `isSignedIn = false` | always `true` |
+| `.dev` | remove `previously.devClerkId`; `mode = isClerkConfigured ? .clerk : .dev(clerkId: "")`; `isSignedIn = false` | always `true` |
 
 > *Why (quoted)*: "`false` when the session is still standing afterwards — Clerk could not end it (no
 > connection, usually). The caller says so; before, the spinner simply stopped and the Profile sheet sat
@@ -1009,7 +1009,7 @@ is off; per-token floor 0.3 s, 0.04 s for `.selection`):
 | 6 | Contract does not mention that the client treats a **200 with an HTML body** as infrastructure. It does (branch 4). | Port it. |
 | 7 | `trending`'s Swift default is `limit: 30`; every real caller passes `10`. | Default to what the callers use. |
 | 8 | `AccountDeletion` maps **403 → notSignedIn**, contradicting `APIClient`'s "403 is never a sign-out" rule. | Intentional, route-specific. Keep. |
-| 9 | Two log subsystems: `com.anitrack.app` (api) and `app.previously` (model). | Cosmetic; unify if you like. |
+| 9 | Two log subsystems: `com.cognipin.previously` (api) and `app.previously` (model). | Cosmetic; unify if you like. |
 | 10 | `APIError.decoding` is also thrown for request-**encoding** failures. | Name the Kotlin case `serialization` to cover both. |
 
 ---
@@ -1024,7 +1024,7 @@ is off; per-token floor 0.3 s, 0.04 s for `.selection`):
 | `JSONDecoder` (no key strategy) | `kotlinx.serialization` with `ignoreUnknownKeys = true`, `explicitNulls = false` | Lenient decoding is a stated requirement of the enrichment models. |
 | `actor TokenRefresher` | class with `kotlinx.coroutines.sync.Mutex` + cached `token`/`at` | Preserve the 3 s reuse window and success-only priming. |
 | `Logger(subsystem:category:)` | `Log`/Timber with a fixed tag | The exact line formats above make single-flight and retry verifiable. |
-| `UserDefaults` (`anitrack.devClerkId`, `previously.haptics`, `devSignInId`, `devSignInAuto`) | `DataStore` (preferences) | The dev id is not a secret (it is only ever sent to a LAN host), so `EncryptedSharedPreferences` is optional. |
+| `UserDefaults` (`previously.devClerkId`, `previously.haptics`, `devSignInId`, `devSignInAuto`) | `DataStore` (preferences) | The dev id is not a secret (it is only ever sent to a LAN host), so `EncryptedSharedPreferences` is optional. |
 | `AppConfig` | `BuildConfig` fields per flavour | Reproduce the `REPLACE_ME`/blank → `null` rule so a placeholder never becomes a broken legal link. |
 | `NSAllowsLocalNetworking` | `network_security_config.xml` scoped cleartext | No runtime permission prompt on Android. |
 | SF Symbols used here (`wifi.exclamationmark`, `trash`, `rectangle.portrait.and.arrow.right`, `person.fill`, `info.circle`) | Material Symbols / custom vectors | Trivial; pick equivalents once, app-wide. |

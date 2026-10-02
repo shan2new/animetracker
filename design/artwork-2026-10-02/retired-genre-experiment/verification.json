@@ -1,9 +1,9 @@
 {
   "date": "2026-10-02",
   "app": "Previously.",
-  "scheme": "AniTrack",
+  "scheme": "Previously",
   "configuration": "Debug",
-  "project": "ios/AniTrack.xcodeproj",
+  "project": "ios/Previously.xcodeproj",
   "simulatorId": "492DD323-4FF6-4DC7-991B-175E57A359F1",
   "device": "iPhone 14 Pro",
   "os": "iOS 27.0",

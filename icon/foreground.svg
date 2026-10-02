@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- AniTrack icon — FOREGROUND layer. 1024x1024. The bold play triangle + "new episode" pulse dot. -->
+<!-- Previously icon — FOREGROUND layer. 1024x1024. The bold play triangle + "new episode" pulse dot. -->
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <!-- Warm orange fill for the play mark, top-lit -->

@@ -3,8 +3,6 @@
 stall's leaves and app frames (demangled)."""
 import json, os, re, subprocess, sys
 P = os.environ.get('PERF_DIR', os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'build', 'perf'))
-if not os.path.exists(f'{P}/typing-{sys.argv[1]}'):
-    P = '/private/tmp/claude-501/-Users-shantanusinha-Desktop-workspace-animetracker/231c4454-cb8b-4cea-bad3-83e64fe6383a/scratchpad/perf'
 D = f'{P}/typing-{sys.argv[1]}'
 ev = [json.loads(l) for l in open(f'{D}/perf.jsonl') if l.strip()]
 keys = json.load(open(f'{D}/keys.json'))
@@ -25,5 +23,5 @@ print('hitches at (ms, len):', [(h['t'] - ks[0], h['ms']) for h in hs])
 for s in st:
     print(f"stall {s['ms']} ms at {s['t'] - ks[0]}")
     for smp in s['samples'][:6]:
-        app = [re.sub(r'\(.*?\)', '()', dem.get(f, f)).replace('AniTrack.', '')[:60] for f in smp['frames'] if is_app(f) and 'main' not in f][:3]
+        app = [re.sub(r'\(.*?\)', '()', dem.get(f, f)).replace('Previously.', '')[:60] for f in smp['frames'] if is_app(f) and 'main' not in f][:3]
         print(f"   {smp['ms']:4d}  {smp['frames'][0][:46]:<48} {' < '.join(app)}")

@@ -1,4 +1,4 @@
-# AniTrack iOS — Native-Feel Pass
+# Previously iOS — Native-Feel Pass
 
 **Goal:** Make the app *feel* like a premium native iOS 26 app without redesigning the
 screens. Keep the current layouts and the franchise/airing-first product. Replace the

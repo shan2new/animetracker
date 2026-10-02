@@ -189,11 +189,11 @@ themed sheet visibly fights the design system (§8, Q3).
 ```kotlin
 // app/build.gradle.kts
 android {
-    namespace = "com.anitrack.app"
+    namespace = "com.cognipin.previously"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.anitrack.app"     // must match the iOS bundle id for the redirect scheme
+        applicationId = "com.cognipin.previously"     // must match the iOS bundle id for the redirect scheme
         minSdk = 26                            // ≥ 24 (the SDK's floor); pick ours on device-coverage data
     }
     compileOptions {
@@ -248,8 +248,8 @@ which contains only `INTERNET` and a plain LAUNCHER activity.
 For our `applicationId` the redirect URIs are therefore:
 
 ```
-clerk://com.anitrack.app.callback
-clerk://com.anitrack.app.oauth
+clerk://com.cognipin.previously.callback
+clerk://com.cognipin.previously.oauth
 ```
 
 The SDK's library manifest also ships a **`SharedSessionSyncProvider`** (cross-app session sync,
@@ -301,11 +301,11 @@ class PreviouslyApp : Application() {
 [Deploy to production — Android](https://clerk.com/docs/android/reference/native-mobile/production) ·
 [Social connections — Android](https://clerk.com/docs/android/guides/configure/auth-strategies/social-connections/overview)
 
-1. **Native applications** → register the Android app: package name `com.anitrack.app` + the
+1. **Native applications** → register the Android app: package name `com.cognipin.previously` + the
    **SHA-256 certificate fingerprint** (debug keystore *and* the Play App Signing key). Needed for
    Google One Tap, passkeys, and Digital Asset Links.
 2. **Native applications → "Allowlist for mobile SSO redirect"** → add
-   `clerk://com.anitrack.app.callback` and `clerk://com.anitrack.app.oauth`. Clerk "ensures that
+   `clerk://com.cognipin.previously.callback` and `clerk://com.cognipin.previously.oauth`. Clerk "ensures that
    security-critical nonces are passed only to allowlisted URLs", so an un-allowlisted scheme fails
    the OAuth round-trip. *(The prose docs say the default is `{bundleIdentifier}://callback`; the
    shipped Android manifest registers the `clerk://…` forms above. Reconcile in the dashboard — §8, Q6.)*
@@ -321,7 +321,7 @@ outcome, `hasSession()` answering without the network, and the `dev:` bearer nev
 a non-local host.
 
 ```kotlin
-package com.anitrack.auth
+package com.cognipin.previously.auth
 
 import com.clerk.api.Clerk
 import com.clerk.api.auth.AuthEvent

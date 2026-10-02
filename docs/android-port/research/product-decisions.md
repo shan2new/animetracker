@@ -35,7 +35,7 @@ write policy including `WriteIntent` replay; episode alerts; and the home-screen
 **One deliberate exception, added later the same day: the Live-Update countdown is deferred — see
 §8.** Everything else ships in v1.
 
-## 3. `applicationId` = `com.anitrack.app`
+## 3. `applicationId` = `com.cognipin.previously`
 
 **Permanent — it can never change after the first Play upload.**
 
@@ -44,8 +44,8 @@ collision, and analytics / crash reporting / internal tooling line up one-to-one
 platforms. The user-visible name stays **"Previously."** (`android:label`); `applicationId` is never
 shown to anyone.
 
-The widget process gets `com.anitrack.app.widgets` if a separate id is ever needed, matching the iOS
-extension's `com.anitrack.app.widgets`.
+The widget process gets `com.cognipin.previously.widgets` if a separate id is ever needed, matching the iOS
+extension's `com.cognipin.previously.widgets`.
 
 ## 4. Exact alarms: ask contextually, degrade gracefully
 

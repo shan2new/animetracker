@@ -1,4 +1,4 @@
-// User-chosen status buckets, mirroring the AniTrack design (Watching / Completed / Plan).
+// User-chosen status buckets, mirroring the Previously design (Watching / Completed / Plan).
 export type WatchStatus = 'watching' | 'completed' | 'planned'
 
 // One entry the user keeps in their library. Only user-owned data is persisted;

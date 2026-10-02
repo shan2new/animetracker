@@ -555,7 +555,7 @@ export default function App() {
 
               {libraryEmpty && !loading && (
                 <EmptyState
-                  title="Welcome to AniTrack"
+                  title="Welcome to Previously"
                   body="Your airing-first tracker. Add shows you’re watching and we’ll tell you exactly what dropped and what’s next."
                   ctaLabel="Add your first show"
                   onCta={() => go('search')}

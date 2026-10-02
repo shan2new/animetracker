@@ -622,7 +622,7 @@ Note the two paths differ subtly and only one is live: `@ScaledMetric` scales th
 builds a fixed-size font; `Font.custom(relativeTo:)` builds a scaling font. Both are identity at
 Large.
 
-### 4.7 UIKit appearance proxies (`AppAppearance` + `AniTrackApp.applyBrandFont`)
+### 4.7 UIKit appearance proxies (`AppAppearance` + `PreviouslyApp.applyBrandFont`)
 
 Installed **once at launch**, never from `onAppear`:
 

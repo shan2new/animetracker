@@ -1,9 +1,9 @@
 {
-  "name": "anitrack-server",
+  "name": "previously-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AniTrack backend — franchise grouping, AniList cache, scheduled sync, Clerk auth.",
+  "description": "Previously backend — franchise grouping, AniList cache, scheduled sync, Clerk auth.",
   "engines": {
     "node": ">=22"
   },
