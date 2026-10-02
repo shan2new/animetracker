@@ -1,0 +1,16 @@
+{
+  "at": "2026-09-30T04:58:14.939674+00:00",
+  "boundary": "Build-config-derived URL; diagnostic user agent; no auth; local machine network only",
+  "results": [
+    {
+      "url": "https://anime.cognipin.com/health",
+      "status": 530,
+      "body": "error code: 1033\n"
+    },
+    {
+      "url": "http://127.0.0.1:8787/health",
+      "status": 200,
+      "body": "{\"ok\":true}"
+    }
+  ]
+}

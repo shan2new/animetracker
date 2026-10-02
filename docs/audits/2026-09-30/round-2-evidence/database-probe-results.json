@@ -1,0 +1,133 @@
+{
+  "boundary": "Real SQL/routes, disposable DB, dev identities, no real OAuth or upstream traffic",
+  "database": "anitrack_release_audit_tests_20260930_dab0de7b",
+  "invalidInput": [
+    {
+      "method": "PUT",
+      "url": "/me/preferences",
+      "status": 500,
+      "response": {
+        "statusCode": 500,
+        "error": "Internal Server Error",
+        "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"regex\",\n    \"pattern\": \"/^[a-z]{2}$/i\",\n    \"path\": [\n      \"country\"\n    ],\n    \"message\": \"Invalid string: must match pattern /^[a-z]{2}$/i\"\n  }\n]"
+      }
+    },
+    {
+      "method": "POST",
+      "url": "/me/subscriptions",
+      "status": 500,
+      "response": {
+        "statusCode": 500,
+        "error": "Internal Server Error",
+        "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"invalid_format\",\n    \"format\": \"uuid\",\n    \"pattern\": \"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\",\n    \"path\": [\n      \"franchiseId\"\n    ],\n    \"message\": \"Invalid UUID\"\n  }\n]"
+      }
+    },
+    {
+      "method": "PATCH",
+      "url": "/me/subscriptions/94327554-514d-4f93-8eb2-009207a5d024",
+      "status": 500,
+      "response": {
+        "statusCode": 500,
+        "error": "Internal Server Error",
+        "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"watching\",\n      \"completed\",\n      \"planned\",\n      \"paused\",\n      \"dropped\"\n    ],\n    \"path\": [\n      \"status\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"watching\\\"|\\\"completed\\\"|\\\"planned\\\"|\\\"paused\\\"|\\\"dropped\\\"\"\n  }\n]"
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/search?limit=0",
+      "status": 500,
+      "response": {
+        "statusCode": 500,
+        "error": "Internal Server Error",
+        "message": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"limit\"\n    ],\n    \"message\": \"Too small: expected number to be >=1\"\n  }\n]"
+      }
+    },
+    {
+      "method": "GET",
+      "url": "/franchises/trending?limit=0",
+      "status": 500,
+      "response": {
+        "statusCode": 500,
+        "error": "Internal Server Error",
+        "message": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"limit\"\n    ],\n    \"message\": \"Too small: expected number to be >=1\"\n  }\n]"
+      }
+    }
+  ],
+  "statusWithoutMembership": {
+    "status": 200,
+    "response": {
+      "ok": true
+    },
+    "storedSubscriptions": 0
+  },
+  "clampAcknowledgment": {
+    "requested": 12,
+    "stored": 5,
+    "response": {
+      "ok": true
+    }
+  },
+  "bulkOverflow": {
+    "singleStatus": 400,
+    "bulkStatus": 500,
+    "error": {
+      "statusCode": 500,
+      "code": "22003",
+      "error": "Internal Server Error",
+      "message": "value \"10000000000\" is out of range for type integer"
+    },
+    "priorPartRolledBack": true,
+    "secondPartAbsent": true
+  },
+  "validAtomicBulk": {
+    "ok": true,
+    "franchiseId": "94327554-514d-4f93-8eb2-009207a5d024",
+    "status": "paused",
+    "progress": [
+      {
+        "mediaId": 310000011,
+        "episodes": 3
+      },
+      {
+        "mediaId": 310000012,
+        "episodes": 2
+      }
+    ]
+  },
+  "ownership": {
+    "anonymousExportStatus": 401,
+    "forgedOwnerBodyStatus": 400,
+    "ownExportStatus": 200,
+    "exportCacheControl": "no-store",
+    "otherAuthorPrivateBodyAbsent": true
+  },
+  "socialErasure": {
+    "response": {
+      "deleted": true
+    },
+    "remainingTableCounts": {
+      "users": 1,
+      "user_profiles": 1,
+      "user_preferences": 0,
+      "subscriptions": 1,
+      "progress": 1,
+      "comments": 1,
+      "comment_likes": 0,
+      "likes": 1,
+      "saves": 1,
+      "reminders": 0,
+      "feed_hides": 0,
+      "episode_ratings": 1,
+      "blocks": 0,
+      "reports": 0,
+      "notifications": 1,
+      "recommendation_feedback": 0,
+      "moderation_bans": 1
+    },
+    "otherAuthorReplyPreservedWithNullParent": true,
+    "banRetained": true,
+    "bannedReadAfterHoldLoss": 403,
+    "erasedBannedExportAfterHoldLoss": 404,
+    "erasedBannedAccountRecreated": false
+  }
+}

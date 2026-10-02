@@ -1,0 +1,22 @@
+{
+  "boundary": "Isolated PostgreSQL; real routes and SQL; synthetic dev identity; no Clerk or upstream calls",
+  "database": "anitrack_release_audit_tests_20260930_65a65243",
+  "erasure": {
+    "response": {
+      "deleted": true
+    },
+    "remainingOwnedRows": {
+      "users": 0,
+      "preferences": 0,
+      "progress": 0
+    },
+    "providerConfiguration": "No Clerk secret; provider deletion skipped",
+    "requestDuringMemoryHold": 401,
+    "requestAfterMemoryHoldLoss": 200,
+    "recreatedWithDifferentInternalUserId": true
+  },
+  "staleReports": {
+    "reproduced": true,
+    "message": "The \"string\" argument must be of type string or an instance of Buffer or ArrayBuffer. Received an instance of Date"
+  }
+}
